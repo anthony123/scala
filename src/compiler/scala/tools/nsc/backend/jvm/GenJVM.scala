@@ -909,7 +909,7 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
                                     mkArray(m.params map (p => javaType(p.kind))),
                                     mkArray(m.params map (p => javaName(p.sym))))
 
-      addRemoteException(jmethod, m.symbol)
+      addRemoteException(jmethod.isPublic, m.symbol)
 
       if (!jmethod.isAbstract() && !method.native) {
         val jcode = jmethod.getCode().asInstanceOf[JExtendedCode]
@@ -959,9 +959,9 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
 
     /** Adds a @remote annotation, actual use unknown.
      */
-    private def addRemoteException(jmethod: JMethod, meth: Symbol) {
+    private def addRemoteException(isJMethodPublic: Boolean, meth: Symbol) {
       val needsAnnotation = (
-        (isRemoteClass || (meth hasAnnotation RemoteAttr) && jmethod.isPublic)
+        (isRemoteClass || (meth hasAnnotation RemoteAttr) && isJMethodPublic)
           && !(meth.throwsAnnotations contains RemoteExceptionClass)
       )
       if (needsAnnotation) {
@@ -1090,7 +1090,7 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
       mirrorCode.emitINVOKEVIRTUAL(moduleName, mirrorMethod.getName, javaType(m).asInstanceOf[JMethodType])
       mirrorCode emitRETURN mirrorMethod.getReturnType()
 
-      addRemoteException(mirrorMethod, m)
+      addRemoteException(mirrorMethod.isPublic, m)
       // only add generic signature if the method is concrete; bug #1745
       if (!m.isDeferred)
         addGenericSignature(mirrorMethod, m, module)
