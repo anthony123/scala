@@ -115,21 +115,8 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
       }
     }
 
-    override def run() {
-      // we reinstantiate the bytecode generator at each run, to allow the GC
-      // to collect everything
-      if (settings.debug.value)
-        inform("[running phase " + name + " on icode]")
-
-      if (settings.Xdce.value)
-        for ((sym, cls) <- icodes.classes if inliner.isClosureClass(sym) && !deadCode.liveClosures(sym))
-          icodes.classes -= sym
-
-      // For predictably ordered error messages.
-      val sortedClasses = classes.values.toList sortBy ("" + _.symbol.fullName)
-      val entryPoints   = sortedClasses filter isJavaEntryPoint
-
-      val bytecodeWriter = settings.outputDirs.getSingleOutput match {
+    private def initBytecodeWriter(entryPoints: List[IClass]): BytecodeWriter = {
+      settings.outputDirs.getSingleOutput match {
         case Some(f) if f hasExtension "jar" =>
           // If no main class was specified, see if there's only one
           // entry point among the classes going into the jar.
@@ -157,6 +144,22 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
           }
           else new ClassBytecodeWriter with JavapBytecodeWriter { }
       }
+    }
+
+    override def run() {
+      // we reinstantiate the bytecode generator at each run, to allow the GC
+      // to collect everything
+      if (settings.debug.value)
+        inform("[running phase " + name + " on icode]")
+
+      if (settings.Xdce.value)
+        for ((sym, cls) <- icodes.classes if inliner.isClosureClass(sym) && !deadCode.liveClosures(sym))
+          icodes.classes -= sym
+
+      // For predictably ordered error messages.
+      val sortedClasses = classes.values.toList sortBy ("" + _.symbol.fullName)
+
+      val bytecodeWriter = initBytecodeWriter(sortedClasses filter isJavaEntryPoint)
 
       val codeGenerator = new BytecodeGenerator(bytecodeWriter)
       debuglog("Created new bytecode generator for " + classes.size + " classes.")
