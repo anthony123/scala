@@ -302,7 +302,7 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
     private def innerClassSymbolFor(s: Symbol): Symbol =
       if (s.isClass) s else if (s.isModule) s.moduleClass else NoSymbol
 
-    override def javaName(sym: Symbol): String = { // TODO Miguel says: check whether a single pass over `icodes.classes` can populate `innerClassBuffer` faster.
+    override def javaName(sym: Symbol): String = {
       /**
        * Checks if given symbol corresponds to inner class/object and add it to innerClassBuffer
        *
@@ -403,7 +403,7 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
       clasz = c
       innerClassBuffer.clear()
 
-      val name    = javaName(c.symbol)
+      val name = javaName(c.symbol)
 
       val ps = c.symbol.info.parents
 
@@ -431,8 +431,7 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
           if (c.symbol.companionClass == NoSymbol)
             generateMirrorClass(c.symbol, c.cunit.source)
           else
-            log("No mirror class for module with linked class: " +
-                c.symbol.fullName)
+            log("No mirror class for module with linked class: " + c.symbol.fullName)
         }
       }
       else {
@@ -896,15 +895,9 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
         resTpe = JType.VOID
 
       var flags = javaFlags(m.symbol)
-      if (jclass.isInterface)
-        flags |= ACC_ABSTRACT
-
-      if (m.symbol.isStrictFP)
-        flags |= ACC_STRICT
-
-      // native methods of objects are generated in mirror classes
-      if (method.native)
-        flags |= ACC_NATIVE
+      if (jclass.isInterface)  { flags |= ACC_ABSTRACT }
+      if (m.symbol.isStrictFP) { flags |= ACC_STRICT   }
+      if (method.native)       { flags |= ACC_NATIVE   } // native methods of objects are generated in mirror classes
 
       jmethod = jclass.addNewMethod(flags,
                                     javaName(m.symbol),
@@ -941,8 +934,8 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
         }
 
         genCode(m)
-        if (emitVars)
-          genLocalVariableTable(m, jcode)
+        if (emitVars) { genLocalVariableTable(m, jcode) }
+
       }
 
       addGenericSignature(jmethod, m.symbol, clasz.symbol)
@@ -1221,9 +1214,11 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
             ranges ::= ((start, jcode.getPC()))
           }
 
-          if (!covered.isEmpty)
+          if (!covered.isEmpty) {
             debuglog("Some covered blocks were not found in method: " + method +
-                  " covered: " + covered + " not in " + linearization)
+                     " covered: " + covered + " not in " + linearization)
+          }
+
           ranges
         }
 
