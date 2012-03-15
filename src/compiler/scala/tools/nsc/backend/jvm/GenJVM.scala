@@ -226,41 +226,50 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
       vp
     }
 
-    private def helperBoxTo(kind: ValueTypeKind): Tuple2[String, JMethodType] = {
-      val boxedType = definitions.boxedClass(kind.toType.typeSymbol)
-      val mtype = new JMethodType(javaType(boxedType), Array(javaType(kind)))
+    /**  used only in BytecodeGenerator.genCode() */
+    private val jBoxTo: Map[TypeKind, Tuple2[String, JMethodType]] = {
 
-      Pair("boxTo" + boxedType.decodedName, mtype)
+        def helperBoxTo(kind: ValueTypeKind): Tuple2[String, JMethodType] = {
+          val boxedType = definitions.boxedClass(kind.toType.typeSymbol)
+          val mtype = new JMethodType(javaType(boxedType), Array(javaType(kind)))
+
+          Pair("boxTo" + boxedType.decodedName, mtype)
+        }
+
+      Map(
+        BOOL   -> helperBoxTo(BOOL)  ,
+        BYTE   -> helperBoxTo(BYTE)  ,
+        CHAR   -> helperBoxTo(CHAR)  ,
+        SHORT  -> helperBoxTo(SHORT) ,
+        INT    -> helperBoxTo(INT)   ,
+        LONG   -> helperBoxTo(LONG)  ,
+        FLOAT  -> helperBoxTo(FLOAT) ,
+        DOUBLE -> helperBoxTo(DOUBLE)
+      )
+
     }
 
-    private val jBoxTo: Map[TypeKind, Tuple2[String, JMethodType]] = Map(
-      BOOL   -> helperBoxTo(BOOL)  ,
-      BYTE   -> helperBoxTo(BYTE)  ,
-      CHAR   -> helperBoxTo(CHAR)  ,
-      SHORT  -> helperBoxTo(SHORT) ,
-      INT    -> helperBoxTo(INT)   ,
-      LONG   -> helperBoxTo(LONG)  ,
-      FLOAT  -> helperBoxTo(FLOAT) ,
-      DOUBLE -> helperBoxTo(DOUBLE)
-    )
+    /**  used only in BytecodeGenerator.genCode() */
+    private val jUnboxTo: Map[TypeKind, Tuple2[String, JMethodType]] = {
 
-    private def helperUnboxTo(kind: ValueTypeKind): Tuple2[String, JMethodType] = {
-      val mtype = new JMethodType(javaType(kind), Array(JAVA_LANG_OBJECT))
-      val mname = "unboxTo" + kind.toType.typeSymbol.decodedName
+        def helperUnboxTo(kind: ValueTypeKind): Tuple2[String, JMethodType] = {
+          val mtype = new JMethodType(javaType(kind), Array(JAVA_LANG_OBJECT))
+          val mname = "unboxTo" + kind.toType.typeSymbol.decodedName
 
-      Pair(mname, mtype)
+          Pair(mname, mtype)
+        }
+
+      Map(
+        BOOL   -> helperUnboxTo(BOOL)  ,
+        BYTE   -> helperUnboxTo(BYTE)  ,
+        CHAR   -> helperUnboxTo(CHAR)  ,
+        SHORT  -> helperUnboxTo(SHORT) ,
+        INT    -> helperUnboxTo(INT)   ,
+        LONG   -> helperUnboxTo(LONG)  ,
+        FLOAT  -> helperUnboxTo(FLOAT) ,
+        DOUBLE -> helperUnboxTo(DOUBLE)
+      )
     }
-
-    private val jUnboxTo: Map[TypeKind, Tuple2[String, JMethodType]] = Map(
-      BOOL   -> helperUnboxTo(BOOL)  ,
-      BYTE   -> helperUnboxTo(BYTE)  ,
-      CHAR   -> helperUnboxTo(CHAR)  ,
-      SHORT  -> helperUnboxTo(SHORT) ,
-      INT    -> helperUnboxTo(INT)   ,
-      LONG   -> helperUnboxTo(LONG)  ,
-      FLOAT  -> helperUnboxTo(FLOAT) ,
-      DOUBLE -> helperUnboxTo(DOUBLE)
-    )
 
     var clasz: IClass = _
     var method: IMethod = _
