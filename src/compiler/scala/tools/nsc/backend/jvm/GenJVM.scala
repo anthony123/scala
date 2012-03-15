@@ -58,6 +58,8 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
     override def erasedTypes = true
     def apply(cls: IClass) = sys.error("no implementation")
 
+    val BeanInfoAttr = definitions.getRequiredClass("scala.beans.BeanInfo")
+
     def isJavaEntryPoint(clasz: IClass) = {
       val sym = clasz.symbol
       def fail(msg: String, pos: Position = sym.pos) = {
@@ -166,13 +168,17 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
 
       for(c <- sortedClasses) {
         try {
-          codeGenerator.genClass(c)
-
           if (isStaticModule(c.symbol) && isTopLevelModule(c.symbol)) {
             if (c.symbol.companionClass == NoSymbol)
               codeGenerator.generateMirrorClass(c.symbol, c.cunit.source)
             else
               log("No mirror class for module with linked class: " + c.symbol.fullName)
+          }
+
+          codeGenerator.genClass(c)
+
+          if (c.symbol hasAnnotation BeanInfoAttr) {
+            codeGenerator.genBeanInfoClass(c)
           }
 
         } catch {
@@ -213,12 +219,6 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
     val MethodTypeType    = new JObjectType("java.dyn.MethodType")
     val JavaLangClassType = new JObjectType("java.lang.Class")
     val MethodHandleType  = new JObjectType("java.dyn.MethodHandle")
-
-    // Scala attributes
-    val BeanInfoAttr        = definitions.getRequiredClass("scala.beans.BeanInfo")
-    val BeanInfoSkipAttr    = definitions.getRequiredClass("scala.beans.BeanInfoSkip")
-    val BeanDisplayNameAttr = definitions.getRequiredClass("scala.beans.BeanDisplayName")
-    val BeanDescriptionAttr = definitions.getRequiredClass("scala.beans.BeanDescription")
 
     final val ExcludedForwarderFlags = {
       import Flags._
@@ -486,8 +486,6 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
       addEnclosingMethodAttribute(jclass, c.symbol)
       emitClass(jclass, c.symbol)
 
-      if (c.symbol hasAnnotation BeanInfoAttr)
-        genBeanInfoClass(c)
     }
 
     private def addEnclosingMethodAttribute(jclass: JClass, clazz: Symbol) {
@@ -526,8 +524,14 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
      * @author Ross Judson (ross.judson@soletta.com)
      */
     def genBeanInfoClass(c: IClass) {
-      val description = c.symbol getAnnotation BeanDescriptionAttr
+
+      // val BeanInfoSkipAttr    = definitions.getRequiredClass("scala.beans.BeanInfoSkip")
+      // val BeanDisplayNameAttr = definitions.getRequiredClass("scala.beans.BeanDisplayName")
+      // val BeanDescriptionAttr = definitions.getRequiredClass("scala.beans.BeanDescription")
+      // val description = c.symbol getAnnotation BeanDescriptionAttr
       // informProgress(description.toString)
+
+      innerClassBuffer.clear()
 
       val beanInfoClass = fjbgContext.JClass(javaFlags(c.symbol),
             javaName(c.symbol) + "BeanInfo",
@@ -1147,6 +1151,7 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
      *  instead be made to add the forwarder methods to the companion class.
      */
     def generateMirrorClass(clasz: Symbol, sourceFile: SourceFile) {
+      innerClassBuffer.clear()
       import JAccessFlags._
       val moduleName = javaName(clasz) // + "$"
       val mirrorName = moduleName.substring(0, moduleName.length() - 1)
