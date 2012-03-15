@@ -164,9 +164,18 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
       val codeGenerator = new BytecodeGenerator(bytecodeWriter)
       debuglog("Created new bytecode generator for " + classes.size + " classes.")
 
-      sortedClasses foreach { c =>
-        try codeGenerator.genClass(c)
-        catch {
+      for(c <- sortedClasses) {
+        try {
+          codeGenerator.genClass(c)
+
+          if (isStaticModule(c.symbol) && isTopLevelModule(c.symbol)) {
+            if (c.symbol.companionClass == NoSymbol)
+              codeGenerator.generateMirrorClass(c.symbol, c.cunit.source)
+            else
+              log("No mirror class for module with linked class: " + c.symbol.fullName)
+          }
+
+        } catch {
           case e: JCode.CodeSizeTooBigException =>
             log("Skipped class %s because it has methods that are too long.".format(c))
         }
@@ -439,15 +448,7 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
         if (isStaticModule(c.symbol))
           addModuleInstanceField
         addStaticInit(jclass, c.lookupStaticCtor)
-
-        if (isTopLevelModule(c.symbol)) {
-          if (c.symbol.companionClass == NoSymbol)
-            generateMirrorClass(c.symbol, c.cunit.source)
-          else
-            log("No mirror class for module with linked class: " + c.symbol.fullName)
-        }
-      }
-      else {
+      } else {
         c.lookupStaticCtor foreach (constructor => addStaticInit(jclass, Some(constructor)))
 
         // it must be a top level class (name contains no $s)
