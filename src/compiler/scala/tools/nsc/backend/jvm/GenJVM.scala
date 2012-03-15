@@ -170,7 +170,7 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
         try {
           if (isStaticModule(c.symbol) && isTopLevelModule(c.symbol)) {
             if (c.symbol.companionClass == NoSymbol)
-              codeGenerator.generateMirrorClass(c.symbol, c.cunit.source)
+              codeGenerator.genMirrorClass(c.symbol, c.cunit.source)
             else
               log("No mirror class for module with linked class: " + c.symbol.fullName)
           }
@@ -213,18 +213,9 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
     val StringBuilderClassName = javaName(definitions.StringBuilderClass)
     val BoxesRunTime = "scala.runtime.BoxesRunTime"
 
-    val StringBuilderType = new JObjectType(StringBuilderClassName)               // TODO use ASMType.getObjectType
-    val toStringType      = new JMethodType(JAVA_LANG_STRING, JType.EMPTY_ARRAY)  // TODO use ASMType.getMethodType
-    val arrayCloneType    = new JMethodType(JAVA_LANG_OBJECT, JType.EMPTY_ARRAY)
-    val MethodTypeType    = new JObjectType("java.dyn.MethodType")
-    val JavaLangClassType = new JObjectType("java.lang.Class")
-    val MethodHandleType  = new JObjectType("java.dyn.MethodHandle")
-
-    final val ExcludedForwarderFlags = {
-      import Flags._
-      // Should include DEFERRED but this breaks findMember.
-      ( CASE | SPECIALIZED | LIFTED | PROTECTED | STATIC | EXPANDEDNAME | BridgeAndPrivateFlags )
-    }
+    val StringBuilderType = new JObjectType(StringBuilderClassName)               // TODO use ASMType.getObjectType, move to genCode
+    val toStringType      = new JMethodType(JAVA_LANG_STRING, JType.EMPTY_ARRAY)  // TODO use ASMType.getMethodType, move to genCode
+    val arrayCloneType    = new JMethodType(JAVA_LANG_OBJECT, JType.EMPTY_ARRAY)  // TODO move to genCode
 
     val versionPickle = {
       val vp = new PickleBuffer(new Array[Byte](16), -1, 0)
@@ -286,17 +277,22 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
     var jmethod: JMethod = _
     // var jcode: JExtendedCode = _
 
+    /* used only from BytecodeGenerator.genClass() */
     def isParcelableClass = isAndroidParcelableClass(clasz.symbol)
-    def isRemoteClass = clasz.symbol hasAnnotation RemoteAttr
+
+    /* used only from BytecodeGenerator.genClass() */
     def serialVUID = clasz.symbol getAnnotation SerialVersionUIDAttr collect {
       case AnnotationInfo(_, Literal(const) :: _, _) => const.longValue
     }
 
     val fjbgContext = new FJBGContext(49, 0)
 
-    val emitSource = debugLevel >= 1
-    val emitLines  = debugLevel >= 2
-    val emitVars   = debugLevel >= 3
+
+    // -----------------------------------------------------------------------------------------
+    // Getter for internal and unqualified names, plus tracking inner classes behind the scenes.
+    // -----------------------------------------------------------------------------------------
+
+    private var innerClassBuffer = mutable.LinkedHashSet[Symbol]()
 
     /** For given symbol return a symbol corresponding to a class that should be declared as inner class.
      *
@@ -367,7 +363,7 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
      *                - undefined if the jclass/sym couple must not contain a
      *                  signature (a Scala marker attribute has been written).
      */
-    def scalaSignatureAddingMarker(jclass: JClass, sym: Symbol): Option[AnnotationInfo] =
+    def scalaSignatureAddingMarker(jclass: JClass, sym: Symbol): Option[AnnotationInfo] = {
       currentRun.symData get sym match {
         case Some(pickle) if !nme.isModuleName(newTermName(jclass.getName)) =>
           val scalaAttr =
@@ -388,9 +384,9 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
           jclass addAttribute markerAttr
           None
       }
+    }
 
-    private var innerClassBuffer = mutable.LinkedHashSet[Symbol]()
-
+    /* Invoked only from BytecodeGenerator.genClass() */
     private def getSuperInterfaces(c: IClass): Array[String] = {
 
         // Additional interface parents based on annotations and other cues
@@ -483,6 +479,7 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
 
     }
 
+    /* Invoked only from BytecodeGenerator.genClass() */
     private def addEnclosingMethodAttribute(jclass: JClass, clazz: Symbol) {
       val sym = clazz.originalEnclosingMethod
       if (sym.isMethod) {
@@ -591,7 +588,10 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
       writeClass("BeanInfo ", beanInfoClass, c.symbol)
     }
 
-    /** Add the given 'throws' attributes to jmethod */
+    /** Add the given 'throws' attributes to jmethod.
+     *
+     *  Invoked from BytecodeGenerator.genMethod() and BytecodeGenerator.addForwarder().
+     */
     def addExceptionsAttribute(jmethod: JMethod, excs: List[AnnotationInfo]) {
       if (excs.isEmpty) return
 
@@ -895,7 +895,21 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
       addAnnotations(jfield, f.symbol.annotations)
     }
 
+    // val emitSource = debugLevel >= 1
+    // val emitLines  = debugLevel >= 2
+    val emitVars   = debugLevel >= 3
+
     def genMethod(m: IMethod) {
+
+        def isClosureApply(sym: Symbol): Boolean = {
+          (sym.name == nme.apply) &&
+          sym.owner.isSynthetic &&
+          sym.owner.tpe.parents.exists { t =>
+            val TypeRef(_, sym, _) = t
+            FunctionClass contains sym
+          }
+        }
+
       if (m.symbol.isStaticConstructor || definitions.isGetClass(m.symbol)) return
 
       debuglog("Generating method " + m.symbol.fullName)
@@ -967,25 +981,20 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
     }
 
     /** Adds a @remote annotation, actual use unknown.
+     *
+     * Invoked from BytecodeGenerator.genMethod() and BytecodeGenerator.addForwarder().
      */
     private def addRemoteException(isJMethodPublic: Boolean, meth: Symbol) {
+      val isRemoteClass = (clasz.symbol hasAnnotation RemoteAttr)
       val needsAnnotation = (
-        (isRemoteClass || (meth hasAnnotation RemoteAttr) && isJMethodPublic)
-          && !(meth.throwsAnnotations contains RemoteExceptionClass)
+        (  isRemoteClass ||
+           (meth hasAnnotation RemoteAttr) && isJMethodPublic
+        ) && !(meth.throwsAnnotations contains RemoteExceptionClass)
       )
       if (needsAnnotation) {
         val c   = Constant(RemoteExceptionClass.tpe)
         val arg = Literal(c) setType c.tpe
         meth.addAnnotation(ThrowsClass, arg)
-      }
-    }
-
-    private def isClosureApply(sym: Symbol): Boolean = {
-      (sym.name == nme.apply) &&
-      sym.owner.isSynthetic &&
-      sym.owner.tpe.parents.exists { t =>
-        val TypeRef(_, sym, _) = t
-        FunctionClass contains sym
       }
     }
 
@@ -995,6 +1004,7 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
                         jclass.getType())
     }
 
+    /* used only from BytecodeGenerator.genClass() */
     def addStaticInit(cls: JClass, mopt: Option[IMethod]) {
       val clinitMethod = cls.addNewMethod(PublicStatic,
                                           "<clinit>",
@@ -1039,6 +1049,7 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
       }
     }
 
+    /* used only from BytecodeGenerator.genClass(), via addStaticInit() */
     private def legacyStaticInitializer(cls: JClass, clinit: JExtendedCode) {
       if (isStaticModule(clasz.symbol)) {
         clinit emitNEW cls.getName()
@@ -1061,7 +1072,23 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
       clinit.emitRETURN()
     }
 
-    /** Add a forwarder for method m */
+
+    // -----------------------------------------------------------------------------------------
+    // Static forwarders (related to mirror classes but also present in
+    // a plain class lacking companion module, for details see `isCandidateForForwarders`).
+    // -----------------------------------------------------------------------------------------
+
+    val ExcludedForwarderFlags = {
+      import Flags._
+      // Should include DEFERRED but this breaks findMember.
+      ( CASE | SPECIALIZED | LIFTED | PROTECTED | STATIC | EXPANDEDNAME | BridgeAndPrivateFlags )
+    }
+
+    /** Add a forwarder for method m.
+     *
+     *  Used only from BytecodeGenerator.addForwarders().
+     *
+     * */
     def addForwarder(jclass: JClass, module: Symbol, m: Symbol) {
       val moduleName     = javaName(module)
       val methodInfo     = module.thisType.memberInfo(m)
@@ -1114,6 +1141,9 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
      *  with methods in the companion class of `module`. A conflict arises when
      *  a method with the same name is defined both in a class and its companion
      *  object: method signature is not taken into account.
+     *
+     *  Invoked from genClass() and genMirrorClass().
+     *
      */
     def addForwarders(jclass: JClass, moduleClass: Symbol) {
       assert(moduleClass.isModuleClass, moduleClass)
@@ -1145,7 +1175,7 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
      *  generated if there is no companion class: if there is, an attempt will
      *  instead be made to add the forwarder methods to the companion class.
      */
-    def generateMirrorClass(clasz: Symbol, sourceFile: SourceFile) {
+    def genMirrorClass(clasz: Symbol, sourceFile: SourceFile) {
       innerClassBuffer.clear()
       import JAccessFlags._
       val moduleName = javaName(clasz) // + "$"
@@ -1162,6 +1192,11 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
       addAnnotations(mirrorClass, clasz.annotations ++ ssa)
       emitClass(mirrorClass, clasz)
     }
+
+
+    // -----------------------------------------------------------------------------------------
+    // Emitting bytecode instructions.
+    // -----------------------------------------------------------------------------------------
 
     var linearization: List[BasicBlock] = Nil
     var isModuleInitialized = false
@@ -1802,8 +1837,21 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
 
     /** Emit a Local variable table for debugging purposes.
      *  Synthetic locals are skipped. All variables are method-scoped.
+     *
+     *  Invoked only from genMethod().
+     *
      */
     private def genLocalVariableTable(m: IMethod, jcode: JCode) {
+
+        /** Merge adjacent ranges. */
+        def mergeEntries(ranges: List[(Int, Int)]): List[(Int, Int)] = {
+          (ranges.foldLeft(Nil: List[(Int, Int)]) { (collapsed: List[(Int, Int)], p: (Int, Int)) => (collapsed, p) match {
+            case (Nil, _) => List(p)
+            case ((s1, e1) :: rest, (s2, e2)) if (e1 == s2) => (s1, e2) :: rest
+            case _ => p :: collapsed
+          }}).reverse
+        }
+
       val vars = m.locals filterNot (_.sym.isSynthetic)
       if (vars.isEmpty) return
 
@@ -1875,6 +1923,9 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
     /**
      * Compute the indexes of each local variable of the given
      * method. *Does not assume the parameters come first!*
+     *
+     * Invoked only from genMethod().
+     *
      */
     def computeLocalVarsIndex(m: IMethod) {
       var idx = if (m.symbol.isStaticMember) 0 else 1;
@@ -1892,15 +1943,6 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
       }
     }
 
-    ////////////////////// Utilities ////////////////////////
-
-    /** Merge adjacent ranges. */
-    private def mergeEntries(ranges: List[(Int, Int)]): List[(Int, Int)] =
-      (ranges.foldLeft(Nil: List[(Int, Int)]) { (collapsed: List[(Int, Int)], p: (Int, Int)) => (collapsed, p) match {
-        case (Nil, _) => List(p)
-        case ((s1, e1) :: rest, (s2, e2)) if (e1 == s2) => (s1, e2) :: rest
-        case _ => p :: collapsed
-      }}).reverse
   }
 
   private def mkFlags(args: Int*) = args.foldLeft(0)(_ | _)
