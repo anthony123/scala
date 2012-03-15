@@ -445,18 +445,12 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
                                   c.cunit.source.toString)
 
       if (isStaticModule(c.symbol) || serialVUID != None || isParcelableClass) {
-        if (isStaticModule(c.symbol))
-          addModuleInstanceField
+
+        if (isStaticModule(c.symbol)) { addModuleInstanceField }
         addStaticInit(jclass, c.lookupStaticCtor)
+
       } else {
         c.lookupStaticCtor foreach (constructor => addStaticInit(jclass, Some(constructor)))
-
-        // it must be a top level class (name contains no $s)
-        def isCandidateForForwarders(sym: Symbol): Boolean =
-          afterPickler {
-            !(sym.name.toString contains '$') && sym.hasModuleFlag && !sym.isImplClass && !sym.isNestedClass
-          }
-
         // At some point this started throwing lots of exceptions as a compile was finishing.
         // error: java.lang.AssertionError:
         //   assertion failed: List(object package$CompositeThrowable, object package$CompositeThrowable)
@@ -470,11 +464,16 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
         )
         // add static forwarders if there are no name conflicts; see bugs #363 and #1735
         if (lmoc != NoSymbol && !c.symbol.isInterface) {
-          if (isCandidateForForwarders(lmoc) && !settings.noForwarders.value) {
+          // it must be a top level class (name contains no $s)
+          val isCandidateForForwarders = {
+            afterPickler { !(lmoc.name.toString contains '$') && lmoc.hasModuleFlag && !lmoc.isImplClass && !lmoc.isNestedClass }
+          }
+          if (isCandidateForForwarders && !settings.noForwarders.value) {
             log("Adding static forwarders from '%s' to implementations in '%s'".format(c.symbol, lmoc))
             addForwarders(jclass, lmoc.moduleClass)
           }
         }
+
       }
 
       clasz.fields foreach genField
