@@ -450,27 +450,23 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
         addStaticInit(jclass, c.lookupStaticCtor)
 
       } else {
-        c.lookupStaticCtor foreach (constructor => addStaticInit(jclass, Some(constructor)))
-        // At some point this started throwing lots of exceptions as a compile was finishing.
-        // error: java.lang.AssertionError:
-        //   assertion failed: List(object package$CompositeThrowable, object package$CompositeThrowable)
-        // ...is the one I've seen repeatedly.  Suppressing.
-        val lmoc = (
-          try c.symbol.companionModule
-          catch { case x: AssertionError =>
-            Console.println("Suppressing failed assert: " + x)
-            NoSymbol
-          }
-        )
-        // add static forwarders if there are no name conflicts; see bugs #363 and #1735
-        if (lmoc != NoSymbol && !c.symbol.isInterface) {
-          // it must be a top level class (name contains no $s)
-          val isCandidateForForwarders = {
-            afterPickler { !(lmoc.name.toString contains '$') && lmoc.hasModuleFlag && !lmoc.isImplClass && !lmoc.isNestedClass }
-          }
-          if (isCandidateForForwarders && !settings.noForwarders.value) {
-            log("Adding static forwarders from '%s' to implementations in '%s'".format(c.symbol, lmoc))
-            addForwarders(jclass, lmoc.moduleClass)
+
+        for (constructor <- c.lookupStaticCtor) {
+          addStaticInit(jclass, Some(constructor))
+        }
+        val skipStaticForwarders = (c.symbol.isInterface || settings.noForwarders.value)
+        if (!skipStaticForwarders) {
+          val lmoc = c.symbol.companionModule
+          // add static forwarders if there are no name conflicts; see bugs #363 and #1735
+          if (lmoc != NoSymbol) {
+            // it must be a top level class (name contains no $s)
+            val isCandidateForForwarders = {
+              afterPickler { !(lmoc.name.toString contains '$') && lmoc.hasModuleFlag && !lmoc.isImplClass && !lmoc.isNestedClass }
+            }
+            if (isCandidateForForwarders) {
+              log("Adding static forwarders from '%s' to implementations in '%s'".format(c.symbol, lmoc))
+              addForwarders(jclass, lmoc.moduleClass)
+            }
           }
         }
 
