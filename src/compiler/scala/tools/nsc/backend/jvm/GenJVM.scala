@@ -217,14 +217,6 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
       ( CASE | SPECIALIZED | LIFTED | PROTECTED | STATIC | EXPANDEDNAME | BridgeAndPrivateFlags )
     }
 
-    // Additional interface parents based on annotations and other cues
-    def newParentForAttr(attr: Symbol): Option[Symbol] = attr match {
-      case SerializableAttr => Some(SerializableClass)
-      case CloneableAttr    => Some(JavaCloneableClass)
-      case RemoteAttr       => Some(RemoteInterfaceClass)
-      case _                => None
-    }
-
     val versionPickle = {
       val vp = new PickleBuffer(new Array[Byte](16), -1, 0)
       assert(vp.writeIndex == 0, vp)
@@ -381,22 +373,40 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
 
     private var innerClassBuffer = mutable.LinkedHashSet[Symbol]()
 
-    /** Drop redundant interfaces (ones which are implemented by some other parent) from the immediate parents.
-     *  This is important on Android because there is otherwise an interface explosion.
-     */
-    private def minimizeInterfaces(interfaces: List[Symbol]): List[Symbol] = {
-      var rest   = interfaces
-      var leaves = List.empty[Symbol]
-      while(!rest.isEmpty) {
-        val candidate = rest.head
-        val nonLeaf = leaves exists { lsym => lsym isSubClass candidate }
-        if(!nonLeaf) {
-          leaves = candidate :: (leaves filterNot { lsym => candidate isSubClass lsym })
-        }
-        rest = rest.tail
-      }
+    private def getSuperInterfaces(c: IClass): Array[String] = {
 
-      leaves
+        // Additional interface parents based on annotations and other cues
+        def newParentForAttr(attr: Symbol): Option[Symbol] = attr match {
+          case SerializableAttr => Some(SerializableClass)
+          case CloneableAttr    => Some(JavaCloneableClass)
+          case RemoteAttr       => Some(RemoteInterfaceClass)
+          case _                => None
+        }
+
+        /** Drop redundant interfaces (ones which are implemented by some other parent) from the immediate parents.
+         *  This is important on Android because there is otherwise an interface explosion.
+         */
+        def minimizeInterfaces(lstIfaces: List[Symbol]): List[Symbol] = {
+          var rest   = lstIfaces
+          var leaves = List.empty[Symbol]
+          while(!rest.isEmpty) {
+            val candidate = rest.head
+            val nonLeaf = leaves exists { lsym => lsym isSubClass candidate }
+            if(!nonLeaf) {
+              leaves = candidate :: (leaves filterNot { lsym => candidate isSubClass lsym })
+            }
+            rest = rest.tail
+          }
+
+          leaves
+        }
+
+      val ps = c.symbol.info.parents
+      val superInterfaces0: List[Symbol] = if(ps.isEmpty) Nil else c.symbol.mixinClasses;
+      val superInterfaces = superInterfaces0 ++ c.symbol.annotations.flatMap(ann => newParentForAttr(ann.symbol)) distinct
+
+      if(superInterfaces.isEmpty) JClass.NO_INTERFACES
+      else mkArray(minimizeInterfaces(superInterfaces) map javaName)
     }
 
     def genClass(c: IClass) {
@@ -406,15 +416,9 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
       val name = javaName(c.symbol)
 
       val ps = c.symbol.info.parents
-
       val superClass: Symbol = if(ps.isEmpty) ObjectClass else ps.head.typeSymbol;
 
-      val superInterfaces0: List[Symbol] = if(ps.isEmpty) Nil else c.symbol.mixinClasses;
-      val superInterfaces = superInterfaces0 ++ c.symbol.annotations.flatMap(ann => newParentForAttr(ann.symbol)) distinct
-
-      val ifaces =
-        if(superInterfaces.isEmpty) JClass.NO_INTERFACES
-        else mkArray(minimizeInterfaces(superInterfaces) map javaName)
+      val ifaces = getSuperInterfaces(c)
 
       jclass = fjbgContext.JClass(javaFlags(c.symbol),
                                   name,
