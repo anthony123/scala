@@ -200,7 +200,6 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
    */
   class BytecodeGenerator(bytecodeWriter: BytecodeWriter) extends BytecodeUtil {
     def this() = this(new ClassBytecodeWriter { })
-    def debugLevel = settings.debuginfo.indexOfChoice
     import bytecodeWriter.writeClass
 
     val MIN_SWITCH_DENSITY = 0.7
@@ -213,10 +212,11 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
     val StringBuilderClassName = javaName(definitions.StringBuilderClass)
     val BoxesRunTime = "scala.runtime.BoxesRunTime"
 
-    val StringBuilderType = new JObjectType(StringBuilderClassName)               // TODO use ASMType.getObjectType, move to genCode
-    val toStringType      = new JMethodType(JAVA_LANG_STRING, JType.EMPTY_ARRAY)  // TODO use ASMType.getMethodType, move to genCode
-    val arrayCloneType    = new JMethodType(JAVA_LANG_OBJECT, JType.EMPTY_ARRAY)  // TODO move to genCode
+    val StringBuilderType = new JObjectType(StringBuilderClassName)               // TODO use ASMType.getObjectType, keep as sibling to genCode
+    val toStringType      = new JMethodType(JAVA_LANG_STRING, JType.EMPTY_ARRAY)  // TODO use ASMType.getMethodType, keep as sibling to genCode
+    val arrayCloneType    = new JMethodType(JAVA_LANG_OBJECT, JType.EMPTY_ARRAY)  // TODO keep as sibling to genCode
 
+    // accessed from both genClass() and genMirrorClass()
     val versionPickle = {
       val vp = new PickleBuffer(new Array[Byte](16), -1, 0)
       assert(vp.writeIndex == 0, vp)
@@ -226,7 +226,7 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
       vp
     }
 
-    /**  used only in BytecodeGenerator.genCode() */
+    /** used only from genCode(), i.e. only when emitting plain classes. */
     private val jBoxTo: Map[TypeKind, Tuple2[String, JMethodType]] = {
 
         def helperBoxTo(kind: ValueTypeKind): Tuple2[String, JMethodType] = {
@@ -249,7 +249,7 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
 
     }
 
-    /**  used only in BytecodeGenerator.genCode() */
+    /** used only from genCode(), i.e. only when emitting plain classes. */
     private val jUnboxTo: Map[TypeKind, Tuple2[String, JMethodType]] = {
 
         def helperUnboxTo(kind: ValueTypeKind): Tuple2[String, JMethodType] = {
@@ -275,7 +275,6 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
     var method: IMethod = _
     var jclass: JClass = _
     var jmethod: JMethod = _
-    // var jcode: JExtendedCode = _
 
     /* used only from BytecodeGenerator.genClass() */
     def isParcelableClass = isAndroidParcelableClass(clasz.symbol)
@@ -333,17 +332,6 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
       super.javaName(sym)
     }
 
-    /** Write a class to disk, adding the Scala signature (pickled type
-     *  information) and inner classes.
-     *
-     * @param jclass The FJBG class, where code was emitted
-     * @param sym    The corresponding symbol, used for looking up pickled information
-     */
-    def emitClass(jclass: JClass, sym: Symbol) {
-      addInnerClasses(jclass)
-      writeClass("" + sym.name, jclass, sym)
-    }
-
     /** Returns the ScalaSignature annotation if it must be added to this class,
      *  none otherwise; furthermore, it adds to `jclass` the ScalaSig marker
      *  attribute (marking that a scala signature annotation is present) or the
@@ -362,6 +350,8 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
      *                  been written);
      *                - undefined if the jclass/sym couple must not contain a
      *                  signature (a Scala marker attribute has been written).
+     *
+     *  Invoked from both genClass() and genMirrorClass()
      */
     def scalaSignatureAddingMarker(jclass: JClass, sym: Symbol): Option[AnnotationInfo] = {
       currentRun.symData get sym match {
@@ -475,7 +465,9 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
       addGenericSignature(jclass, c.symbol, c.symbol.owner)
       addAnnotations(jclass, c.symbol.annotations ++ ssa)
       addEnclosingMethodAttribute(jclass, c.symbol)
-      emitClass(jclass, c.symbol)
+
+      addInnerClasses(jclass)
+      writeClass("" + c.symbol.name, jclass, c.symbol)
 
     }
 
@@ -532,11 +524,15 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
             c.cunit.source.toString)
 
       var fieldList = List[String]()
+
+      assert(clasz eq c) // TODO only one of clasz, c will be class param.
+
       for (f <- clasz.fields if f.symbol.hasGetter;
 	         g = f.symbol.getter(c.symbol);
 	         s = f.symbol.setter(c.symbol);
 	         if g.isPublic && !(f.symbol.name startsWith "$"))  // inserting $outer breaks the bean
         fieldList = javaName(f.symbol) :: javaName(g) :: (if (s != NoSymbol) javaName(s) else null) :: fieldList
+
       val methodList =
 	     for (m <- clasz.methods
 	         if !m.symbol.isConstructor &&
@@ -584,13 +580,14 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
       jcode.emitINVOKESPECIAL("scala/beans/ScalaBeanInfo", "<init>", conType)
       jcode.emitRETURN()
 
-      // write the bean information class file.
+      // TODO no inner classes attribute is written. Confirm if intended.
       writeClass("BeanInfo ", beanInfoClass, c.symbol)
     }
 
     /** Add the given 'throws' attributes to jmethod.
      *
-     *  Invoked from BytecodeGenerator.genMethod() and BytecodeGenerator.addForwarder().
+     *  Invoked from BytecodeGenerator.genMethod() and BytecodeGenerator.addForwarder(),
+     *  i.e. it's used when emitting both plain and mirror classes.
      */
     def addExceptionsAttribute(jmethod: JMethod, excs: List[AnnotationInfo]) {
       if (excs.isEmpty) return
@@ -716,7 +713,9 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
       nannots
     }
 
-    /** Run the signature parser to catch bogus signatures.
+    /**Run the signature parser to catch bogus signatures.
+     *
+     * used when emitting both plain and mirror classes.
      */
     def isValidSignature(sym: Symbol, sig: String) = (
       if (sym.isMethod) SigParser verifyMethod sig
@@ -724,6 +723,7 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
       else SigParser verifyClass sig
     )
 
+    // used when emitting both plain and mirror classes
     // @M don't generate java generics sigs for (members of) implementation
     // classes, as they are monomorphic (TODO: ok?)
     private def needsGenericSignature(sym: Symbol) = !(
@@ -738,6 +738,8 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
       || sym.isBridge
       || (sym.ownerChain exists (_.isImplClass))
     )
+
+    // used when emitting both plain and mirror classes.
     def addGenericSignature(jmember: JMember, sym: Symbol, owner: Symbol) {
       if (needsGenericSignature(sym)) {
         val memberTpe = beforeErasure(owner.thisType.memberInfo(sym))
@@ -784,6 +786,7 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
       }
     }
 
+    // used when emitting both plain and mirror classes.
     def addAnnotations(jmember: JMember, annotations: List[AnnotationInfo]) {
       if (annotations exists (_ matches definitions.DeprecatedAttr)) {
         val attr = jmember.getContext().JOtherAttribute(
@@ -800,6 +803,7 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
       addAttribute(jmember, tpnme.RuntimeAnnotationATTR, buf)
     }
 
+    // used when emitting both plain and mirror classes.
     def addParamAnnotations(jmethod: JMethod, pannotss: List[List[AnnotationInfo]]) {
       val annotations = pannotss map (_ filter shouldEmitAnnotation)
       if (annotations forall (_.isEmpty)) return
@@ -814,6 +818,7 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
       addAttribute(jmethod, tpnme.RuntimeParamAnnotationATTR, buf)
     }
 
+    // used when emitting both plain and mirror classes.
     def addAttribute(jmember: JMember, name: Name, buf: ByteBuffer) {
       if (buf.position() < 2)
         return
@@ -829,6 +834,7 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
       jmember addAttribute attr
     }
 
+    // used when emitting both plain and mirror classes.
     def addInnerClasses(jclass: JClass) {
       /** The outer name for this inner class. Note that it returns null
        *  when the inner class should not get an index in the constant pool.
@@ -894,6 +900,8 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
       addGenericSignature(jfield, f.symbol, clasz.symbol)
       addAnnotations(jfield, f.symbol.annotations)
     }
+
+    def debugLevel = settings.debuginfo.indexOfChoice
 
     // val emitSource = debugLevel >= 1
     // val emitLines  = debugLevel >= 2
@@ -1000,8 +1008,8 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
 
     def addModuleInstanceField() {
       jclass.addNewField(PublicStaticFinal,
-                        nme.MODULE_INSTANCE_FIELD.toString,
-                        jclass.getType())
+                         nme.MODULE_INSTANCE_FIELD.toString,
+                         jclass.getType())
     }
 
     /* used only from BytecodeGenerator.genClass() */
@@ -1086,7 +1094,8 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
 
     /** Add a forwarder for method m.
      *
-     *  Used only from BytecodeGenerator.addForwarders().
+     *  Used only from BytecodeGenerator.addForwarders(),
+     *  to emit both plain and mirror classes.
      *
      * */
     def addForwarder(jclass: JClass, module: Symbol, m: Symbol) {
@@ -1190,7 +1199,9 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
       addForwarders(mirrorClass, clasz)
       val ssa = scalaSignatureAddingMarker(mirrorClass, clasz.companionSymbol)
       addAnnotations(mirrorClass, clasz.annotations ++ ssa)
-      emitClass(mirrorClass, clasz)
+
+      addInnerClasses(mirrorClass)
+      writeClass("" + clasz.name, mirrorClass, clasz)
     }
 
 
@@ -1202,7 +1213,8 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
     var isModuleInitialized = false
 
     /**
-     *  @param m ...
+     *  Invoked from genMethod() and addStaticInit(),
+     *  i.e. necessary only to emit plain classes.
      */
     def genCode(m: IMethod) {
       val jcode = jmethod.getCode.asInstanceOf[JExtendedCode]
@@ -1906,14 +1918,14 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
 
     ////////////////////// local vars ///////////////////////
 
-    def sizeOf(sym: Symbol): Int = sizeOf(toTypeKind(sym.tpe))
+    // def sizeOf(sym: Symbol): Int = sizeOf(toTypeKind(sym.tpe))
 
     def sizeOf(k: TypeKind): Int = if(k.isWideType) 2 else 1
 
-    def indexOf(m: IMethod, sym: Symbol): Int = {
-      val Some(local) = m lookupLocal sym
-      indexOf(local)
-    }
+    // def indexOf(m: IMethod, sym: Symbol): Int = {
+    //   val Some(local) = m lookupLocal sym
+    //   indexOf(local)
+    // }
 
     def indexOf(local: Local): Int = {
       assert(local.index >= 0, "Invalid index for: " + local + "{" + local.## + "}: ")

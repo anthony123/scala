@@ -14,11 +14,12 @@ trait GenJVMUtil {
 
   import global._
   import icodes._
-  import icodes.opcodes._
   import definitions._
 
   /** Map from type kinds to the Java reference types. It is used for
    *  loading class constants. @see Predef.classOf.
+   *
+   *  TODO keep as sibling to genCode()
    */
   val classLiteral = immutable.Map[TypeKind, JObjectType](
     UNIT   -> new JObjectType("java.lang.Void"),
@@ -32,6 +33,7 @@ trait GenJVMUtil {
     DOUBLE -> new JObjectType("java.lang.Double")
   )
 
+  // TODO move to GenJVM
   // Don't put this in per run caches.
   private val javaNameCache = new mutable.WeakHashMap[Symbol, Name]() ++= List(
     NothingClass        -> binarynme.RuntimeNothing,
@@ -43,10 +45,12 @@ trait GenJVMUtil {
   /** This trait may be used by tools who need access to
    *  utility methods like javaName and javaType. (for instance,
    *  the Eclipse plugin uses it).
+   *
+   *  TODO move members to GenJVM unless marked otherwise.
    */
   trait BytecodeUtil {
 
-    val conds = immutable.Map[TestOp, Int](
+    val conds = immutable.Map[TestOp, Int]( // TODO keep as sibling to genCode()
       EQ -> JExtendedCode.COND_EQ,
       NE -> JExtendedCode.COND_NE,
       LT -> JExtendedCode.COND_LT,
@@ -108,6 +112,7 @@ trait GenJVMUtil {
       else
         javaType(s.tpe)
 
+    // TODO keep as sibling to genCode()
     protected def genConstant(jcode: JExtendedCode, const: Constant) {
       const.tag match {
         case UnitTag    => ()
