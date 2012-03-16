@@ -538,7 +538,7 @@ abstract class GenJVM extends SubComponent with GenAndroid with BytecodeWriters 
       val ssa = scalaSignatureAddingMarker(jclass, c.symbol)
       addGenericSignature(jclass, c.symbol, c.symbol.owner)
       addAnnotations(jclass, c.symbol.annotations ++ ssa)
-      addEnclosingMethodAttribute(jclass, c.symbol)
+      addEnclosingMethodAttribute()
 
       addInnerClasses(jclass)
       bytecodeWriter.writeClass("" + c.symbol.name, jclass, c.symbol)
@@ -546,11 +546,8 @@ abstract class GenJVM extends SubComponent with GenAndroid with BytecodeWriters 
     }
 
     /* Invoked only from BytecodeGenerator.genClass() */
-    private def addEnclosingMethodAttribute(jclass: JClass, clazz: Symbol) { // JVMS 4.7.7
-
-      assert(jclass eq BytecodeGenerator.this.jclass)       // TODO access the class param rather than the method param
-      assert(clazz  eq BytecodeGenerator.this.clasz.symbol) // TODO access the class param rather than the method param
-
+    private def addEnclosingMethodAttribute() { // JVMS 4.7.7
+      val clazz = clasz.symbol
       val sym = clazz.originalEnclosingMethod
       if (sym.isMethod) {
         debuglog("enclosing method for %s is %s (in %s)".format(clazz, sym, sym.enclClass))
