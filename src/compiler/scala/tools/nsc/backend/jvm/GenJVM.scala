@@ -60,10 +60,10 @@ abstract class GenJVM extends SubComponent with GenAndroid with BytecodeWriters 
 
     val BeanInfoAttr = definitions.getRequiredClass("scala.beans.BeanInfo")
 
-    def isJavaEntryPoint(clasz: IClass) = {
-      val sym = clasz.symbol
+    def isJavaEntryPoint(icls: IClass) = {
+      val sym = icls.symbol
       def fail(msg: String, pos: Position = sym.pos) = {
-        clasz.cunit.warning(sym.pos,
+        icls.cunit.warning(sym.pos,
           sym.name + " has a main method with parameter type Array[String], but " + sym.fullName('.') + " will not be a runnable program.\n" +
           "  Reason: " + msg
           // TODO: make this next claim true, if possible
