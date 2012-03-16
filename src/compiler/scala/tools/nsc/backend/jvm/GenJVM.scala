@@ -83,8 +83,7 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
           case _                       => false
         }
       }
-      // At this point it's a module with a main-looking method, so either
-      // succeed or warn that it isn't.
+      // At this point it's a module with a main-looking method, so either succeed or warn that it isn't.
       hasApproximate && {
         // Before erasure so we can identify generic mains.
         beforeErasure {
@@ -149,8 +148,7 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
     }
 
     override def run() {
-      // we reinstantiate the bytecode generator at each run, to allow the GC
-      // to collect everything
+
       if (settings.debug.value)
         inform("[running phase " + name + " on icode]")
 
@@ -163,6 +161,7 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
 
       val bytecodeWriter = initBytecodeWriter(sortedClasses filter isJavaEntryPoint)
 
+      // we reinstantiate the bytecode generator at each run, to allow the GC to collect "everything"
       val codeGenerator = new BytecodeGenerator(bytecodeWriter)
       debuglog("Created new bytecode generator for " + classes.size + " classes.")
 
@@ -216,16 +215,6 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
     val toStringType      = new JMethodType(JAVA_LANG_STRING, JType.EMPTY_ARRAY)  // TODO use ASMType.getMethodType, keep as sibling to genCode
     val arrayCloneType    = new JMethodType(JAVA_LANG_OBJECT, JType.EMPTY_ARRAY)  // TODO keep as sibling to genCode
 
-    // accessed from both genClass() and genMirrorClass()
-    val versionPickle = {
-      val vp = new PickleBuffer(new Array[Byte](16), -1, 0)
-      assert(vp.writeIndex == 0, vp)
-      vp writeNat PickleFormat.MajorVersion
-      vp writeNat PickleFormat.MinorVersion
-      vp writeNat 0
-      vp
-    }
-
     /** used only from genCode(), i.e. only when emitting plain classes. */
     private val jBoxTo: Map[TypeKind, Tuple2[String, JMethodType]] = {
 
@@ -271,9 +260,9 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
       )
     }
 
-    var clasz: IClass = _
-    var method: IMethod = _
-    var jclass: JClass = _
+    var clasz:   IClass  = _
+    var method:  IMethod = _
+    var jclass:  JClass  = _
     var jmethod: JMethod = _
 
     /* used only from BytecodeGenerator.genClass() */
@@ -288,7 +277,8 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
 
 
     // -----------------------------------------------------------------------------------------
-    // Getter for internal and unqualified names, plus tracking inner classes behind the scenes.
+    // Getter for (JVMS 4.2) internal and unqualified names, plus tracking inner classes behind the scenes
+    // (the latter to build the InnerClasses attribute (JVMS 4.7.6) via `addInnerClasses()`).
     // -----------------------------------------------------------------------------------------
 
     private var innerClassBuffer = mutable.LinkedHashSet[Symbol]()
@@ -330,6 +320,26 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
       collectInnerClass(sym)
 
       super.javaName(sym)
+    }
+
+
+    // -----------------------------------------------------------------------------------------
+    // Custom attribute (JVMS 4.7.1) "ScalaSig" used as marker only
+    // (i.e., the pickle is contained in a custom annotation, see `addAnnotations()`, and TODO SIP).
+    // That annotation in turn is not related to `addGenericSignature()` (JVMS 4.7.9)
+    // other than both ending up encoded as attributes (JVMS 4.7)
+    // (with the caveat that the "ScalaSig" attribute is associated to some classes,
+    // while the "Signature" attribute can be associated to classes, methods, and fields.)
+    // -----------------------------------------------------------------------------------------
+
+    // accessed from both genClass() and genMirrorClass()
+    val versionPickle = {
+      val vp = new PickleBuffer(new Array[Byte](16), -1, 0)
+      assert(vp.writeIndex == 0, vp)
+      vp writeNat PickleFormat.MajorVersion
+      vp writeNat PickleFormat.MinorVersion
+      vp writeNat 0
+      vp
     }
 
     /** Returns the ScalaSignature annotation if it must be added to this class,
@@ -375,6 +385,11 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
           None
       }
     }
+
+
+    // -----------------------------------------------------------------------------------------
+    // Emitting a plain class.
+    // -----------------------------------------------------------------------------------------
 
     /* Invoked only from BytecodeGenerator.genClass() */
     private def getSuperInterfaces(c: IClass): Array[String] = {
@@ -458,7 +473,7 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
 
       }
 
-      clasz.fields foreach genField
+      clasz.fields  foreach genField
       clasz.methods foreach genMethod
 
       val ssa = scalaSignatureAddingMarker(jclass, c.symbol)
@@ -472,7 +487,11 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
     }
 
     /* Invoked only from BytecodeGenerator.genClass() */
-    private def addEnclosingMethodAttribute(jclass: JClass, clazz: Symbol) {
+    private def addEnclosingMethodAttribute(jclass: JClass, clazz: Symbol) { // JVMS 4.7.7
+
+      assert(jclass eq BytecodeGenerator.this.jclass)       // TODO access the class param rather than the method param
+      assert(clazz  eq BytecodeGenerator.this.clasz.symbol) // TODO access the class param rather than the method param
+
       val sym = clazz.originalEnclosingMethod
       if (sym.isMethod) {
         debuglog("enclosing method for %s is %s (in %s)".format(clazz, sym, sym.enclClass))
@@ -486,11 +505,9 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
         val enclClass = clazz.rawowner
         assert(enclClass.isClass, enclClass)
         val sym = enclClass.primaryConstructor
-        if (sym == NoSymbol)
-          log("Ran out of room looking for an enclosing method for %s: no constructor here.".format(
-            enclClass, clazz)
-          )
-        else {
+        if (sym == NoSymbol) {
+          log("Ran out of room looking for an enclosing method for %s: no constructor here.".format(enclClass, clazz))
+        } else {
           debuglog("enclosing method for %s is %s (in %s)".format(clazz, sym, enclClass))
           jclass addAttribute fjbgContext.JEnclosingMethodAttribute(
             jclass,
@@ -501,6 +518,10 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
         }
       }
     }
+
+    // -----------------------------------------------------------------------------------------
+    // Emitting a bean info class.
+    // -----------------------------------------------------------------------------------------
 
     /**
      * Generate a bean info class that describes the given class.
@@ -525,7 +546,7 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
 
       var fieldList = List[String]()
 
-      assert(clasz eq c) // TODO only one of clasz, c will be class param.
+      assert(clasz eq c) // TODO access the class param rather than the method param.
 
       for (f <- clasz.fields if f.symbol.hasGetter;
 	         g = f.symbol.getter(c.symbol);
@@ -888,9 +909,10 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
       }
     }
 
+    /* Invoked only from BytecodeGenerator.genClass() */
     def genField(f: IField) {
       debuglog("Adding field: " + f.symbol.fullName)
-      
+
       val jfield = jclass.addNewField(
         javaFlags(f.symbol) | javaFieldFlags(f.symbol),
         javaName(f.symbol),
@@ -907,6 +929,7 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
     // val emitLines  = debugLevel >= 2
     val emitVars   = debugLevel >= 3
 
+    /* Invoked only from BytecodeGenerator.genClass() */
     def genMethod(m: IMethod) {
 
         def isClosureApply(sym: Symbol): Boolean = {
@@ -950,8 +973,10 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
           val outerField = clasz.symbol.info.decl(nme.OUTER_LOCAL)
           if (outerField != NoSymbol) {
             log("Adding fake local to represent outer 'this' for closure " + clasz)
-            val _this = new Local(
-              method.symbol.newVariable(nme.FAKE_LOCAL_THIS), toTypeKind(outerField.tpe), false)
+            val _this =
+              new Local(method.symbol.newVariable(nme.FAKE_LOCAL_THIS),
+                        toTypeKind(outerField.tpe),
+                        false)
             m.locals = m.locals ::: List(_this)
             computeLocalVarsIndex(m) // since we added a new local, we need to recompute indexes
 
@@ -990,7 +1015,8 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
 
     /** Adds a @remote annotation, actual use unknown.
      *
-     * Invoked from BytecodeGenerator.genMethod() and BytecodeGenerator.addForwarder().
+     * Invoked from BytecodeGenerator.genMethod() and BytecodeGenerator.addForwarder(),
+     * ie used to emit both plain and mirror classes
      */
     private def addRemoteException(isJMethodPublic: Boolean, meth: Symbol) {
       val isRemoteClass = (clasz.symbol hasAnnotation RemoteAttr)
@@ -1148,8 +1174,8 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
 
     /** Add forwarders for all methods defined in `module` that don't conflict
      *  with methods in the companion class of `module`. A conflict arises when
-     *  a method with the same name is defined both in a class and its companion
-     *  object: method signature is not taken into account.
+     *  a method with the same name is defined both in a class and its companion object:
+     *  method signature is not taken into account.
      *
      *  Invoked from genClass() and genMirrorClass().
      *
@@ -1238,7 +1264,7 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
         case x :: y :: ys => nextBlock = y; genBlock(x); genBlocks(y :: ys)
       }
 
-      /** Generate exception handlers for the current method. */
+      /**Generate exception handlers for the current method. */
       def genExceptionHandlers() {
 
         /** Return a list of pairs of intervals where the handler is active.
@@ -1295,14 +1321,14 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
           } else
             log("Empty exception range: " + p)
         }
-      }
+      } // end of genCode()'s genExceptionHandlers()
 
       def isAccessibleFrom(target: Symbol, site: Symbol): Boolean = {
         target.isPublic || target.isProtected && {
           (site.enclClass isSubClass target.enclClass) ||
           (site.enclosingPackage == target.privateWithin)
         }
-      }
+      } // end of genCode()'s isAccessibleFrom()
 
       def genCallMethod(call: CALL_METHOD) {
         val CALL_METHOD(method, style) = call
@@ -1355,7 +1381,7 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
             initModule()
             debugMsg("invokespecial")
         }
-      }
+      } // end of genCode()'s genCallMethod()
 
       def genBlock(b: BasicBlock) {
         labels(b).anchorToNext()
@@ -1665,13 +1691,9 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
         for (lv <- b.varsInScope) {
           lv.ranges = (labels(b).getAnchor(), jcode.getPC()) :: lv.ranges
         }
-      }
+      } // end of genCode()'s genBlock()
 
 
-      /**
-       *  @param primitive ...
-       *  @param pos       ...
-       */
       def genPrimitive(primitive: Primitive, pos: Position) {
         primitive match {
           case Negation(kind) =>
@@ -1837,20 +1859,20 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
           case _ =>
             abort("Unimplemented primitive " + primitive)
         }
-      }
+      } // end of genCode()'s genPrimitive()
 
       // genCode starts here
       genBlocks(linearization)
 
-      if (this.method.exh != Nil)
-        genExceptionHandlers;
-    }
+      if (this.method.exh != Nil) { genExceptionHandlers() }
+
+    } // end of BytecodeGenerator.genCode()
 
 
     /** Emit a Local variable table for debugging purposes.
      *  Synthetic locals are skipped. All variables are method-scoped.
      *
-     *  Invoked only from genMethod().
+     *  Invoked only from genMethod(), ie used only when emitting plain classes.
      *
      */
     private def genLocalVariableTable(m: IMethod, jcode: JCode) {
