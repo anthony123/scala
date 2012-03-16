@@ -26,7 +26,7 @@ import scala.tools.nsc.io.AbstractFile
  *  @version 1.0
  *
  */
-abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with BytecodeWriters {
+abstract class GenJVM extends SubComponent with GenAndroid with BytecodeWriters {
   import global._
   import icodes._
   import icodes.opcodes._
@@ -197,8 +197,114 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
    * Java bytecode generator.
    *
    */
-  class BytecodeGenerator(bytecodeWriter: BytecodeWriter) extends BytecodeUtil {
+  class BytecodeGenerator(bytecodeWriter: BytecodeWriter) {
     def this() = this(new ClassBytecodeWriter { })
+
+    /** Specialized array conversion to prevent calling
+     *  java.lang.reflect.Array.newInstance via TraversableOnce.toArray
+     */
+    def mkArray(xs: Traversable[JType]): Array[JType] = { val a = new Array[JType](xs.size); xs.copyToArray(a); a }
+    def mkArray(xs: Traversable[String]): Array[String] = { val a = new Array[String](xs.size); xs.copyToArray(a); a }
+
+    // -----------------------------------------------------------------------------------------
+    // Getter for (JVMS 4.2) internal and unqualified names, plus tracking inner classes behind the scenes
+    // (the latter to build the InnerClasses attribute (JVMS 4.7.6) via `addInnerClasses()`).
+    // -----------------------------------------------------------------------------------------
+
+    private val innerClassBuffer = mutable.LinkedHashSet[Symbol]()
+
+    /** For given symbol return a symbol corresponding to a class that should be declared as inner class.
+     *
+     *  For example:
+     *  class A {
+     *    class B
+     *    object C
+     *  }
+     *
+     *  then method will return NoSymbol for A, the same symbol for A.B (corresponding to A$B class) and A$C$ symbol
+     *  for A.C.
+     */
+    private def innerClassSymbolFor(s: Symbol): Symbol =
+      if (s.isClass) s else if (s.isModule) s.moduleClass else NoSymbol
+
+    // Don't put this in per run caches.
+    private val javaNameCache = new mutable.WeakHashMap[Symbol, Name]() ++= List(
+      NothingClass        -> binarynme.RuntimeNothing,
+      RuntimeNothingClass -> binarynme.RuntimeNothing,
+      NullClass           -> binarynme.RuntimeNull,
+      RuntimeNullClass    -> binarynme.RuntimeNull
+    )
+
+    /** Return the a name of this symbol that can be used on the Java
+     *  platform.  It removes spaces from names.
+     *
+     *  Special handling:
+     *    scala.Nothing erases to scala.runtime.Nothing$
+     *       scala.Null erases to scala.runtime.Null$
+     *
+     *  This is needed because they are not real classes, and they mean
+     *  'abrupt termination upon evaluation of that expression' or null respectively.
+     *  This handling is done already in GenICode, but here we need to remove
+     *  references from method signatures to these types, because such classes can
+     *  not exist in the classpath: the type checker will be very confused.
+     */
+    def javaName(sym: Symbol): String = {
+
+        /**
+         * Checks if given symbol corresponds to inner class/object and add it to innerClassBuffer
+         *
+         * Note: This method is called recursively thus making sure that we add complete chain
+         * of inner class all until root class.
+         */
+        def collectInnerClass(s: Symbol): Unit = {
+          // TODO: some beforeFlatten { ... } which accounts for
+          // being nested in parameterized classes (if we're going to selectively flatten.)
+          val x = innerClassSymbolFor(s)
+          if(x ne NoSymbol) {
+            assert(x.isClass, "not an inner-class symbol")
+            val isInner = !x.rawowner.isPackageClass
+            if (isInner) {
+              innerClassBuffer += x
+              collectInnerClass(x.rawowner)
+            }
+          }
+        }
+
+      collectInnerClass(sym)
+
+      javaNameCache.getOrElseUpdate(sym, {
+        if (sym.isClass || (sym.isModule && !sym.isMethod))
+          sym.javaBinaryName
+        else
+          sym.javaSimpleName
+      }).toString
+    }
+
+    def javaType(t: TypeKind): JType = (t: @unchecked) match {
+      case UNIT            => JType.VOID
+      case BOOL            => JType.BOOLEAN
+      case BYTE            => JType.BYTE
+      case SHORT           => JType.SHORT
+      case CHAR            => JType.CHAR
+      case INT             => JType.INT
+      case LONG            => JType.LONG
+      case FLOAT           => JType.FLOAT
+      case DOUBLE          => JType.DOUBLE
+      case REFERENCE(cls)  => new JObjectType(javaName(cls))
+      case ARRAY(elem)     => new JArrayType(javaType(elem))
+    }
+
+    def javaType(t: Type): JType = javaType(toTypeKind(t))
+
+    def javaType(s: Symbol): JType = {
+      if (s.isMethod)
+        new JMethodType(
+          if (s.isClassConstructor) JType.VOID else javaType(s.tpe.resultType),
+          mkArray(s.tpe.paramTypes map javaType)
+        )
+      else
+        javaType(s.tpe)
+    }
 
     val MIN_SWITCH_DENSITY = 0.7
     val INNER_CLASSES_FLAGS =
@@ -274,52 +380,6 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
 
     val fjbgContext = new FJBGContext(49, 0)
 
-
-    // -----------------------------------------------------------------------------------------
-    // Getter for (JVMS 4.2) internal and unqualified names, plus tracking inner classes behind the scenes
-    // (the latter to build the InnerClasses attribute (JVMS 4.7.6) via `addInnerClasses()`).
-    // -----------------------------------------------------------------------------------------
-
-    private var innerClassBuffer = mutable.LinkedHashSet[Symbol]()
-
-    /** For given symbol return a symbol corresponding to a class that should be declared as inner class.
-     *
-     *  For example:
-     *  class A {
-     *    class B
-     *    object C
-     *  }
-     *
-     *  then method will return NoSymbol for A, the same symbol for A.B (corresponding to A$B class) and A$C$ symbol
-     *  for A.C.
-     */
-    private def innerClassSymbolFor(s: Symbol): Symbol =
-      if (s.isClass) s else if (s.isModule) s.moduleClass else NoSymbol
-
-    override def javaName(sym: Symbol): String = {
-      /**
-       * Checks if given symbol corresponds to inner class/object and add it to innerClassBuffer
-       *
-       * Note: This method is called recursively thus making sure that we add complete chain
-       * of inner class all until root class.
-       */
-      def collectInnerClass(s: Symbol): Unit = {
-        // TODO: some beforeFlatten { ... } which accounts for
-        // being nested in parameterized classes (if we're going to selectively flatten.)
-        val x = innerClassSymbolFor(s)
-        if(x ne NoSymbol) {
-          assert(x.isClass, "not an inner-class symbol")
-          val isInner = !x.rawowner.isPackageClass
-          if (isInner) {
-            innerClassBuffer += x
-            collectInnerClass(x.rawowner)
-          }
-        }
-      }
-      collectInnerClass(sym)
-
-      super.javaName(sym)
-    }
 
 
     // -----------------------------------------------------------------------------------------
@@ -1238,6 +1298,64 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
 
     var linearization: List[BasicBlock] = Nil
     var isModuleInitialized = false
+
+    /** Map from type kinds to the Java reference types. It is used for
+     *  loading class constants. @see Predef.classOf.
+     *
+     *  TODO keep as sibling to genCode()
+     */
+    private val classLiteral = immutable.Map[TypeKind, JObjectType](
+      UNIT   -> new JObjectType("java.lang.Void"),
+      BOOL   -> new JObjectType("java.lang.Boolean"),
+      BYTE   -> new JObjectType("java.lang.Byte"),
+      SHORT  -> new JObjectType("java.lang.Short"),
+      CHAR   -> new JObjectType("java.lang.Character"),
+      INT    -> new JObjectType("java.lang.Integer"),
+      LONG   -> new JObjectType("java.lang.Long"),
+      FLOAT  -> new JObjectType("java.lang.Float"),
+      DOUBLE -> new JObjectType("java.lang.Double")
+    )
+
+    private val conds = immutable.Map[TestOp, Int]( // TODO keep as sibling to genCode()
+      EQ -> JExtendedCode.COND_EQ,
+      NE -> JExtendedCode.COND_NE,
+      LT -> JExtendedCode.COND_LT,
+      GT -> JExtendedCode.COND_GT,
+      LE -> JExtendedCode.COND_LE,
+      GE -> JExtendedCode.COND_GE
+    )
+
+    // TODO keep as sibling to genCode()
+    private def genConstant(jcode: JExtendedCode, const: Constant) {
+      const.tag match {
+        case UnitTag    => ()
+        case BooleanTag => jcode emitPUSH const.booleanValue
+        case ByteTag    => jcode emitPUSH const.byteValue
+        case ShortTag   => jcode emitPUSH const.shortValue
+        case CharTag    => jcode emitPUSH const.charValue
+        case IntTag     => jcode emitPUSH const.intValue
+        case LongTag    => jcode emitPUSH const.longValue
+        case FloatTag   => jcode emitPUSH const.floatValue
+        case DoubleTag  => jcode emitPUSH const.doubleValue
+        case StringTag  => jcode emitPUSH const.stringValue
+        case NullTag    => jcode.emitACONST_NULL()
+        case ClassTag   =>
+          val kind = toTypeKind(const.typeValue)
+          val toPush =
+            if (kind.isValueType) classLiteral(kind)
+            else javaType(kind).asInstanceOf[JReferenceType]
+
+          jcode emitPUSH toPush
+
+        case EnumTag   =>
+          val sym = const.symbolValue
+          jcode.emitGETSTATIC(javaName(sym.owner),
+                              javaName(sym),
+                              javaType(sym.tpe.underlying))
+        case _         =>
+          abort("Unknown constant value: " + const)
+      }
+    }
 
     /**
      *  Invoked from genMethod() and addStaticInit(),
