@@ -201,6 +201,101 @@ abstract class GenJVM extends SubComponent with GenAndroid with BytecodeWriters 
     RuntimeNullClass    -> binarynme.RuntimeNull
   )
 
+  private def mkFlags(args: Int*) = args.foldLeft(0)(_ | _)
+
+  /**
+   * Return the Java modifiers for the given symbol.
+   * Java modifiers for classes:
+   *  - public, abstract, final, strictfp (not used)
+   * for interfaces:
+   *  - the same as for classes, without 'final'
+   * for fields:
+   *  - public, private (*)
+   *  - static, final
+   * for methods:
+   *  - the same as for fields, plus:
+   *  - abstract, synchronized (not used), strictfp (not used), native (not used)
+   *
+   *  (*) protected cannot be used, since inner classes 'see' protected members,
+   *      and they would fail verification after lifted.
+   */
+  def javaFlags(sym: Symbol): Int = {
+    // constructors of module classes should be private
+    // PP: why are they only being marked private at this stage and not earlier?
+    val privateFlag =
+      sym.isPrivate || (sym.isPrimaryConstructor && isTopLevelModule(sym.owner))
+
+    // This does not check .isFinal (which checks flags for the FINAL flag),
+    // instead checking rawflags for that flag so as to exclude symbols which
+    // received lateFINAL.  These symbols are eligible for inlining, but to
+    // avoid breaking proxy software which depends on subclassing, we avoid
+    // insisting on their finality in the bytecode.
+    val finalFlag = (
+         ((sym.rawflags & (Flags.FINAL | Flags.MODULE)) != 0)
+      && !sym.enclClass.isInterface
+      && !sym.isClassConstructor
+      && !sym.isMutable  // fix for SI-3569, it is too broad?
+    )
+
+    mkFlags(
+      if (privateFlag) ACC_PRIVATE else ACC_PUBLIC,
+      if (sym.isDeferred || sym.hasAbstractFlag) ACC_ABSTRACT else 0,
+      if (sym.isInterface) ACC_INTERFACE else 0,
+      if (finalFlag) ACC_FINAL else 0,
+      if (sym.isStaticMember) ACC_STATIC else 0,
+      if (sym.isBridge) ACC_BRIDGE | ACC_SYNTHETIC else 0,
+      if (sym.isClass && !sym.isInterface) ACC_SUPER else 0,
+      if (sym.isVarargsMethod) ACC_VARARGS else 0,
+      if (sym.hasFlag(Flags.SYNCHRONIZED)) JAVA_ACC_SYNCHRONIZED else 0
+    )
+  }
+
+  def javaFieldFlags(sym: Symbol) = {
+    mkFlags(
+      if (sym hasAnnotation TransientAttr) ACC_TRANSIENT else 0,
+      if (sym hasAnnotation VolatileAttr) ACC_VOLATILE else 0,
+      if (sym.isMutable) 0 else ACC_FINAL
+    )
+  }
+
+  def isTopLevelModule(sym: Symbol): Boolean =
+    afterPickler { sym.isModuleClass && !sym.isImplClass && !sym.isNestedClass }
+
+  def isStaticModule(sym: Symbol): Boolean = {
+    sym.isModuleClass && !sym.isImplClass && !sym.isLifted
+  }
+
+  /** basic functionality for class file building */
+  abstract class JBuilder(bytecodeWriter: BytecodeWriter) {
+
+  } // end of class JBuilder
+
+
+  /** functionality for building plain and mirror classes */
+  abstract class JCommonBuilder(bytecodeWriter: BytecodeWriter) extends JBuilder(bytecodeWriter) {
+
+  } // end of class JCommonBuilder
+
+
+  /** builder of plain classes */
+  abstract class JPlainBuilder(bytecodeWriter: BytecodeWriter) extends JCommonBuilder(bytecodeWriter) /* with GenAndroid */ {
+
+  } // end of class JPlainBuilder
+
+
+  /** builder of mirror classes */
+  abstract class JMirrorBuilder(bytecodeWriter: BytecodeWriter) extends JCommonBuilder(bytecodeWriter) {
+
+  } // end of class JMirrorBuilder
+
+
+  /** builder of bean info classes */
+  abstract class JBeanInfoBuilder(bytecodeWriter: BytecodeWriter) extends JBuilder(bytecodeWriter) {
+
+  } // end of class JBeanInfoBuilder
+
+
+
   /**
    * Java bytecode generator.
    *
@@ -313,9 +408,10 @@ abstract class GenJVM extends SubComponent with GenAndroid with BytecodeWriters 
     val PublicStatic      = ACC_PUBLIC | ACC_STATIC
     val PublicStaticFinal = ACC_PUBLIC | ACC_STATIC | ACC_FINAL
 
-    val StringBuilderClassName = javaName(definitions.StringBuilderClass)
+    val StringBuilderClassName = javaName(definitions.StringBuilderClass) // TODO make sibling to genCode()
     val BoxesRunTime = "scala.runtime.BoxesRunTime"
 
+    // TODO make the following three sibling to genCode()
     val StringBuilderType = new JObjectType(StringBuilderClassName)               // TODO use ASMType.getObjectType, keep as sibling to genCode
     val toStringType      = new JMethodType(JAVA_LANG_STRING, JType.EMPTY_ARRAY)  // TODO use ASMType.getMethodType, keep as sibling to genCode
     val arrayCloneType    = new JMethodType(JAVA_LANG_OBJECT, JType.EMPTY_ARRAY)  // TODO keep as sibling to genCode
@@ -659,7 +755,7 @@ abstract class GenJVM extends SubComponent with GenAndroid with BytecodeWriters 
       jcode.emitINVOKESPECIAL("scala/beans/ScalaBeanInfo", "<init>", conType)
       jcode.emitRETURN()
 
-      // TODO no inner classes attribute is written. Confirm if intended.
+      // TODO no inner classes attribute is written. Confirm intent.
       bytecodeWriter.writeClass("BeanInfo ", beanInfoClass, clasz.symbol)
     }
 
@@ -693,12 +789,15 @@ abstract class GenJVM extends SubComponent with GenAndroid with BytecodeWriters 
 
     /** Whether an annotation should be emitted as a Java annotation
      *   .initialize: if 'annot' is read from pickle, atp might be un-initialized
+     *
+     *  Used when emitting both plain and mirror classes.
      */
     private def shouldEmitAnnotation(annot: AnnotationInfo) =
       annot.symbol.initialize.isJavaDefined &&
       annot.matches(ClassfileAnnotationClass) &&
       annot.args.isEmpty
 
+    // used when emitting both plain and mirror classes.
     private def emitJavaAnnotations(cpool: JConstantPool, buf: ByteBuffer, annotations: List[AnnotationInfo]): Int = {
       def emitArgument(arg: ClassfileAnnotArg): Unit = arg match {
         case LiteralAnnotArg(const) =>
@@ -1090,6 +1189,7 @@ abstract class GenJVM extends SubComponent with GenAndroid with BytecodeWriters 
       }
     }
 
+    /* used only from BytecodeGenerator.genClass() */
     def addModuleInstanceField() {
       jclass.addNewField(PublicStaticFinal,
                          nme.MODULE_INSTANCE_FIELD.toString,
@@ -1268,10 +1368,11 @@ abstract class GenJVM extends SubComponent with GenAndroid with BytecodeWriters 
      *  generated if there is no companion class: if there is, an attempt will
      *  instead be made to add the forwarder methods to the companion class.
      */
-    def genMirrorClass(clasz: Symbol, sourceFile: SourceFile) {
+    def genMirrorClass(modsym: Symbol, sourceFile: SourceFile) {
+      assert(modsym.companionClass == NoSymbol, modsym)
       innerClassBuffer.clear()
       import JAccessFlags._
-      val moduleName = javaName(clasz) // + "$"
+      val moduleName = javaName(modsym) // + "$"
       val mirrorName = moduleName.substring(0, moduleName.length() - 1)
       val mirrorClass = fjbgContext.JClass(ACC_SUPER | ACC_PUBLIC | ACC_FINAL,
                                            mirrorName,
@@ -1280,12 +1381,12 @@ abstract class GenJVM extends SubComponent with GenAndroid with BytecodeWriters 
                                            "" + sourceFile)
 
       log("Dumping mirror class for '%s'".format(mirrorClass.getName))
-      addForwarders(mirrorClass, clasz)
-      val ssa = scalaSignatureAddingMarker(mirrorClass, clasz.companionSymbol)
-      addAnnotations(mirrorClass, clasz.annotations ++ ssa)
+      addForwarders(mirrorClass, modsym)
+      val ssa = scalaSignatureAddingMarker(mirrorClass, modsym.companionSymbol)
+      addAnnotations(mirrorClass, modsym.annotations ++ ssa)
 
       addInnerClasses(mirrorClass)
-      bytecodeWriter.writeClass("" + clasz.name, mirrorClass, clasz)
+      bytecodeWriter.writeClass("" + modsym.name, mirrorClass, modsym)
     }
 
 
@@ -2093,69 +2194,6 @@ abstract class GenJVM extends SubComponent with GenAndroid with BytecodeWriters 
       }
     }
 
-  }
-
-  private def mkFlags(args: Int*) = args.foldLeft(0)(_ | _)
-
-  /**
-   * Return the Java modifiers for the given symbol.
-   * Java modifiers for classes:
-   *  - public, abstract, final, strictfp (not used)
-   * for interfaces:
-   *  - the same as for classes, without 'final'
-   * for fields:
-   *  - public, private (*)
-   *  - static, final
-   * for methods:
-   *  - the same as for fields, plus:
-   *  - abstract, synchronized (not used), strictfp (not used), native (not used)
-   *
-   *  (*) protected cannot be used, since inner classes 'see' protected members,
-   *      and they would fail verification after lifted.
-   */
-  def javaFlags(sym: Symbol): Int = {
-    // constructors of module classes should be private
-    // PP: why are they only being marked private at this stage and not earlier?
-    val privateFlag =
-      sym.isPrivate || (sym.isPrimaryConstructor && isTopLevelModule(sym.owner))
-
-    // This does not check .isFinal (which checks flags for the FINAL flag),
-    // instead checking rawflags for that flag so as to exclude symbols which
-    // received lateFINAL.  These symbols are eligible for inlining, but to
-    // avoid breaking proxy software which depends on subclassing, we avoid
-    // insisting on their finality in the bytecode.
-    val finalFlag = (
-         ((sym.rawflags & (Flags.FINAL | Flags.MODULE)) != 0)
-      && !sym.enclClass.isInterface
-      && !sym.isClassConstructor
-      && !sym.isMutable  // fix for SI-3569, it is too broad?
-    )
-
-    mkFlags(
-      if (privateFlag) ACC_PRIVATE else ACC_PUBLIC,
-      if (sym.isDeferred || sym.hasAbstractFlag) ACC_ABSTRACT else 0,
-      if (sym.isInterface) ACC_INTERFACE else 0,
-      if (finalFlag) ACC_FINAL else 0,
-      if (sym.isStaticMember) ACC_STATIC else 0,
-      if (sym.isBridge) ACC_BRIDGE | ACC_SYNTHETIC else 0,
-      if (sym.isClass && !sym.isInterface) ACC_SUPER else 0,
-      if (sym.isVarargsMethod) ACC_VARARGS else 0,
-      if (sym.hasFlag(Flags.SYNCHRONIZED)) JAVA_ACC_SYNCHRONIZED else 0
-    )
-  }
-  def javaFieldFlags(sym: Symbol) = {
-    mkFlags(
-      if (sym hasAnnotation TransientAttr) ACC_TRANSIENT else 0,
-      if (sym hasAnnotation VolatileAttr) ACC_VOLATILE else 0,
-      if (sym.isMutable) 0 else ACC_FINAL
-    )
-  }
-
-  def isTopLevelModule(sym: Symbol): Boolean =
-    afterPickler { sym.isModuleClass && !sym.isImplClass && !sym.isNestedClass }
-
-  def isStaticModule(sym: Symbol): Boolean = {
-    sym.isModuleClass && !sym.isImplClass && !sym.isLifted
-  }
+  } // end of class BytecodeGenerator
 
 }
