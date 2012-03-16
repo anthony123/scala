@@ -33,7 +33,7 @@ trait GenAndroid { // TODO keep members as sibling to genClass() (better: a trai
     (sym.parentSymbols contains AndroidParcelableInterface)
 
   /* used only from BytecodeGenerator.genClass(), via addStaticInit() */
-  def addCreatorCode(codegen: BytecodeGenerator, block: BasicBlock) {
+  def addCreatorCode(codegen: JPlainBuilder, block: BasicBlock) {
     import codegen._
     val fieldSymbol = (
       clasz.symbol.newValue(newTermName(androidFieldName), NoPosition, Flags.STATIC | Flags.FINAL)
@@ -46,7 +46,7 @@ trait GenAndroid { // TODO keep members as sibling to genClass() (better: a trai
   }
 
   /* used only from BytecodeGenerator.genClass(), via legacyStaticInitializer() and addStaticInit() */
-  def legacyAddCreatorCode(codegen: BytecodeGenerator, clinit: JExtendedCode) {
+  def legacyAddCreatorCode(codegen: JPlainBuilder, clinit: JExtendedCode) {
     import codegen._
     val creatorType = javaType(AndroidCreatorClass)
     jclass.addNewField(PublicStaticFinal,

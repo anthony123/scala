@@ -6,7 +6,6 @@
 package scala.tools.nsc
 package backend.jvm
 
-import java.io.{ DataOutputStream, OutputStream }
 import java.nio.ByteBuffer
 import scala.collection.{ mutable, immutable }
 import scala.reflect.internal.pickling.{ PickleFormat, PickleBuffer }
@@ -17,7 +16,6 @@ import scala.reflect.internal.ClassfileConstants._
 import ch.epfl.lamp.fjbg._
 import JAccessFlags._
 import JObjectType.{ JAVA_LANG_STRING, JAVA_LANG_OBJECT }
-import java.util.jar.{ JarEntry, JarOutputStream }
 import scala.tools.nsc.io.AbstractFile
 
 /** This class ...
@@ -161,23 +159,24 @@ abstract class GenJVM extends SubComponent with GenAndroid with BytecodeWriters 
 
       val bytecodeWriter = initBytecodeWriter(sortedClasses filter isJavaEntryPoint)
 
-      // we reinstantiate the bytecode generator at each run, to allow the GC to collect "everything"
-      val codeGenerator = new BytecodeGenerator(bytecodeWriter)
       debuglog("Created new bytecode generator for " + classes.size + " classes.")
 
       for(c <- sortedClasses) {
         try {
           if (isStaticModule(c.symbol) && isTopLevelModule(c.symbol)) {
-            if (c.symbol.companionClass == NoSymbol)
-              codeGenerator.genMirrorClass(c.symbol, c.cunit.source)
-            else
+            if (c.symbol.companionClass == NoSymbol) {
+              val codegen = new JMirrorBuilder(c.cunit, bytecodeWriter)
+              codegen.genMirrorClass(c.symbol, c.cunit.source)
+            } else {
               log("No mirror class for module with linked class: " + c.symbol.fullName)
+            }
           }
 
-          codeGenerator.genClass(c)
+          new JPlainBuilder(c, bytecodeWriter).genClass(c)
 
           if (c.symbol hasAnnotation BeanInfoAttr) {
-            codeGenerator.genBeanInfoClass()
+            val codegen = new JBeanInfoBuilder(c, bytecodeWriter)
+            codegen.genBeanInfoClass()
           }
 
         } catch {
@@ -268,40 +267,7 @@ abstract class GenJVM extends SubComponent with GenAndroid with BytecodeWriters 
   /** basic functionality for class file building */
   abstract class JBuilder(bytecodeWriter: BytecodeWriter) {
 
-  } // end of class JBuilder
-
-
-  /** functionality for building plain and mirror classes */
-  abstract class JCommonBuilder(bytecodeWriter: BytecodeWriter) extends JBuilder(bytecodeWriter) {
-
-  } // end of class JCommonBuilder
-
-
-  /** builder of plain classes */
-  abstract class JPlainBuilder(bytecodeWriter: BytecodeWriter) extends JCommonBuilder(bytecodeWriter) /* with GenAndroid */ {
-
-  } // end of class JPlainBuilder
-
-
-  /** builder of mirror classes */
-  abstract class JMirrorBuilder(bytecodeWriter: BytecodeWriter) extends JCommonBuilder(bytecodeWriter) {
-
-  } // end of class JMirrorBuilder
-
-
-  /** builder of bean info classes */
-  abstract class JBeanInfoBuilder(bytecodeWriter: BytecodeWriter) extends JBuilder(bytecodeWriter) {
-
-  } // end of class JBeanInfoBuilder
-
-
-
-  /**
-   * Java bytecode generator.
-   *
-   */
-  class BytecodeGenerator(bytecodeWriter: BytecodeWriter) {
-    def this() = this(new ClassBytecodeWriter { })
+    val fjbgContext = new FJBGContext(49, 0)
 
     /** Specialized array conversion to prevent calling
      *  java.lang.reflect.Array.newInstance via TraversableOnce.toArray
@@ -314,7 +280,7 @@ abstract class GenJVM extends SubComponent with GenAndroid with BytecodeWriters 
     // (the latter to build the InnerClasses attribute (JVMS 4.7.6) via `addInnerClasses()`).
     // -----------------------------------------------------------------------------------------
 
-    private val innerClassBuffer = mutable.LinkedHashSet[Symbol]()
+    val innerClassBuffer = mutable.LinkedHashSet[Symbol]()
 
     /** For given symbol return a symbol corresponding to a class that should be declared as inner class.
      *
@@ -327,7 +293,7 @@ abstract class GenJVM extends SubComponent with GenAndroid with BytecodeWriters 
      *  then method will return NoSymbol for A, the same symbol for A.B (corresponding to A$B class) and A$C$ symbol
      *  for A.C.
      */
-    private def innerClassSymbolFor(s: Symbol): Symbol =
+    def innerClassSymbolFor(s: Symbol): Symbol =
       if (s.isClass) s else if (s.isModule) s.moduleClass else NoSymbol
 
     /** Return the a name of this symbol that can be used on the Java
@@ -401,81 +367,17 @@ abstract class GenJVM extends SubComponent with GenAndroid with BytecodeWriters 
         javaType(s.tpe)
     }
 
-    val MIN_SWITCH_DENSITY = 0.7 // TODO make sibling to genCode()
+  } // end of class JBuilder
+
+
+  /** functionality for building plain and mirror classes */
+  abstract class JCommonBuilder(cunit: CompilationUnit, bytecodeWriter: BytecodeWriter) extends JBuilder(bytecodeWriter) {
+
     val INNER_CLASSES_FLAGS =
       (ACC_PUBLIC | ACC_PRIVATE | ACC_PROTECTED | ACC_STATIC | ACC_FINAL | ACC_INTERFACE | ACC_ABSTRACT)
 
     val PublicStatic      = ACC_PUBLIC | ACC_STATIC
     val PublicStaticFinal = ACC_PUBLIC | ACC_STATIC | ACC_FINAL
-
-    val StringBuilderClassName = javaName(definitions.StringBuilderClass) // TODO make sibling to genCode()
-    val BoxesRunTime = "scala.runtime.BoxesRunTime"
-
-    // TODO make the following three sibling to genCode()
-    val StringBuilderType = new JObjectType(StringBuilderClassName)               // TODO use ASMType.getObjectType, keep as sibling to genCode
-    val toStringType      = new JMethodType(JAVA_LANG_STRING, JType.EMPTY_ARRAY)  // TODO use ASMType.getMethodType, keep as sibling to genCode
-    val arrayCloneType    = new JMethodType(JAVA_LANG_OBJECT, JType.EMPTY_ARRAY)  // TODO keep as sibling to genCode
-
-    /** used only from genCode(), i.e. only when emitting plain classes. */
-    private val jBoxTo: Map[TypeKind, Tuple2[String, JMethodType]] = {
-
-        def helperBoxTo(kind: ValueTypeKind): Tuple2[String, JMethodType] = {
-          val boxedType = definitions.boxedClass(kind.toType.typeSymbol)
-          val mtype = new JMethodType(javaType(boxedType), Array(javaType(kind)))
-
-          Pair("boxTo" + boxedType.decodedName, mtype)
-        }
-
-      Map(
-        BOOL   -> helperBoxTo(BOOL)  ,
-        BYTE   -> helperBoxTo(BYTE)  ,
-        CHAR   -> helperBoxTo(CHAR)  ,
-        SHORT  -> helperBoxTo(SHORT) ,
-        INT    -> helperBoxTo(INT)   ,
-        LONG   -> helperBoxTo(LONG)  ,
-        FLOAT  -> helperBoxTo(FLOAT) ,
-        DOUBLE -> helperBoxTo(DOUBLE)
-      )
-
-    }
-
-    /** used only from genCode(), i.e. only when emitting plain classes. */
-    private val jUnboxTo: Map[TypeKind, Tuple2[String, JMethodType]] = {
-
-        def helperUnboxTo(kind: ValueTypeKind): Tuple2[String, JMethodType] = {
-          val mtype = new JMethodType(javaType(kind), Array(JAVA_LANG_OBJECT))
-          val mname = "unboxTo" + kind.toType.typeSymbol.decodedName
-
-          Pair(mname, mtype)
-        }
-
-      Map(
-        BOOL   -> helperUnboxTo(BOOL)  ,
-        BYTE   -> helperUnboxTo(BYTE)  ,
-        CHAR   -> helperUnboxTo(CHAR)  ,
-        SHORT  -> helperUnboxTo(SHORT) ,
-        INT    -> helperUnboxTo(INT)   ,
-        LONG   -> helperUnboxTo(LONG)  ,
-        FLOAT  -> helperUnboxTo(FLOAT) ,
-        DOUBLE -> helperUnboxTo(DOUBLE)
-      )
-    }
-
-    var clasz:   IClass  = _
-    var method:  IMethod = _
-    var jclass:  JClass  = _
-    var jmethod: JMethod = _
-
-    /* used only from BytecodeGenerator.genClass() */
-    def isParcelableClass = isAndroidParcelableClass(clasz.symbol)
-
-    /* used only from BytecodeGenerator.genClass() */
-    def serialVUID = clasz.symbol getAnnotation SerialVersionUIDAttr collect {
-      case AnnotationInfo(_, Literal(const) :: _, _) => const.longValue
-    }
-
-    val fjbgContext = new FJBGContext(49, 0)
-
 
 
     // -----------------------------------------------------------------------------------------
@@ -487,7 +389,6 @@ abstract class GenJVM extends SubComponent with GenAndroid with BytecodeWriters 
     // while the "Signature" attribute can be associated to classes, methods, and fields.)
     // -----------------------------------------------------------------------------------------
 
-    // accessed from both genClass() and genMirrorClass()
     val versionPickle = {
       val vp = new PickleBuffer(new Array[Byte](16), -1, 0)
       assert(vp.writeIndex == 0, vp)
@@ -516,7 +417,6 @@ abstract class GenJVM extends SubComponent with GenAndroid with BytecodeWriters 
      *                - undefined if the jclass/sym couple must not contain a
      *                  signature (a Scala marker attribute has been written).
      *
-     *  Invoked from both genClass() and genMirrorClass()
      */
     def scalaSignatureAddingMarker(jclass: JClass, sym: Symbol): Option[AnnotationInfo] = {
       currentRun.symData get sym match {
@@ -541,228 +441,7 @@ abstract class GenJVM extends SubComponent with GenAndroid with BytecodeWriters 
       }
     }
 
-
-    // -----------------------------------------------------------------------------------------
-    // Emitting a plain class.
-    // -----------------------------------------------------------------------------------------
-
-    /* Invoked only from BytecodeGenerator.genClass() */
-    private def getSuperInterfaces(c: IClass): Array[String] = {
-
-        // Additional interface parents based on annotations and other cues
-        def newParentForAttr(attr: Symbol): Option[Symbol] = attr match {
-          case SerializableAttr => Some(SerializableClass)
-          case CloneableAttr    => Some(JavaCloneableClass)
-          case RemoteAttr       => Some(RemoteInterfaceClass)
-          case _                => None
-        }
-
-        /** Drop redundant interfaces (ones which are implemented by some other parent) from the immediate parents.
-         *  This is important on Android because there is otherwise an interface explosion.
-         */
-        def minimizeInterfaces(lstIfaces: List[Symbol]): List[Symbol] = {
-          var rest   = lstIfaces
-          var leaves = List.empty[Symbol]
-          while(!rest.isEmpty) {
-            val candidate = rest.head
-            val nonLeaf = leaves exists { lsym => lsym isSubClass candidate }
-            if(!nonLeaf) {
-              leaves = candidate :: (leaves filterNot { lsym => candidate isSubClass lsym })
-            }
-            rest = rest.tail
-          }
-
-          leaves
-        }
-
-      val ps = c.symbol.info.parents
-      val superInterfaces0: List[Symbol] = if(ps.isEmpty) Nil else c.symbol.mixinClasses;
-      val superInterfaces = superInterfaces0 ++ c.symbol.annotations.flatMap(ann => newParentForAttr(ann.symbol)) distinct
-
-      if(superInterfaces.isEmpty) JClass.NO_INTERFACES
-      else mkArray(minimizeInterfaces(superInterfaces) map javaName)
-    }
-
-    def genClass(c: IClass) {
-      clasz = c
-      innerClassBuffer.clear()
-
-      val name = javaName(c.symbol)
-
-      val ps = c.symbol.info.parents
-      val superClass: Symbol = if(ps.isEmpty) ObjectClass else ps.head.typeSymbol;
-
-      val ifaces = getSuperInterfaces(c)
-
-      jclass = fjbgContext.JClass(javaFlags(c.symbol),
-                                  name,
-                                  javaName(superClass),
-                                  ifaces,
-                                  c.cunit.source.toString)
-
-      if (isStaticModule(c.symbol) || serialVUID != None || isParcelableClass) {
-
-        if (isStaticModule(c.symbol)) { addModuleInstanceField }
-        addStaticInit(jclass, c.lookupStaticCtor)
-
-      } else {
-
-        for (constructor <- c.lookupStaticCtor) {
-          addStaticInit(jclass, Some(constructor))
-        }
-        val skipStaticForwarders = (c.symbol.isInterface || settings.noForwarders.value)
-        if (!skipStaticForwarders) {
-          val lmoc = c.symbol.companionModule
-          // add static forwarders if there are no name conflicts; see bugs #363 and #1735
-          if (lmoc != NoSymbol) {
-            // it must be a top level class (name contains no $s)
-            val isCandidateForForwarders = {
-              afterPickler { !(lmoc.name.toString contains '$') && lmoc.hasModuleFlag && !lmoc.isImplClass && !lmoc.isNestedClass }
-            }
-            if (isCandidateForForwarders) {
-              log("Adding static forwarders from '%s' to implementations in '%s'".format(c.symbol, lmoc))
-              addForwarders(jclass, lmoc.moduleClass)
-            }
-          }
-        }
-
-      }
-
-      clasz.fields  foreach genField
-      clasz.methods foreach genMethod
-
-      val ssa = scalaSignatureAddingMarker(jclass, c.symbol)
-      addGenericSignature(jclass, c.symbol, c.symbol.owner)
-      addAnnotations(jclass, c.symbol.annotations ++ ssa)
-      addEnclosingMethodAttribute()
-
-      addInnerClasses(jclass)
-      bytecodeWriter.writeClass("" + c.symbol.name, jclass, c.symbol)
-
-    }
-
-    /* Invoked only from BytecodeGenerator.genClass() */
-    private def addEnclosingMethodAttribute() { // JVMS 4.7.7
-      val clazz = clasz.symbol
-      val sym = clazz.originalEnclosingMethod
-      if (sym.isMethod) {
-        debuglog("enclosing method for %s is %s (in %s)".format(clazz, sym, sym.enclClass))
-        jclass addAttribute fjbgContext.JEnclosingMethodAttribute(
-          jclass,
-          javaName(sym.enclClass),
-          javaName(sym),
-          javaType(sym)
-        )
-      } else if (clazz.isAnonymousClass) {
-        val enclClass = clazz.rawowner
-        assert(enclClass.isClass, enclClass)
-        val sym = enclClass.primaryConstructor
-        if (sym == NoSymbol) {
-          log("Ran out of room looking for an enclosing method for %s: no constructor here.".format(enclClass, clazz))
-        } else {
-          debuglog("enclosing method for %s is %s (in %s)".format(clazz, sym, enclClass))
-          jclass addAttribute fjbgContext.JEnclosingMethodAttribute(
-            jclass,
-            javaName(enclClass),
-            javaName(sym),
-            javaType(sym).asInstanceOf[JMethodType]
-          )
-        }
-      }
-    }
-
-    // -----------------------------------------------------------------------------------------
-    // Emitting a bean info class.
-    // -----------------------------------------------------------------------------------------
-
-    /**
-     * Generate a bean info class that describes the given class.
-     *
-     * @author Ross Judson (ross.judson@soletta.com)
-     */
-    def genBeanInfoClass() {
-
-      // val BeanInfoSkipAttr    = definitions.getRequiredClass("scala.beans.BeanInfoSkip")
-      // val BeanDisplayNameAttr = definitions.getRequiredClass("scala.beans.BeanDisplayName")
-      // val BeanDescriptionAttr = definitions.getRequiredClass("scala.beans.BeanDescription")
-      // val description = c.symbol getAnnotation BeanDescriptionAttr
-      // informProgress(description.toString)
-
-      innerClassBuffer.clear()
-
-      val beanInfoClass = fjbgContext.JClass(javaFlags(clasz.symbol),
-            javaName(clasz.symbol) + "BeanInfo",
-            "scala/beans/ScalaBeanInfo",
-            JClass.NO_INTERFACES,
-            clasz.cunit.source.toString)
-
-      var fieldList = List[String]()
-
-      for (f <- clasz.fields if f.symbol.hasGetter;
-	         g = f.symbol.getter(clasz.symbol);
-	         s = f.symbol.setter(clasz.symbol);
-	         if g.isPublic && !(f.symbol.name startsWith "$")
-          ) {
-             // inserting $outer breaks the bean
-             fieldList = javaName(f.symbol) :: javaName(g) :: (if (s != NoSymbol) javaName(s) else null) :: fieldList
-      }
-
-      val methodList =
-	     for (m <- clasz.methods
-	          if !m.symbol.isConstructor &&
-	          m.symbol.isPublic &&
-	          !(m.symbol.name startsWith "$") &&
-	          !m.symbol.isGetter &&
-	          !m.symbol.isSetter)
-       yield javaName(m.symbol)
-
-      val constructor = beanInfoClass.addNewMethod(ACC_PUBLIC, "<init>", JType.VOID, new Array[JType](0), new Array[String](0))
-      val jcode = constructor.getCode().asInstanceOf[JExtendedCode]
-      val strKind = new JObjectType(javaName(StringClass))
-      val stringArrayKind = new JArrayType(strKind)
-      val conType = new JMethodType(JType.VOID, Array(javaType(ClassClass), stringArrayKind, stringArrayKind))
-
-      def push(lst:Seq[String]) {
-        var fi = 0
-        for (f <- lst) {
-          jcode.emitDUP()
-          jcode emitPUSH fi
-          if (f != null)
-            jcode emitPUSH f
-          else
-            jcode.emitACONST_NULL()
-          jcode emitASTORE strKind
-          fi += 1
-        }
-      }
-
-      jcode.emitALOAD_0()
-      // push the class
-      jcode emitPUSH javaType(clasz.symbol).asInstanceOf[JReferenceType]
-
-      // push the string array of field information
-      jcode emitPUSH fieldList.length
-      jcode emitANEWARRAY strKind
-      push(fieldList)
-
-      // push the string array of method information
-      jcode emitPUSH methodList.length
-      jcode emitANEWARRAY strKind
-      push(methodList)
-
-      // invoke the superclass constructor, which will do the
-      // necessary java reflection and create Method objects.
-      jcode.emitINVOKESPECIAL("scala/beans/ScalaBeanInfo", "<init>", conType)
-      jcode.emitRETURN()
-
-      // TODO no inner classes attribute is written. Confirm intent.
-      bytecodeWriter.writeClass("BeanInfo ", beanInfoClass, clasz.symbol)
-    }
-
     /** Add the given 'throws' attributes to jmethod.
-     *
-     *  Invoked from BytecodeGenerator.genMethod() and BytecodeGenerator.addForwarder(),
-     *  i.e. it's used when emitting both plain and mirror classes.
      */
     def addExceptionsAttribute(jmethod: JMethod, excs: List[AnnotationInfo]) {
       if (excs.isEmpty) return
@@ -789,15 +468,12 @@ abstract class GenJVM extends SubComponent with GenAndroid with BytecodeWriters 
 
     /** Whether an annotation should be emitted as a Java annotation
      *   .initialize: if 'annot' is read from pickle, atp might be un-initialized
-     *
-     *  Used when emitting both plain and mirror classes.
      */
     private def shouldEmitAnnotation(annot: AnnotationInfo) =
       annot.symbol.initialize.isJavaDefined &&
       annot.matches(ClassfileAnnotationClass) &&
       annot.args.isEmpty
 
-    // used when emitting both plain and mirror classes.
     private def emitJavaAnnotations(cpool: JConstantPool, buf: ByteBuffer, annotations: List[AnnotationInfo]): Int = {
       def emitArgument(arg: ClassfileAnnotArg): Unit = arg match {
         case LiteralAnnotArg(const) =>
@@ -891,17 +567,13 @@ abstract class GenJVM extends SubComponent with GenAndroid with BytecodeWriters 
       nannots
     }
 
-    /**Run the signature parser to catch bogus signatures.
-     *
-     * used when emitting both plain and mirror classes.
-     */
+    /**Run the signature parser to catch bogus signatures. */
     def isValidSignature(sym: Symbol, sig: String) = (
       if (sym.isMethod) SigParser verifyMethod sig
       else if (sym.isTerm) SigParser verifyType sig
       else SigParser verifyClass sig
     )
 
-    // used when emitting both plain and mirror classes
     // @M don't generate java generics sigs for (members of) implementation
     // classes, as they are monomorphic (TODO: ok?)
     private def needsGenericSignature(sym: Symbol) = !(
@@ -917,7 +589,6 @@ abstract class GenJVM extends SubComponent with GenAndroid with BytecodeWriters 
       || (sym.ownerChain exists (_.isImplClass))
     )
 
-    // used when emitting both plain and mirror classes.
     def addGenericSignature(jmember: JMember, sym: Symbol, owner: Symbol) {
       if (needsGenericSignature(sym)) {
         val memberTpe = beforeErasure(owner.thisType.memberInfo(sym))
@@ -931,7 +602,7 @@ abstract class GenJVM extends SubComponent with GenAndroid with BytecodeWriters 
            *  should certainly write independent signature validation.
            */
           if (settings.Xverify.value && SigParser.isParserAvailable && !isValidSignature(sym, sig)) {
-            clasz.cunit.warning(sym.pos,
+            cunit.warning(sym.pos,
                 """|compiler bug: created invalid generic signature for %s in %s
                    |signature: %s
                    |if this is reproducible, please report bug at http://lampsvn.epfl.ch/trac/scala
@@ -942,7 +613,7 @@ abstract class GenJVM extends SubComponent with GenAndroid with BytecodeWriters 
             val normalizedTpe = beforeErasure(erasure.prepareSigMap(memberTpe))
             val bytecodeTpe = owner.thisType.memberInfo(sym)
             if (!sym.isType && !sym.isConstructor && !(erasure.erasure(sym, normalizedTpe) =:= bytecodeTpe)) {
-              clasz.cunit.warning(sym.pos,
+              cunit.warning(sym.pos,
                   """|compiler bug: created generic signature for %s in %s that does not conform to its erasure
                      |signature: %s
                      |original type: %s
@@ -964,7 +635,6 @@ abstract class GenJVM extends SubComponent with GenAndroid with BytecodeWriters 
       }
     }
 
-    // used when emitting both plain and mirror classes.
     def addAnnotations(jmember: JMember, annotations: List[AnnotationInfo]) {
       if (annotations exists (_ matches definitions.DeprecatedAttr)) {
         val attr = jmember.getContext().JOtherAttribute(
@@ -981,7 +651,6 @@ abstract class GenJVM extends SubComponent with GenAndroid with BytecodeWriters 
       addAttribute(jmember, tpnme.RuntimeAnnotationATTR, buf)
     }
 
-    // used when emitting both plain and mirror classes.
     def addParamAnnotations(jmethod: JMethod, pannotss: List[List[AnnotationInfo]]) {
       val annotations = pannotss map (_ filter shouldEmitAnnotation)
       if (annotations forall (_.isEmpty)) return
@@ -996,7 +665,6 @@ abstract class GenJVM extends SubComponent with GenAndroid with BytecodeWriters 
       addAttribute(jmethod, tpnme.RuntimeParamAnnotationATTR, buf)
     }
 
-    // used when emitting both plain and mirror classes.
     def addAttribute(jmember: JMember, name: Name, buf: ByteBuffer) {
       if (buf.position() < 2)
         return
@@ -1012,8 +680,7 @@ abstract class GenJVM extends SubComponent with GenAndroid with BytecodeWriters 
       jmember addAttribute attr
     }
 
-    // used when emitting both plain and mirror classes.
-    def addInnerClasses(jclass: JClass) {
+    def addInnerClasses(csym: Symbol, jclass: JClass) {
       /** The outer name for this inner class. Note that it returns null
        *  when the inner class should not get an index in the constant pool.
        *  That means non-member classes (anonymous). See Section 4.7.5 in the JVMS.
@@ -1036,13 +703,13 @@ abstract class GenJVM extends SubComponent with GenAndroid with BytecodeWriters 
 
       // add inner classes which might not have been referenced yet
       afterErasure {
-        for (sym <- List(clasz.symbol, clasz.symbol.linkedClassOfClass); m <- sym.info.decls.map(innerClassSymbolFor) if m.isClass)
+        for (sym <- List(csym, csym.linkedClassOfClass); m <- sym.info.decls.map(innerClassSymbolFor) if m.isClass)
           innerClassBuffer += m
       }
 
       val allInners = innerClassBuffer.toList
       if (allInners.nonEmpty) {
-        debuglog(clasz.symbol.fullName('.') + " contains " + allInners.size + " inner classes.")
+        debuglog(csym.fullName('.') + " contains " + allInners.size + " inner classes.")
         val innerClassesAttr = jclass.getInnerClasses()
         // sort them so inner classes succeed their enclosing class
         // to satisfy the Eclipse Java compiler
@@ -1066,7 +733,306 @@ abstract class GenJVM extends SubComponent with GenAndroid with BytecodeWriters 
       }
     }
 
-    /* Invoked only from BytecodeGenerator.genClass() */
+    /** Adds a @remote annotation, actual use unknown.
+     *
+     * Invoked from BytecodeGenerator.genMethod() and BytecodeGenerator.addForwarder().
+     */
+    def addRemoteException(isRemoteClass: Boolean, isJMethodPublic: Boolean, meth: Symbol) {
+      val needsAnnotation = (
+        (  isRemoteClass ||
+           (meth hasAnnotation RemoteAttr) && isJMethodPublic
+        ) && !(meth.throwsAnnotations contains RemoteExceptionClass)
+      )
+      if (needsAnnotation) {
+        val c   = Constant(RemoteExceptionClass.tpe)
+        val arg = Literal(c) setType c.tpe
+        meth.addAnnotation(ThrowsClass, arg)
+      }
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // Static forwarders (related to mirror classes but also present in
+    // a plain class lacking companion module, for details see `isCandidateForForwarders`).
+    // -----------------------------------------------------------------------------------------
+
+    val ExcludedForwarderFlags = {
+      import Flags._
+      // Should include DEFERRED but this breaks findMember.
+      ( CASE | SPECIALIZED | LIFTED | PROTECTED | STATIC | EXPANDEDNAME | BridgeAndPrivateFlags )
+    }
+
+    /** Add a forwarder for method m.
+     *
+     *  Used only addForwarders().
+     *
+     * */
+    def addForwarder(isRemoteClass: Boolean, jclass: JClass, module: Symbol, m: Symbol) {
+      val moduleName     = javaName(module)
+      val methodInfo     = module.thisType.memberInfo(m)
+      val paramJavaTypes = methodInfo.paramTypes map javaType
+      val paramNames     = 0 until paramJavaTypes.length map ("x_" + _)
+      // TODO: evaluate the other flags we might be dropping on the floor here.
+      val flags = PublicStatic | (
+        if (m.isVarargsMethod) ACC_VARARGS else 0
+      )
+
+      /** Forwarders must not be marked final, as the JVM will not allow
+       *  redefinition of a final static method, and we don't know what classes
+       *  might be subclassing the companion class.  See SI-4827.
+       */
+      val mirrorMethod = jclass.addNewMethod(
+        flags,
+        javaName(m),
+        javaType(methodInfo.resultType),
+        mkArray(paramJavaTypes),
+        mkArray(paramNames))
+      val mirrorCode = mirrorMethod.getCode().asInstanceOf[JExtendedCode]
+      mirrorCode.emitGETSTATIC(moduleName,
+                               nme.MODULE_INSTANCE_FIELD.toString,
+                               new JObjectType(moduleName))
+
+      var i = 0
+      var index = 0
+      var argTypes = mirrorMethod.getArgumentTypes()
+      while (i < argTypes.length) {
+        mirrorCode.emitLOAD(index, argTypes(i))
+        index += argTypes(i).getSize()
+        i += 1
+      }
+
+      mirrorCode.emitINVOKEVIRTUAL(moduleName, mirrorMethod.getName, javaType(m).asInstanceOf[JMethodType])
+      mirrorCode emitRETURN mirrorMethod.getReturnType()
+
+      addRemoteException(isRemoteClass, mirrorMethod.isPublic, m)
+      // only add generic signature if the method is concrete; bug #1745
+      if (!m.isDeferred) { addGenericSignature(mirrorMethod, m, module) }
+
+      val (throws, others) = m.annotations partition (_.symbol == ThrowsClass)
+      addExceptionsAttribute(mirrorMethod, throws)
+      addAnnotations(mirrorMethod, others)
+      addParamAnnotations(mirrorMethod, m.info.params.map(_.annotations))
+    }
+
+    /** Add forwarders for all methods defined in `module` that don't conflict
+     *  with methods in the companion class of `module`. A conflict arises when
+     *  a method with the same name is defined both in a class and its companion object:
+     *  method signature is not taken into account.
+     */
+    def addForwarders(isRemoteClass: Boolean, jclass: JClass, moduleClass: Symbol) {
+      assert(moduleClass.isModuleClass, moduleClass)
+      debuglog("Dumping mirror class for object: " + moduleClass)
+
+      val className    = jclass.getName
+      val linkedClass  = moduleClass.companionClass
+      val linkedModule = linkedClass.companionSymbol
+      lazy val conflictingNames: Set[Name] = {
+        linkedClass.info.members collect { case sym if sym.name.isTermName => sym.name } toSet
+      }
+      debuglog("Potentially conflicting names for forwarders: " + conflictingNames)
+
+      for (m <- moduleClass.info.membersBasedOnFlags(ExcludedForwarderFlags, Flags.METHOD)) {
+        if (m.isType || m.isDeferred || (m.owner eq ObjectClass) || m.isConstructor)
+          debuglog("No forwarder for '%s' from %s to '%s'".format(m, className, moduleClass))
+        else if (conflictingNames(m.name))
+          log("No forwarder for " + m + " due to conflict with " + linkedClass.info.member(m.name))
+        else {
+          log("Adding static forwarder for '%s' from %s to '%s'".format(m, className, moduleClass))
+          addForwarder(isRemoteClass, jclass, moduleClass, m)
+        }
+      }
+    }
+
+  } // end of class JCommonBuilder
+
+
+  /** builder of plain classes */
+  class JPlainBuilder(val clasz: IClass, bytecodeWriter: BytecodeWriter) extends JCommonBuilder(clasz.cunit, bytecodeWriter) /* TODO with GenAndroid ? */ {
+
+    val MIN_SWITCH_DENSITY = 0.7
+
+    val StringBuilderClassName = javaName(definitions.StringBuilderClass)
+    val BoxesRunTime = "scala.runtime.BoxesRunTime"
+
+    val StringBuilderType = new JObjectType(StringBuilderClassName)               // TODO use ASMType.getObjectType
+    val toStringType      = new JMethodType(JAVA_LANG_STRING, JType.EMPTY_ARRAY)  // TODO use ASMType.getMethodType
+    val arrayCloneType    = new JMethodType(JAVA_LANG_OBJECT, JType.EMPTY_ARRAY)
+
+    /** used only from genCode(), i.e. only when emitting plain classes. */
+    private val jBoxTo: Map[TypeKind, Tuple2[String, JMethodType]] = {
+
+        def helperBoxTo(kind: ValueTypeKind): Tuple2[String, JMethodType] = {
+          val boxedType = definitions.boxedClass(kind.toType.typeSymbol)
+          val mtype = new JMethodType(javaType(boxedType), Array(javaType(kind)))
+
+          Pair("boxTo" + boxedType.decodedName, mtype)
+        }
+
+      Map(
+        BOOL   -> helperBoxTo(BOOL)  ,
+        BYTE   -> helperBoxTo(BYTE)  ,
+        CHAR   -> helperBoxTo(CHAR)  ,
+        SHORT  -> helperBoxTo(SHORT) ,
+        INT    -> helperBoxTo(INT)   ,
+        LONG   -> helperBoxTo(LONG)  ,
+        FLOAT  -> helperBoxTo(FLOAT) ,
+        DOUBLE -> helperBoxTo(DOUBLE)
+      )
+
+    }
+
+    /** used only from genCode(), i.e. only when emitting plain classes. */
+    private val jUnboxTo: Map[TypeKind, Tuple2[String, JMethodType]] = {
+
+        def helperUnboxTo(kind: ValueTypeKind): Tuple2[String, JMethodType] = {
+          val mtype = new JMethodType(javaType(kind), Array(JAVA_LANG_OBJECT))
+          val mname = "unboxTo" + kind.toType.typeSymbol.decodedName
+
+          Pair(mname, mtype)
+        }
+
+      Map(
+        BOOL   -> helperUnboxTo(BOOL)  ,
+        BYTE   -> helperUnboxTo(BYTE)  ,
+        CHAR   -> helperUnboxTo(CHAR)  ,
+        SHORT  -> helperUnboxTo(SHORT) ,
+        INT    -> helperUnboxTo(INT)   ,
+        LONG   -> helperUnboxTo(LONG)  ,
+        FLOAT  -> helperUnboxTo(FLOAT) ,
+        DOUBLE -> helperUnboxTo(DOUBLE)
+      )
+    }
+
+    def isParcelableClass = isAndroidParcelableClass(clasz.symbol)
+
+    def serialVUID = clasz.symbol getAnnotation SerialVersionUIDAttr collect {
+      case AnnotationInfo(_, Literal(const) :: _, _) => const.longValue
+    }
+
+    private def getSuperInterfaces(c: IClass): Array[String] = {
+
+        // Additional interface parents based on annotations and other cues
+        def newParentForAttr(attr: Symbol): Option[Symbol] = attr match {
+          case SerializableAttr => Some(SerializableClass)
+          case CloneableAttr    => Some(JavaCloneableClass)
+          case RemoteAttr       => Some(RemoteInterfaceClass)
+          case _                => None
+        }
+
+        /** Drop redundant interfaces (ones which are implemented by some other parent) from the immediate parents.
+         *  This is important on Android because there is otherwise an interface explosion.
+         */
+        def minimizeInterfaces(lstIfaces: List[Symbol]): List[Symbol] = {
+          var rest   = lstIfaces
+          var leaves = List.empty[Symbol]
+          while(!rest.isEmpty) {
+            val candidate = rest.head
+            val nonLeaf = leaves exists { lsym => lsym isSubClass candidate }
+            if(!nonLeaf) {
+              leaves = candidate :: (leaves filterNot { lsym => candidate isSubClass lsym })
+            }
+            rest = rest.tail
+          }
+
+          leaves
+        }
+
+      val ps = c.symbol.info.parents
+      val superInterfaces0: List[Symbol] = if(ps.isEmpty) Nil else c.symbol.mixinClasses;
+      val superInterfaces = superInterfaces0 ++ c.symbol.annotations.flatMap(ann => newParentForAttr(ann.symbol)) distinct
+
+      if(superInterfaces.isEmpty) JClass.NO_INTERFACES
+      else mkArray(minimizeInterfaces(superInterfaces) map javaName)
+    }
+
+    var jclass:  JClass  = _
+
+    def genClass(c: IClass) { // TODO remove c
+      innerClassBuffer.clear()
+
+      val name = javaName(c.symbol)
+
+      val ps = c.symbol.info.parents
+      val superClass: Symbol = if(ps.isEmpty) ObjectClass else ps.head.typeSymbol;
+
+      val ifaces = getSuperInterfaces(c)
+
+      jclass = fjbgContext.JClass(javaFlags(c.symbol),
+                                  name,
+                                  javaName(superClass),
+                                  ifaces,
+                                  c.cunit.source.toString)
+
+      if (isStaticModule(c.symbol) || serialVUID != None || isParcelableClass) {
+
+        if (isStaticModule(c.symbol)) { addModuleInstanceField }
+        addStaticInit(jclass, c.lookupStaticCtor)
+
+      } else {
+
+        for (constructor <- c.lookupStaticCtor) {
+          addStaticInit(jclass, Some(constructor))
+        }
+        val skipStaticForwarders = (c.symbol.isInterface || settings.noForwarders.value)
+        if (!skipStaticForwarders) {
+          val lmoc = c.symbol.companionModule
+          // add static forwarders if there are no name conflicts; see bugs #363 and #1735
+          if (lmoc != NoSymbol) {
+            // it must be a top level class (name contains no $s)
+            val isCandidateForForwarders = {
+              afterPickler { !(lmoc.name.toString contains '$') && lmoc.hasModuleFlag && !lmoc.isImplClass && !lmoc.isNestedClass }
+            }
+            if (isCandidateForForwarders) {
+              log("Adding static forwarders from '%s' to implementations in '%s'".format(c.symbol, lmoc))
+              val isRemoteClass = (clasz.symbol hasAnnotation RemoteAttr)
+              addForwarders(isRemoteClass, jclass, lmoc.moduleClass)
+            }
+          }
+        }
+
+      }
+
+      clasz.fields  foreach genField
+      clasz.methods foreach genMethod
+
+      val ssa = scalaSignatureAddingMarker(jclass, c.symbol)
+      addGenericSignature(jclass, c.symbol, c.symbol.owner)
+      addAnnotations(jclass, c.symbol.annotations ++ ssa)
+      addEnclosingMethodAttribute()
+
+      addInnerClasses(clasz.symbol, jclass)
+      bytecodeWriter.writeClass("" + c.symbol.name, jclass, c.symbol)
+
+    }
+
+    private def addEnclosingMethodAttribute() { // JVMS 4.7.7
+      val clazz = clasz.symbol
+      val sym = clazz.originalEnclosingMethod
+      if (sym.isMethod) {
+        debuglog("enclosing method for %s is %s (in %s)".format(clazz, sym, sym.enclClass))
+        jclass addAttribute fjbgContext.JEnclosingMethodAttribute(
+          jclass,
+          javaName(sym.enclClass),
+          javaName(sym),
+          javaType(sym)
+        )
+      } else if (clazz.isAnonymousClass) {
+        val enclClass = clazz.rawowner
+        assert(enclClass.isClass, enclClass)
+        val sym = enclClass.primaryConstructor
+        if (sym == NoSymbol) {
+          log("Ran out of room looking for an enclosing method for %s: no constructor here.".format(enclClass, clazz))
+        } else {
+          debuglog("enclosing method for %s is %s (in %s)".format(clazz, sym, enclClass))
+          jclass addAttribute fjbgContext.JEnclosingMethodAttribute(
+            jclass,
+            javaName(enclClass),
+            javaName(sym),
+            javaType(sym).asInstanceOf[JMethodType]
+          )
+        }
+      }
+    }
+
     def genField(f: IField) {
       debuglog("Adding field: " + f.symbol.fullName)
 
@@ -1086,7 +1052,9 @@ abstract class GenJVM extends SubComponent with GenAndroid with BytecodeWriters 
     // val emitLines  = debugLevel >= 2
     val emitVars   = debugLevel >= 3
 
-    /* Invoked only from BytecodeGenerator.genClass() */
+    var method:  IMethod = _
+    var jmethod: JMethod = _
+
     def genMethod(m: IMethod) {
 
         def isClosureApply(sym: Symbol): Boolean = {
@@ -1120,7 +1088,8 @@ abstract class GenJVM extends SubComponent with GenAndroid with BytecodeWriters 
                                     mkArray(m.params map (p => javaType(p.kind))),
                                     mkArray(m.params map (p => javaName(p.sym))))
 
-      addRemoteException(jmethod.isPublic, m.symbol)
+      val isRemoteClass = (clasz.symbol hasAnnotation RemoteAttr)
+      addRemoteException(isRemoteClass, jmethod.isPublic, m.symbol)
 
       if (!jmethod.isAbstract() && !method.native) {
         val jcode = jmethod.getCode().asInstanceOf[JExtendedCode]
@@ -1170,33 +1139,12 @@ abstract class GenJVM extends SubComponent with GenAndroid with BytecodeWriters 
       }
     }
 
-    /** Adds a @remote annotation, actual use unknown.
-     *
-     * Invoked from BytecodeGenerator.genMethod() and BytecodeGenerator.addForwarder(),
-     * ie used to emit both plain and mirror classes
-     */
-    private def addRemoteException(isJMethodPublic: Boolean, meth: Symbol) {
-      val isRemoteClass = (clasz.symbol hasAnnotation RemoteAttr)
-      val needsAnnotation = (
-        (  isRemoteClass ||
-           (meth hasAnnotation RemoteAttr) && isJMethodPublic
-        ) && !(meth.throwsAnnotations contains RemoteExceptionClass)
-      )
-      if (needsAnnotation) {
-        val c   = Constant(RemoteExceptionClass.tpe)
-        val arg = Literal(c) setType c.tpe
-        meth.addAnnotation(ThrowsClass, arg)
-      }
-    }
-
-    /* used only from BytecodeGenerator.genClass() */
     def addModuleInstanceField() {
       jclass.addNewField(PublicStaticFinal,
                          nme.MODULE_INSTANCE_FIELD.toString,
                          jclass.getType())
     }
 
-    /* used only from BytecodeGenerator.genClass() */
     def addStaticInit(cls: JClass, mopt: Option[IMethod]) {
       val clinitMethod = cls.addNewMethod(PublicStatic,
                                           "<clinit>",
@@ -1228,7 +1176,7 @@ abstract class GenJVM extends SubComponent with GenAndroid with BytecodeWriters 
           }
 
           if (isParcelableClass)
-            addCreatorCode(BytecodeGenerator.this, lastBlock)
+            addCreatorCode(JPlainBuilder.this, lastBlock)
 
           lastBlock emit RETURN(UNIT)
           lastBlock.close
@@ -1241,7 +1189,7 @@ abstract class GenJVM extends SubComponent with GenAndroid with BytecodeWriters 
       }
     }
 
-    /* used only from BytecodeGenerator.genClass(), via addStaticInit() */
+    /* used only from addStaticInit() */
     private def legacyStaticInitializer(cls: JClass, clinit: JExtendedCode) {
       if (isStaticModule(clasz.symbol)) {
         clinit emitNEW cls.getName()
@@ -1259,136 +1207,10 @@ abstract class GenJVM extends SubComponent with GenAndroid with BytecodeWriters 
       }
 
       if (isParcelableClass)
-        legacyAddCreatorCode(BytecodeGenerator.this, clinit)
+        legacyAddCreatorCode(JPlainBuilder.this, clinit)
 
       clinit.emitRETURN()
     }
-
-
-    // -----------------------------------------------------------------------------------------
-    // Static forwarders (related to mirror classes but also present in
-    // a plain class lacking companion module, for details see `isCandidateForForwarders`).
-    // -----------------------------------------------------------------------------------------
-
-    val ExcludedForwarderFlags = {
-      import Flags._
-      // Should include DEFERRED but this breaks findMember.
-      ( CASE | SPECIALIZED | LIFTED | PROTECTED | STATIC | EXPANDEDNAME | BridgeAndPrivateFlags )
-    }
-
-    /** Add a forwarder for method m.
-     *
-     *  Used only from BytecodeGenerator.addForwarders(),
-     *  to emit both plain and mirror classes.
-     *
-     * */
-    def addForwarder(jclass: JClass, module: Symbol, m: Symbol) {
-      val moduleName     = javaName(module)
-      val methodInfo     = module.thisType.memberInfo(m)
-      val paramJavaTypes = methodInfo.paramTypes map javaType
-      val paramNames     = 0 until paramJavaTypes.length map ("x_" + _)
-      // TODO: evaluate the other flags we might be dropping on the floor here.
-      val flags = PublicStatic | (
-        if (m.isVarargsMethod) ACC_VARARGS else 0
-      )
-
-      /** Forwarders must not be marked final, as the JVM will not allow
-       *  redefinition of a final static method, and we don't know what classes
-       *  might be subclassing the companion class.  See SI-4827.
-       */
-      val mirrorMethod = jclass.addNewMethod(
-        flags,
-        javaName(m),
-        javaType(methodInfo.resultType),
-        mkArray(paramJavaTypes),
-        mkArray(paramNames))
-      val mirrorCode = mirrorMethod.getCode().asInstanceOf[JExtendedCode]
-      mirrorCode.emitGETSTATIC(moduleName,
-                               nme.MODULE_INSTANCE_FIELD.toString,
-                               new JObjectType(moduleName))
-
-      var i = 0
-      var index = 0
-      var argTypes = mirrorMethod.getArgumentTypes()
-      while (i < argTypes.length) {
-        mirrorCode.emitLOAD(index, argTypes(i))
-        index += argTypes(i).getSize()
-        i += 1
-      }
-
-      mirrorCode.emitINVOKEVIRTUAL(moduleName, mirrorMethod.getName, javaType(m).asInstanceOf[JMethodType])
-      mirrorCode emitRETURN mirrorMethod.getReturnType()
-
-      addRemoteException(mirrorMethod.isPublic, m)
-      // only add generic signature if the method is concrete; bug #1745
-      if (!m.isDeferred)
-        addGenericSignature(mirrorMethod, m, module)
-
-      val (throws, others) = m.annotations partition (_.symbol == ThrowsClass)
-      addExceptionsAttribute(mirrorMethod, throws)
-      addAnnotations(mirrorMethod, others)
-      addParamAnnotations(mirrorMethod, m.info.params.map(_.annotations))
-    }
-
-    /** Add forwarders for all methods defined in `module` that don't conflict
-     *  with methods in the companion class of `module`. A conflict arises when
-     *  a method with the same name is defined both in a class and its companion object:
-     *  method signature is not taken into account.
-     *
-     *  Invoked from genClass() and genMirrorClass().
-     *
-     */
-    def addForwarders(jclass: JClass, moduleClass: Symbol) {
-      assert(moduleClass.isModuleClass, moduleClass)
-      debuglog("Dumping mirror class for object: " + moduleClass)
-
-      val className    = jclass.getName
-      val linkedClass  = moduleClass.companionClass
-      val linkedModule = linkedClass.companionSymbol
-      lazy val conflictingNames: Set[Name] = {
-        linkedClass.info.members collect { case sym if sym.name.isTermName => sym.name } toSet
-      }
-      debuglog("Potentially conflicting names for forwarders: " + conflictingNames)
-
-      for (m <- moduleClass.info.membersBasedOnFlags(ExcludedForwarderFlags, Flags.METHOD)) {
-        if (m.isType || m.isDeferred || (m.owner eq ObjectClass) || m.isConstructor)
-          debuglog("No forwarder for '%s' from %s to '%s'".format(m, className, moduleClass))
-        else if (conflictingNames(m.name))
-          log("No forwarder for " + m + " due to conflict with " + linkedClass.info.member(m.name))
-        else {
-          log("Adding static forwarder for '%s' from %s to '%s'".format(m, className, moduleClass))
-          addForwarder(jclass, moduleClass, m)
-        }
-      }
-    }
-
-    /** Generate a mirror class for a top-level module. A mirror class is a class
-     *  containing only static methods that forward to the corresponding method
-     *  on the MODULE instance of the given Scala object.  It will only be
-     *  generated if there is no companion class: if there is, an attempt will
-     *  instead be made to add the forwarder methods to the companion class.
-     */
-    def genMirrorClass(modsym: Symbol, sourceFile: SourceFile) {
-      assert(modsym.companionClass == NoSymbol, modsym)
-      innerClassBuffer.clear()
-      import JAccessFlags._
-      val moduleName = javaName(modsym) // + "$"
-      val mirrorName = moduleName.substring(0, moduleName.length() - 1)
-      val mirrorClass = fjbgContext.JClass(ACC_SUPER | ACC_PUBLIC | ACC_FINAL,
-                                           mirrorName,
-                                           JAVA_LANG_OBJECT.getName,
-                                           JClass.NO_INTERFACES,
-                                           "" + sourceFile)
-
-      log("Dumping mirror class for '%s'".format(mirrorClass.getName))
-      addForwarders(mirrorClass, modsym)
-      val ssa = scalaSignatureAddingMarker(mirrorClass, modsym.companionSymbol)
-      addAnnotations(mirrorClass, modsym.annotations ++ ssa)
-
-      addInnerClasses(mirrorClass)
-      bytecodeWriter.writeClass("" + modsym.name, mirrorClass, modsym)
-    }
-
 
     // -----------------------------------------------------------------------------------------
     // Emitting bytecode instructions.
@@ -1399,8 +1221,6 @@ abstract class GenJVM extends SubComponent with GenAndroid with BytecodeWriters 
 
     /** Map from type kinds to the Java reference types. It is used for
      *  loading class constants. @see Predef.classOf.
-     *
-     *  TODO keep as sibling to genCode()
      */
     private val classLiteral = immutable.Map[TypeKind, JObjectType](
       UNIT   -> new JObjectType("java.lang.Void"),
@@ -1414,7 +1234,7 @@ abstract class GenJVM extends SubComponent with GenAndroid with BytecodeWriters 
       DOUBLE -> new JObjectType("java.lang.Double")
     )
 
-    private val conds = immutable.Map[TestOp, Int]( // TODO keep as sibling to genCode()
+    private val conds = immutable.Map[TestOp, Int](
       EQ -> JExtendedCode.COND_EQ,
       NE -> JExtendedCode.COND_NE,
       LT -> JExtendedCode.COND_LT,
@@ -1423,7 +1243,6 @@ abstract class GenJVM extends SubComponent with GenAndroid with BytecodeWriters 
       GE -> JExtendedCode.COND_GE
     )
 
-    // TODO keep as sibling to genCode()
     private def genConstant(jcode: JExtendedCode, const: Constant) {
       const.tag match {
         case UnitTag    => ()
@@ -1455,10 +1274,8 @@ abstract class GenJVM extends SubComponent with GenAndroid with BytecodeWriters 
       }
     }
 
-    /**
-     *  Invoked from genMethod() and addStaticInit(),
-     *  i.e. necessary only to emit plain classes.
-     */
+
+    /** Invoked from genMethod() and addStaticInit() */
     def genCode(m: IMethod) {
       val jcode = jmethod.getCode.asInstanceOf[JExtendedCode]
 
@@ -1615,7 +1432,7 @@ abstract class GenJVM extends SubComponent with GenAndroid with BytecodeWriters 
         for (instr <- b) {
 
           instr match {
-            case THIS(clasz)           => jcode.emitALOAD_0()
+            case THIS(_)           => jcode.emitALOAD_0()
 
             case CONSTANT(const)       => genConstant(jcode, const)
 
@@ -2194,6 +2011,128 @@ abstract class GenJVM extends SubComponent with GenAndroid with BytecodeWriters 
       }
     }
 
-  } // end of class BytecodeGenerator
+  } // end of class JPlainBuilder
+
+
+  /** builder of mirror classes */
+  class JMirrorBuilder(cunit: CompilationUnit, bytecodeWriter: BytecodeWriter) extends JCommonBuilder(cunit, bytecodeWriter) {
+
+    /** Generate a mirror class for a top-level module. A mirror class is a class
+     *  containing only static methods that forward to the corresponding method
+     *  on the MODULE instance of the given Scala object.  It will only be
+     *  generated if there is no companion class: if there is, an attempt will
+     *  instead be made to add the forwarder methods to the companion class.
+     */
+    def genMirrorClass(modsym: Symbol, sourceFile: SourceFile) {
+      assert(modsym.companionClass == NoSymbol, modsym)
+      import JAccessFlags._
+      val moduleName = javaName(modsym) // + "$"
+      val mirrorName = moduleName.substring(0, moduleName.length() - 1)
+      val mirrorClass = fjbgContext.JClass(ACC_SUPER | ACC_PUBLIC | ACC_FINAL,
+                                           mirrorName,
+                                           JAVA_LANG_OBJECT.getName,
+                                           JClass.NO_INTERFACES,
+                                           "" + sourceFile)
+
+      log("Dumping mirror class for '%s'".format(mirrorClass.getName))
+      val isRemoteClass = (modsym hasAnnotation RemoteAttr)
+      addForwarders(isRemoteClass, mirrorClass, modsym)
+      val ssa = scalaSignatureAddingMarker(mirrorClass, modsym.companionSymbol)
+      addAnnotations(mirrorClass, modsym.annotations ++ ssa)
+
+      addInnerClasses(modsym, mirrorClass)
+      bytecodeWriter.writeClass("" + modsym.name, mirrorClass, modsym)
+    }
+
+
+  } // end of class JMirrorBuilder
+
+
+  /** builder of bean info classes */
+  class JBeanInfoBuilder(clasz: IClass, bytecodeWriter: BytecodeWriter) extends JBuilder(bytecodeWriter) {
+
+    /**
+     * Generate a bean info class that describes the given class.
+     *
+     * @author Ross Judson (ross.judson@soletta.com)
+     */
+    def genBeanInfoClass() {
+
+      // val BeanInfoSkipAttr    = definitions.getRequiredClass("scala.beans.BeanInfoSkip")
+      // val BeanDisplayNameAttr = definitions.getRequiredClass("scala.beans.BeanDisplayName")
+      // val BeanDescriptionAttr = definitions.getRequiredClass("scala.beans.BeanDescription")
+      // val description = c.symbol getAnnotation BeanDescriptionAttr
+      // informProgress(description.toString)
+
+      val beanInfoClass = fjbgContext.JClass(javaFlags(clasz.symbol),
+            javaName(clasz.symbol) + "BeanInfo",
+            "scala/beans/ScalaBeanInfo",
+            JClass.NO_INTERFACES,
+            clasz.cunit.source.toString)
+
+      var fieldList = List[String]()
+
+      for (f <- clasz.fields if f.symbol.hasGetter;
+	         g = f.symbol.getter(clasz.symbol);
+	         s = f.symbol.setter(clasz.symbol);
+	         if g.isPublic && !(f.symbol.name startsWith "$")
+          ) {
+             // inserting $outer breaks the bean
+             fieldList = javaName(f.symbol) :: javaName(g) :: (if (s != NoSymbol) javaName(s) else null) :: fieldList
+      }
+
+      val methodList =
+	     for (m <- clasz.methods
+	          if !m.symbol.isConstructor &&
+	          m.symbol.isPublic &&
+	          !(m.symbol.name startsWith "$") &&
+	          !m.symbol.isGetter &&
+	          !m.symbol.isSetter)
+       yield javaName(m.symbol)
+
+      val constructor = beanInfoClass.addNewMethod(ACC_PUBLIC, "<init>", JType.VOID, new Array[JType](0), new Array[String](0))
+      val jcode = constructor.getCode().asInstanceOf[JExtendedCode]
+      val strKind = new JObjectType(javaName(StringClass))
+      val stringArrayKind = new JArrayType(strKind)
+      val conType = new JMethodType(JType.VOID, Array(javaType(ClassClass), stringArrayKind, stringArrayKind))
+
+      def push(lst:Seq[String]) {
+        var fi = 0
+        for (f <- lst) {
+          jcode.emitDUP()
+          jcode emitPUSH fi
+          if (f != null)
+            jcode emitPUSH f
+          else
+            jcode.emitACONST_NULL()
+          jcode emitASTORE strKind
+          fi += 1
+        }
+      }
+
+      jcode.emitALOAD_0()
+      // push the class
+      jcode emitPUSH javaType(clasz.symbol).asInstanceOf[JReferenceType]
+
+      // push the string array of field information
+      jcode emitPUSH fieldList.length
+      jcode emitANEWARRAY strKind
+      push(fieldList)
+
+      // push the string array of method information
+      jcode emitPUSH methodList.length
+      jcode emitANEWARRAY strKind
+      push(methodList)
+
+      // invoke the superclass constructor, which will do the
+      // necessary java reflection and create Method objects.
+      jcode.emitINVOKESPECIAL("scala/beans/ScalaBeanInfo", "<init>", conType)
+      jcode.emitRETURN()
+
+      // TODO no inner classes attribute is written. Confirm intent.
+      bytecodeWriter.writeClass("BeanInfo ", beanInfoClass, clasz.symbol)
+    }
+
+  } // end of class JBeanInfoBuilder
 
 }
