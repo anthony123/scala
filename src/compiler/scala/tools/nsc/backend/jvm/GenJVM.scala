@@ -193,6 +193,14 @@ abstract class GenJVM extends SubComponent with GenAndroid with BytecodeWriters 
 
   var pickledBytes = 0 // statistics
 
+  // Don't put this in per run caches.
+  val javaNameCache = new mutable.WeakHashMap[Symbol, Name]() ++= List(
+    NothingClass        -> binarynme.RuntimeNothing,
+    RuntimeNothingClass -> binarynme.RuntimeNothing,
+    NullClass           -> binarynme.RuntimeNull,
+    RuntimeNullClass    -> binarynme.RuntimeNull
+  )
+
   /**
    * Java bytecode generator.
    *
@@ -226,14 +234,6 @@ abstract class GenJVM extends SubComponent with GenAndroid with BytecodeWriters 
      */
     private def innerClassSymbolFor(s: Symbol): Symbol =
       if (s.isClass) s else if (s.isModule) s.moduleClass else NoSymbol
-
-    // Don't put this in per run caches.
-    private val javaNameCache = new mutable.WeakHashMap[Symbol, Name]() ++= List(
-      NothingClass        -> binarynme.RuntimeNothing,
-      RuntimeNothingClass -> binarynme.RuntimeNothing,
-      NullClass           -> binarynme.RuntimeNull,
-      RuntimeNullClass    -> binarynme.RuntimeNull
-    )
 
     /** Return the a name of this symbol that can be used on the Java
      *  platform.  It removes spaces from names.
@@ -306,7 +306,7 @@ abstract class GenJVM extends SubComponent with GenAndroid with BytecodeWriters 
         javaType(s.tpe)
     }
 
-    val MIN_SWITCH_DENSITY = 0.7
+    val MIN_SWITCH_DENSITY = 0.7 // TODO make sibling to genCode()
     val INNER_CLASSES_FLAGS =
       (ACC_PUBLIC | ACC_PRIVATE | ACC_PROTECTED | ACC_STATIC | ACC_FINAL | ACC_INTERFACE | ACC_ABSTRACT)
 
