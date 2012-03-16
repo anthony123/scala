@@ -177,7 +177,7 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
           codeGenerator.genClass(c)
 
           if (c.symbol hasAnnotation BeanInfoAttr) {
-            codeGenerator.genBeanInfoClass(c)
+            codeGenerator.genBeanInfoClass()
           }
 
         } catch {
@@ -199,7 +199,6 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
    */
   class BytecodeGenerator(bytecodeWriter: BytecodeWriter) extends BytecodeUtil {
     def this() = this(new ClassBytecodeWriter { })
-    import bytecodeWriter.writeClass
 
     val MIN_SWITCH_DENSITY = 0.7
     val INNER_CLASSES_FLAGS =
@@ -482,7 +481,7 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
       addEnclosingMethodAttribute(jclass, c.symbol)
 
       addInnerClasses(jclass)
-      writeClass("" + c.symbol.name, jclass, c.symbol)
+      bytecodeWriter.writeClass("" + c.symbol.name, jclass, c.symbol)
 
     }
 
@@ -528,7 +527,7 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
      *
      * @author Ross Judson (ross.judson@soletta.com)
      */
-    def genBeanInfoClass(c: IClass) {
+    def genBeanInfoClass() {
 
       // val BeanInfoSkipAttr    = definitions.getRequiredClass("scala.beans.BeanInfoSkip")
       // val BeanDisplayNameAttr = definitions.getRequiredClass("scala.beans.BeanDisplayName")
@@ -538,29 +537,31 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
 
       innerClassBuffer.clear()
 
-      val beanInfoClass = fjbgContext.JClass(javaFlags(c.symbol),
-            javaName(c.symbol) + "BeanInfo",
+      val beanInfoClass = fjbgContext.JClass(javaFlags(clasz.symbol),
+            javaName(clasz.symbol) + "BeanInfo",
             "scala/beans/ScalaBeanInfo",
             JClass.NO_INTERFACES,
-            c.cunit.source.toString)
+            clasz.cunit.source.toString)
 
       var fieldList = List[String]()
 
-      assert(clasz eq c) // TODO access the class param rather than the method param.
-
       for (f <- clasz.fields if f.symbol.hasGetter;
-	         g = f.symbol.getter(c.symbol);
-	         s = f.symbol.setter(c.symbol);
-	         if g.isPublic && !(f.symbol.name startsWith "$"))  // inserting $outer breaks the bean
-        fieldList = javaName(f.symbol) :: javaName(g) :: (if (s != NoSymbol) javaName(s) else null) :: fieldList
+	         g = f.symbol.getter(clasz.symbol);
+	         s = f.symbol.setter(clasz.symbol);
+	         if g.isPublic && !(f.symbol.name startsWith "$")
+          ) {
+             // inserting $outer breaks the bean
+             fieldList = javaName(f.symbol) :: javaName(g) :: (if (s != NoSymbol) javaName(s) else null) :: fieldList
+      }
 
       val methodList =
 	     for (m <- clasz.methods
-	         if !m.symbol.isConstructor &&
-	         m.symbol.isPublic &&
-	         !(m.symbol.name startsWith "$") &&
-	         !m.symbol.isGetter &&
-	         !m.symbol.isSetter) yield javaName(m.symbol)
+	          if !m.symbol.isConstructor &&
+	          m.symbol.isPublic &&
+	          !(m.symbol.name startsWith "$") &&
+	          !m.symbol.isGetter &&
+	          !m.symbol.isSetter)
+       yield javaName(m.symbol)
 
       val constructor = beanInfoClass.addNewMethod(ACC_PUBLIC, "<init>", JType.VOID, new Array[JType](0), new Array[String](0))
       val jcode = constructor.getCode().asInstanceOf[JExtendedCode]
@@ -584,7 +585,7 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
 
       jcode.emitALOAD_0()
       // push the class
-      jcode emitPUSH javaType(c.symbol).asInstanceOf[JReferenceType]
+      jcode emitPUSH javaType(clasz.symbol).asInstanceOf[JReferenceType]
 
       // push the string array of field information
       jcode emitPUSH fieldList.length
@@ -602,7 +603,7 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
       jcode.emitRETURN()
 
       // TODO no inner classes attribute is written. Confirm if intended.
-      writeClass("BeanInfo ", beanInfoClass, c.symbol)
+      bytecodeWriter.writeClass("BeanInfo ", beanInfoClass, clasz.symbol)
     }
 
     /** Add the given 'throws' attributes to jmethod.
@@ -1227,7 +1228,7 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
       addAnnotations(mirrorClass, clasz.annotations ++ ssa)
 
       addInnerClasses(mirrorClass)
-      writeClass("" + clasz.name, mirrorClass, clasz)
+      bytecodeWriter.writeClass("" + clasz.name, mirrorClass, clasz)
     }
 
 
