@@ -161,6 +161,8 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
 
       debuglog("Created new bytecode generator for " + classes.size + " classes.")
 
+      val plainCodeGen = new JPlainBuilder(bytecodeWriter)
+
       while(!sortedClasses.isEmpty) {
         val c = sortedClasses.head
         try {
@@ -173,7 +175,7 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
             }
           }
 
-          new JPlainBuilder(c, bytecodeWriter).genClass(c)
+          plainCodeGen.genClass(c)
 
           if (c.symbol hasAnnotation BeanInfoAttr) {
             val codegen = new JBeanInfoBuilder(c, bytecodeWriter)
@@ -378,7 +380,7 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
 
 
   /** functionality for building plain and mirror classes */
-  abstract class JCommonBuilder(cunit: CompilationUnit, bytecodeWriter: BytecodeWriter) extends JBuilder(bytecodeWriter) {
+  abstract class JCommonBuilder(bytecodeWriter: BytecodeWriter) extends JBuilder(bytecodeWriter) {
 
     val INNER_CLASSES_FLAGS =
       (ACC_PUBLIC | ACC_PRIVATE | ACC_PROTECTED | ACC_STATIC | ACC_FINAL | ACC_INTERFACE | ACC_ABSTRACT)
@@ -595,6 +597,8 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
       || (sym.ownerChain exists (_.isImplClass))
     )
 
+    def getCurrentCUnit(): CompilationUnit
+
     def addGenericSignature(jmember: JMember, sym: Symbol, owner: Symbol) {
       if (needsGenericSignature(sym)) {
         val memberTpe = beforeErasure(owner.thisType.memberInfo(sym))
@@ -608,7 +612,7 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
            *  should certainly write independent signature validation.
            */
           if (settings.Xverify.value && SigParser.isParserAvailable && !isValidSignature(sym, sig)) {
-            cunit.warning(sym.pos,
+            getCurrentCUnit().warning(sym.pos,
                 """|compiler bug: created invalid generic signature for %s in %s
                    |signature: %s
                    |if this is reproducible, please report bug at http://lampsvn.epfl.ch/trac/scala
@@ -619,7 +623,7 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
             val normalizedTpe = beforeErasure(erasure.prepareSigMap(memberTpe))
             val bytecodeTpe = owner.thisType.memberInfo(sym)
             if (!sym.isType && !sym.isConstructor && !(erasure.erasure(sym, normalizedTpe) =:= bytecodeTpe)) {
-              cunit.warning(sym.pos,
+              getCurrentCUnit().warning(sym.pos,
                   """|compiler bug: created generic signature for %s in %s that does not conform to its erasure
                      |signature: %s
                      |original type: %s
@@ -897,8 +901,8 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
   } // end of trait JAndroidBuilder
 
   /** builder of plain classes */
-  class JPlainBuilder(val clasz: IClass, bytecodeWriter: BytecodeWriter)
-    extends JCommonBuilder(clasz.cunit, bytecodeWriter)
+  class JPlainBuilder(bytecodeWriter: BytecodeWriter)
+    extends JCommonBuilder(bytecodeWriter)
     with    JAndroidBuilder {
 
     val MIN_SWITCH_DENSITY = 0.7
@@ -995,9 +999,13 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
       else mkArray(minimizeInterfaces(superInterfaces) map javaName)
     }
 
-    var jclass:  JClass  = _
+    var clasz:   IClass = _   // this var should be assigned only by genClass()
+    var jclass:  JClass = _
 
-    def genClass(c: IClass) { // TODO remove c
+    def getCurrentCUnit(): CompilationUnit = { clasz.cunit }
+
+    def genClass(c: IClass) {
+      clasz = c
       innerClassBuffer.clear()
 
       val name = javaName(c.symbol)
@@ -1238,7 +1246,6 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
        	  genCode(m)
 
        	case None =>
-
           legacyStaticInitializer(cls, clinit)
       }
     }
@@ -2053,7 +2060,7 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
 
 
   /** builder of mirror classes */
-  class JMirrorBuilder(cunit: CompilationUnit, bytecodeWriter: BytecodeWriter) extends JCommonBuilder(cunit, bytecodeWriter) {
+  class JMirrorBuilder(val getCurrentCUnit: CompilationUnit, bytecodeWriter: BytecodeWriter) extends JCommonBuilder(bytecodeWriter) {
 
     /** Generate a mirror class for a top-level module. A mirror class is a class
      *  containing only static methods that forward to the corresponding method
