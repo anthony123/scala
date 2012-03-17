@@ -161,15 +161,16 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
 
       debuglog("Created new bytecode generator for " + classes.size + " classes.")
 
-      val plainCodeGen = new JPlainBuilder(bytecodeWriter)
+      val plainCodeGen    = new JPlainBuilder(bytecodeWriter)
+      val mirrorCodeGen   = new JMirrorBuilder(bytecodeWriter)
+      val beanInfoCodeGen = new JBeanInfoBuilder(bytecodeWriter)
 
       while(!sortedClasses.isEmpty) {
         val c = sortedClasses.head
         try {
           if (isStaticModule(c.symbol) && isTopLevelModule(c.symbol)) {
             if (c.symbol.companionClass == NoSymbol) {
-              val codegen = new JMirrorBuilder(c.cunit, bytecodeWriter)
-              codegen.genMirrorClass(c.symbol, c.cunit.source)
+              mirrorCodeGen.genMirrorClass(c.symbol, c.cunit)
             } else {
               log("No mirror class for module with linked class: " + c.symbol.fullName)
             }
@@ -178,8 +179,7 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
           plainCodeGen.genClass(c)
 
           if (c.symbol hasAnnotation BeanInfoAttr) {
-            val codegen = new JBeanInfoBuilder(c, bytecodeWriter)
-            codegen.genBeanInfoClass()
+            beanInfoCodeGen.genBeanInfoClass(c)
           }
 
         } catch {
@@ -999,8 +999,8 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
       else mkArray(minimizeInterfaces(superInterfaces) map javaName)
     }
 
-    var clasz:   IClass = _   // this var should be assigned only by genClass()
-    var jclass:  JClass = _
+    var clasz:  IClass = _   // this var must be assigned only by genClass()
+    var jclass: JClass = _
 
     def getCurrentCUnit(): CompilationUnit = { clasz.cunit }
 
@@ -2060,7 +2060,10 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
 
 
   /** builder of mirror classes */
-  class JMirrorBuilder(val getCurrentCUnit: CompilationUnit, bytecodeWriter: BytecodeWriter) extends JCommonBuilder(bytecodeWriter) {
+  class JMirrorBuilder(bytecodeWriter: BytecodeWriter) extends JCommonBuilder(bytecodeWriter) {
+
+    private var cunit: CompilationUnit = _
+    def getCurrentCUnit(): CompilationUnit = cunit;
 
     /** Generate a mirror class for a top-level module. A mirror class is a class
      *  containing only static methods that forward to the corresponding method
@@ -2068,9 +2071,10 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
      *  generated if there is no companion class: if there is, an attempt will
      *  instead be made to add the forwarder methods to the companion class.
      */
-    def genMirrorClass(modsym: Symbol, sourceFile: SourceFile) {
+    def genMirrorClass(modsym: Symbol, cunit: CompilationUnit) {
       assert(modsym.companionClass == NoSymbol, modsym)
       innerClassBuffer.clear()
+      this.cunit = cunit
       import JAccessFlags._
       val moduleName = javaName(modsym) // + "$"
       val mirrorName = moduleName.substring(0, moduleName.length() - 1)
@@ -2078,7 +2082,7 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
                                            mirrorName,
                                            JAVA_LANG_OBJECT.getName,
                                            JClass.NO_INTERFACES,
-                                           "" + sourceFile)
+                                           "" + cunit.source)
 
       log("Dumping mirror class for '%s'".format(mirrorClass.getName))
       val isRemoteClass = (modsym hasAnnotation RemoteAttr)
@@ -2095,14 +2099,14 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
 
 
   /** builder of bean info classes */
-  class JBeanInfoBuilder(clasz: IClass, bytecodeWriter: BytecodeWriter) extends JBuilder(bytecodeWriter) {
+  class JBeanInfoBuilder(bytecodeWriter: BytecodeWriter) extends JBuilder(bytecodeWriter) {
 
     /**
      * Generate a bean info class that describes the given class.
      *
      * @author Ross Judson (ross.judson@soletta.com)
      */
-    def genBeanInfoClass() {
+    def genBeanInfoClass(clasz: IClass) {
 
       // val BeanInfoSkipAttr    = definitions.getRequiredClass("scala.beans.BeanInfoSkip")
       // val BeanDisplayNameAttr = definitions.getRequiredClass("scala.beans.BeanDisplayName")
