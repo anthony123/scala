@@ -155,13 +155,14 @@ abstract class GenJVM extends SubComponent with GenAndroid with BytecodeWriters 
           icodes.classes -= sym
 
       // For predictably ordered error messages.
-      val sortedClasses = classes.values.toList sortBy ("" + _.symbol.fullName)
+      var sortedClasses = classes.values.toList sortBy ("" + _.symbol.fullName)
 
       val bytecodeWriter = initBytecodeWriter(sortedClasses filter isJavaEntryPoint)
 
       debuglog("Created new bytecode generator for " + classes.size + " classes.")
 
-      for(c <- sortedClasses) {
+      while(!sortedClasses.isEmpty) {
+        val c = sortedClasses.head
         try {
           if (isStaticModule(c.symbol) && isTopLevelModule(c.symbol)) {
             if (c.symbol.companionClass == NoSymbol) {
@@ -183,10 +184,13 @@ abstract class GenJVM extends SubComponent with GenAndroid with BytecodeWriters 
           case e: JCode.CodeSizeTooBigException =>
             log("Skipped class %s because it has methods that are too long.".format(c))
         }
+        sortedClasses = sortedClasses.tail
+        classes -= c.symbol // GC opportunity
       }
 
       bytecodeWriter.close()
       classes.clear()
+      javaNameCache.clear()
     }
   }
 
@@ -276,8 +280,11 @@ abstract class GenJVM extends SubComponent with GenAndroid with BytecodeWriters 
     def mkArray(xs: Traversable[String]): Array[String] = { val a = new Array[String](xs.size); xs.copyToArray(a); a }
 
     // -----------------------------------------------------------------------------------------
-    // Getter for (JVMS 4.2) internal and unqualified names, plus tracking inner classes behind the scenes
-    // (the latter to build the InnerClasses attribute (JVMS 4.7.6) via `addInnerClasses()`).
+    // Getters for (JVMS 4.2) internal and unqualified names (represented as JType instances).
+    // These getters track behind the scenes the inner classes referred to in the class being emitted,
+    // so as to build the InnerClasses attribute (JVMS 4.7.6) via `addInnerClasses()`
+    // (which also adds as member classes those inner classes that have been declared,
+    // thus also covering the case of inner classes declared but otherwise not referred).
     // -----------------------------------------------------------------------------------------
 
     val innerClassBuffer = mutable.LinkedHashSet[Symbol]()
@@ -441,8 +448,7 @@ abstract class GenJVM extends SubComponent with GenAndroid with BytecodeWriters 
       }
     }
 
-    /** Add the given 'throws' attributes to jmethod.
-     */
+    /** Add the given 'throws' attributes to jmethod. */
     def addExceptionsAttribute(jmethod: JMethod, excs: List[AnnotationInfo]) {
       if (excs.isEmpty) return
 
@@ -2008,6 +2014,7 @@ abstract class GenJVM extends SubComponent with GenAndroid with BytecodeWriters 
      */
     def genMirrorClass(modsym: Symbol, sourceFile: SourceFile) {
       assert(modsym.companionClass == NoSymbol, modsym)
+      innerClassBuffer.clear()
       import JAccessFlags._
       val moduleName = javaName(modsym) // + "$"
       val mirrorName = moduleName.substring(0, moduleName.length() - 1)
@@ -2046,6 +2053,7 @@ abstract class GenJVM extends SubComponent with GenAndroid with BytecodeWriters 
       // val BeanDescriptionAttr = definitions.getRequiredClass("scala.beans.BeanDescription")
       // val description = c.symbol getAnnotation BeanDescriptionAttr
       // informProgress(description.toString)
+      innerClassBuffer.clear()
 
       val beanInfoClass = fjbgContext.JClass(javaFlags(clasz.symbol),
             javaName(clasz.symbol) + "BeanInfo",
