@@ -24,7 +24,7 @@ import scala.tools.nsc.io.AbstractFile
  *  @version 1.0
  *
  */
-abstract class GenJVM extends SubComponent with GenAndroid with BytecodeWriters {
+abstract class GenJVM extends SubComponent with BytecodeWriters {
   import global._
   import icodes._
   import icodes.opcodes._
@@ -851,8 +851,55 @@ abstract class GenJVM extends SubComponent with GenAndroid with BytecodeWriters 
   } // end of class JCommonBuilder
 
 
+  trait JAndroidBuilder {
+    self: JPlainBuilder =>
+
+    /** From the reference documentation of the Android SDK:
+     *  The `Parcelable` interface identifies classes whose instances can be
+     *  written to and restored from a `Parcel`. Classes implementing the
+     *  `Parcelable` interface must also have a static field called `CREATOR`,
+     *  which is an object implementing the `Parcelable.Creator` interface.
+     */
+    private val androidFieldName = newTermName("CREATOR")
+
+    private lazy val AndroidParcelableInterface = definitions.getClassIfDefined("android.os.Parcelable")
+    private lazy val AndroidCreatorClass        = definitions.getClassIfDefined("android.os.Parcelable$Creator")
+
+    def isAndroidParcelableClass(sym: Symbol) =
+      (AndroidParcelableInterface != NoSymbol) &&
+      (sym.parentSymbols contains AndroidParcelableInterface)
+
+    def addCreatorCode(block: BasicBlock) {
+      val fieldSymbol = (
+        clasz.symbol.newValue(newTermName(androidFieldName), NoPosition, Flags.STATIC | Flags.FINAL)
+          setInfo AndroidCreatorClass.tpe
+      )
+      val methodSymbol = definitions.getMember(clasz.symbol.companionModule, androidFieldName)
+      clasz addField new IField(fieldSymbol)
+      block emit CALL_METHOD(methodSymbol, Static(false))
+      block emit STORE_FIELD(fieldSymbol, true)
+    }
+
+    def legacyAddCreatorCode(clinit: JExtendedCode) {
+      val creatorType = javaType(AndroidCreatorClass)
+      jclass.addNewField(PublicStaticFinal,
+                         androidFieldName,
+                         creatorType)
+      val moduleName = javaName(clasz.symbol)+"$"
+      clinit.emitGETSTATIC(moduleName,
+                           nme.MODULE_INSTANCE_FIELD.toString,
+                           new JObjectType(moduleName))
+      clinit.emitINVOKEVIRTUAL(moduleName, androidFieldName,
+                               new JMethodType(creatorType, Array()))
+      clinit.emitPUTSTATIC(jclass.getName(), androidFieldName, creatorType)
+    }
+
+  } // end of trait JAndroidBuilder
+
   /** builder of plain classes */
-  class JPlainBuilder(val clasz: IClass, bytecodeWriter: BytecodeWriter) extends JCommonBuilder(clasz.cunit, bytecodeWriter) /* TODO with GenAndroid ? */ {
+  class JPlainBuilder(val clasz: IClass, bytecodeWriter: BytecodeWriter)
+    extends JCommonBuilder(clasz.cunit, bytecodeWriter)
+    with    JAndroidBuilder {
 
     val MIN_SWITCH_DENSITY = 0.7
 
@@ -1158,7 +1205,9 @@ abstract class GenJVM extends SubComponent with GenAndroid with BytecodeWriters 
       val clinit = clinitMethod.getCode().asInstanceOf[JExtendedCode]
 
       mopt match {
+
        	case Some(m) =>
+
           val oldLastBlock = m.lastBlock
           val lastBlock = m.newBlock()
           oldLastBlock.replaceInstruction(oldLastBlock.length - 1, JUMP(lastBlock))
@@ -1179,8 +1228,7 @@ abstract class GenJVM extends SubComponent with GenAndroid with BytecodeWriters 
             lastBlock emit STORE_FIELD(fieldSymbol, true)
           }
 
-          if (isParcelableClass)
-            addCreatorCode(JPlainBuilder.this, lastBlock)
+          if (isParcelableClass) { addCreatorCode(lastBlock) }
 
           lastBlock emit RETURN(UNIT)
           lastBlock.close
@@ -1188,7 +1236,9 @@ abstract class GenJVM extends SubComponent with GenAndroid with BytecodeWriters 
        	  method = m
        	  jmethod = clinitMethod
        	  genCode(m)
+
        	case None =>
+
           legacyStaticInitializer(cls, clinit)
       }
     }
@@ -1210,8 +1260,7 @@ abstract class GenJVM extends SubComponent with GenAndroid with BytecodeWriters 
         clinit.emitPUTSTATIC(jclass.getName(), fieldName, JType.LONG)
       }
 
-      if (isParcelableClass)
-        legacyAddCreatorCode(JPlainBuilder.this, clinit)
+      if (isParcelableClass) { legacyAddCreatorCode(clinit) }
 
       clinit.emitRETURN()
     }
