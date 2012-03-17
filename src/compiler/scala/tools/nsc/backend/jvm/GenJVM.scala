@@ -857,48 +857,46 @@ abstract class GenJVM extends SubComponent with GenAndroid with BytecodeWriters 
     val toStringType      = new JMethodType(JAVA_LANG_STRING, JType.EMPTY_ARRAY)  // TODO use ASMType.getMethodType
     val arrayCloneType    = new JMethodType(JAVA_LANG_OBJECT, JType.EMPTY_ARRAY)
 
+    /** Map from type kinds to the Java reference types. It is used for
+     *  loading class constants. @see Predef.classOf.
+     */
+    private val classLiteral = immutable.Map[TypeKind, JObjectType](
+      UNIT   -> new JObjectType("java.lang.Void"),
+      BOOL   -> new JObjectType("java.lang.Boolean"),
+      BYTE   -> new JObjectType("java.lang.Byte"),
+      SHORT  -> new JObjectType("java.lang.Short"),
+      CHAR   -> new JObjectType("java.lang.Character"),
+      INT    -> new JObjectType("java.lang.Integer"),
+      LONG   -> new JObjectType("java.lang.Long"),
+      FLOAT  -> new JObjectType("java.lang.Float"),
+      DOUBLE -> new JObjectType("java.lang.Double")
+    )
+
     /** used only from genCode(), i.e. only when emitting plain classes. */
     private val jBoxTo: Map[TypeKind, Tuple2[String, JMethodType]] = {
-
-        def helperBoxTo(kind: ValueTypeKind): Tuple2[String, JMethodType] = {
-          val boxedType = definitions.boxedClass(kind.toType.typeSymbol)
-          val mtype = new JMethodType(javaType(boxedType), Array(javaType(kind)))
-
-          Pair("boxTo" + boxedType.decodedName, mtype)
-        }
-
       Map(
-        BOOL   -> helperBoxTo(BOOL)  ,
-        BYTE   -> helperBoxTo(BYTE)  ,
-        CHAR   -> helperBoxTo(CHAR)  ,
-        SHORT  -> helperBoxTo(SHORT) ,
-        INT    -> helperBoxTo(INT)   ,
-        LONG   -> helperBoxTo(LONG)  ,
-        FLOAT  -> helperBoxTo(FLOAT) ,
-        DOUBLE -> helperBoxTo(DOUBLE)
+        BOOL   -> Pair("boxToBoolean",   new JMethodType(classLiteral(BOOL),   Array(JType.BOOLEAN))) ,
+        BYTE   -> Pair("boxToByte",      new JMethodType(classLiteral(BYTE),   Array(JType.BYTE)))    ,
+        CHAR   -> Pair("boxToCharacter", new JMethodType(classLiteral(CHAR),   Array(JType.CHAR)))    ,
+        SHORT  -> Pair("boxToShort",     new JMethodType(classLiteral(SHORT),  Array(JType.SHORT)))   ,
+        INT    -> Pair("boxToInteger",   new JMethodType(classLiteral(INT),    Array(JType.INT)))     ,
+        LONG   -> Pair("boxToLong",      new JMethodType(classLiteral(LONG),   Array(JType.LONG)))    ,
+        FLOAT  -> Pair("boxToFloat",     new JMethodType(classLiteral(FLOAT),  Array(JType.FLOAT)))   ,
+        DOUBLE -> Pair("boxToDouble",    new JMethodType(classLiteral(DOUBLE), Array(JType.DOUBLE)))
       )
-
     }
 
     /** used only from genCode(), i.e. only when emitting plain classes. */
     private val jUnboxTo: Map[TypeKind, Tuple2[String, JMethodType]] = {
-
-        def helperUnboxTo(kind: ValueTypeKind): Tuple2[String, JMethodType] = {
-          val mtype = new JMethodType(javaType(kind), Array(JAVA_LANG_OBJECT))
-          val mname = "unboxTo" + kind.toType.typeSymbol.decodedName
-
-          Pair(mname, mtype)
-        }
-
       Map(
-        BOOL   -> helperUnboxTo(BOOL)  ,
-        BYTE   -> helperUnboxTo(BYTE)  ,
-        CHAR   -> helperUnboxTo(CHAR)  ,
-        SHORT  -> helperUnboxTo(SHORT) ,
-        INT    -> helperUnboxTo(INT)   ,
-        LONG   -> helperUnboxTo(LONG)  ,
-        FLOAT  -> helperUnboxTo(FLOAT) ,
-        DOUBLE -> helperUnboxTo(DOUBLE)
+        BOOL   -> Pair("unboxToBoolean", new JMethodType(JType.BOOLEAN, Array(JAVA_LANG_OBJECT))) ,
+        BYTE   -> Pair("unboxToByte",    new JMethodType(JType.BYTE,    Array(JAVA_LANG_OBJECT))) ,
+        CHAR   -> Pair("unboxToChar",    new JMethodType(JType.CHAR,    Array(JAVA_LANG_OBJECT))) ,
+        SHORT  -> Pair("unboxToShort",   new JMethodType(JType.SHORT,   Array(JAVA_LANG_OBJECT))) ,
+        INT    -> Pair("unboxToInt",     new JMethodType(JType.INT,     Array(JAVA_LANG_OBJECT))) ,
+        LONG   -> Pair("unboxToLong",    new JMethodType(JType.LONG,    Array(JAVA_LANG_OBJECT))) ,
+        FLOAT  -> Pair("unboxToFloat",   new JMethodType(JType.FLOAT,   Array(JAVA_LANG_OBJECT))) ,
+        DOUBLE -> Pair("unboxToDouble",  new JMethodType(JType.DOUBLE,  Array(JAVA_LANG_OBJECT)))
       )
     }
 
@@ -1218,21 +1216,6 @@ abstract class GenJVM extends SubComponent with GenAndroid with BytecodeWriters 
 
     var linearization: List[BasicBlock] = Nil
     var isModuleInitialized = false
-
-    /** Map from type kinds to the Java reference types. It is used for
-     *  loading class constants. @see Predef.classOf.
-     */
-    private val classLiteral = immutable.Map[TypeKind, JObjectType](
-      UNIT   -> new JObjectType("java.lang.Void"),
-      BOOL   -> new JObjectType("java.lang.Boolean"),
-      BYTE   -> new JObjectType("java.lang.Byte"),
-      SHORT  -> new JObjectType("java.lang.Short"),
-      CHAR   -> new JObjectType("java.lang.Character"),
-      INT    -> new JObjectType("java.lang.Integer"),
-      LONG   -> new JObjectType("java.lang.Long"),
-      FLOAT  -> new JObjectType("java.lang.Float"),
-      DOUBLE -> new JObjectType("java.lang.Double")
-    )
 
     private val conds = immutable.Map[TestOp, Int](
       EQ -> JExtendedCode.COND_EQ,
