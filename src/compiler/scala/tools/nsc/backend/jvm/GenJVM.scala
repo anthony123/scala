@@ -877,6 +877,7 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
       (AndroidParcelableInterface != NoSymbol) &&
       (sym.parentSymbols contains AndroidParcelableInterface)
 
+    /* Typestate: should be called before emitting fields (because it adds an IField to the current IClass). */
     def addCreatorCode(block: BasicBlock) {
       val fieldSymbol = (
         clasz.symbol.newValue(newTermName(androidFieldName), NoPosition, Flags.STATIC | Flags.FINAL)
@@ -1025,6 +1026,18 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
                                   ifaces,
                                   c.cunit.source.toString)
 
+      // typestate: entering mode with allowed calls:
+      //   [ visitSource ] [ visitOuterClass ] ( visitAnnotation | visitAttribute )*
+
+      addEnclosingMethodAttribute()
+
+      val ssa = scalaSignatureAddingMarker(jclass, c.symbol)
+      addGenericSignature(jclass, c.symbol, c.symbol.owner)
+      addAnnotations(jclass, c.symbol.annotations ++ ssa)
+
+      // typestate: entering mode with allowed calls:
+      //   ( visitInnerClass | visitField | visitMethod )* visitEnd
+
       if (isStaticModule(c.symbol) || serialVUID != None || isParcelableClass) {
 
         if (isStaticModule(c.symbol)) { addModuleInstanceField }
@@ -1053,12 +1066,6 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
         }
 
       }
-
-      addEnclosingMethodAttribute()
-
-      val ssa = scalaSignatureAddingMarker(jclass, c.symbol)
-      addGenericSignature(jclass, c.symbol, c.symbol.owner)
-      addAnnotations(jclass, c.symbol.annotations ++ ssa)
 
       clasz.fields  foreach genField
       clasz.methods foreach genMethod
@@ -1209,6 +1216,7 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
                          jclass.getType())
     }
 
+    /* Typestate: should be called before emitting fields (because it invokes addCreatorCode() which adds an IField to the current IClass). */
     def addStaticInit(cls: JClass, mopt: Option[IMethod]) {
       val clinitMethod = cls.addNewMethod(PublicStatic,
                                           "<clinit>",
@@ -1233,9 +1241,8 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
 
           // add serialVUID code
           serialVUID foreach { value =>
-            import Flags._, definitions._
             val fieldName = "serialVersionUID"
-            val fieldSymbol = clasz.symbol.newValue(newTermName(fieldName), NoPosition, STATIC | FINAL) setInfo longType
+            val fieldSymbol = clasz.symbol.newValue(newTermName(fieldName), NoPosition, Flags.STATIC | Flags.FINAL) setInfo longType
             clasz addField new IField(fieldSymbol)
             lastBlock emit CONSTANT(Constant(value))
             lastBlock emit STORE_FIELD(fieldSymbol, true)
