@@ -157,10 +157,8 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
       // For predictably ordered error messages.
       var sortedClasses = classes.values.toList sortBy ("" + _.symbol.fullName)
 
-      val bytecodeWriter = initBytecodeWriter(sortedClasses filter isJavaEntryPoint)
-
       debuglog("Created new bytecode generator for " + classes.size + " classes.")
-
+      val bytecodeWriter  = initBytecodeWriter(sortedClasses filter isJavaEntryPoint)
       val plainCodeGen    = new JPlainBuilder(bytecodeWriter)
       val mirrorCodeGen   = new JMirrorBuilder(bytecodeWriter)
       val beanInfoCodeGen = new JBeanInfoBuilder(bytecodeWriter)
@@ -168,6 +166,7 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
       while(!sortedClasses.isEmpty) {
         val c = sortedClasses.head
         try {
+
           if (isStaticModule(c.symbol) && isTopLevelModule(c.symbol)) {
             if (c.symbol.companionClass == NoSymbol) {
               mirrorCodeGen.genMirrorClass(c.symbol, c.cunit)
@@ -723,7 +722,7 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
         val innerClassesAttr = jclass.getInnerClasses()
         // sort them so inner classes succeed their enclosing class
         // to satisfy the Eclipse Java compiler
-        for (innerSym <- allInners sortBy (_.name.length)) {
+        for (innerSym <- allInners sortBy (_.name.length)) { // TODO why not sortBy (_.name) ??
           val flags = {
             val staticFlag = if (innerSym.rawowner.hasModuleFlag) ACC_STATIC else 0
             (javaFlags(innerSym) | staticFlag) & INNER_CLASSES_FLAGS
@@ -2132,7 +2131,7 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
              fieldList = javaName(f.symbol) :: javaName(g) :: (if (s != NoSymbol) javaName(s) else null) :: fieldList
       }
 
-      val methodList =
+      val methodList: List[String] =
 	     for (m <- clasz.methods
 	          if !m.symbol.isConstructor &&
 	          m.symbol.isPublic &&
@@ -2147,15 +2146,13 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
       val stringArrayKind = new JArrayType(strKind)
       val conType = new JMethodType(JType.VOID, Array(javaType(ClassClass), stringArrayKind, stringArrayKind))
 
-      def push(lst:Seq[String]) {
+      def push(lst: List[String]) {
         var fi = 0
         for (f <- lst) {
           jcode.emitDUP()
           jcode emitPUSH fi
-          if (f != null)
-            jcode emitPUSH f
-          else
-            jcode.emitACONST_NULL()
+          if (f == null) { jcode.emitACONST_NULL() }
+          else           { jcode emitPUSH f        }
           jcode emitASTORE strKind
           fi += 1
         }
@@ -2181,6 +2178,8 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
       jcode.emitRETURN()
 
       // TODO no inner classes attribute is written. Confirm intent.
+      assert(innerClassBuffer.isEmpty, innerClassBuffer)
+
       bytecodeWriter.writeClass("BeanInfo ", beanInfoClass, clasz.symbol)
     }
 
