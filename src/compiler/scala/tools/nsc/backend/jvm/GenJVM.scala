@@ -1162,7 +1162,20 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
       val isRemoteClass = (clasz.symbol hasAnnotation RemoteAttr)
       addRemoteExceptionAnnot(isRemoteClass, jmethod.isPublic, m.symbol)
 
-      if (!jmethod.isAbstract() && !method.native) {
+      // typestate: entering mode with allowed calls:
+      //   [ visitAnnotationDefault ] ( visitAnnotation | visitParameterAnnotation | visitAttribute )*
+
+      addGenericSignature(jmethod, m.symbol, clasz.symbol)
+      val (excs, others) = m.symbol.annotations partition (_.symbol == ThrowsClass)
+      addExceptionsAttribute(jmethod, excs)
+      addAnnotations(jmethod, others)
+      addParamAnnotations(jmethod, m.params.map(_.sym.annotations))
+
+      // typestate: entering mode with allowed calls:
+      //   visitCode ( visitFrame | visitXInsn | visitLabel | visitTryCatchBlock | visitLocalVariable | visitLineNumber )* visitMaxs ] visitEnd
+
+      val hasCodeAttribute = (!jmethod.isAbstract() && !method.native)
+      if (hasCodeAttribute) {
         val jcode = jmethod.getCode().asInstanceOf[JExtendedCode]
 
         // add a fake local for debugging purposes
@@ -1194,12 +1207,6 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
         if (emitVars) { genLocalVariableTable(m, jcode) }
 
       }
-
-      addGenericSignature(jmethod, m.symbol, clasz.symbol)
-      val (excs, others) = m.symbol.annotations partition (_.symbol == ThrowsClass)
-      addExceptionsAttribute(jmethod, excs)
-      addAnnotations(jmethod, others)
-      addParamAnnotations(jmethod, m.params.map(_.sym.annotations))
 
       // check for code size
       try jmethod.freeze()
