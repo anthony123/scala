@@ -747,9 +747,9 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
 
     /** Adds a @remote annotation, actual use unknown.
      *
-     * Invoked from BytecodeGenerator.genMethod() and BytecodeGenerator.addForwarder().
+     * Invoked from genMethod() and addForwarder().
      */
-    def addRemoteException(isRemoteClass: Boolean, isJMethodPublic: Boolean, meth: Symbol) {
+    def addRemoteExceptionAnnot(isRemoteClass: Boolean, isJMethodPublic: Boolean, meth: Symbol) {
       val needsAnnotation = (
         (  isRemoteClass ||
            (meth hasAnnotation RemoteAttr) && isJMethodPublic
@@ -775,7 +775,7 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
 
     /** Add a forwarder for method m.
      *
-     *  Used only addForwarders().
+     *  Used only from addForwarders().
      *
      * */
     private def addForwarder(isRemoteClass: Boolean, jclass: JClass, module: Symbol, m: Symbol) {
@@ -798,6 +798,16 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
         javaType(methodInfo.resultType),
         mkArray(paramJavaTypes),
         mkArray(paramNames))
+
+      addRemoteExceptionAnnot(isRemoteClass, mirrorMethod.isPublic, m)
+      // only add generic signature if the method is concrete; bug #1745
+      if (!m.isDeferred) { addGenericSignature(mirrorMethod, m, module) }
+
+      val (throws, others) = m.annotations partition (_.symbol == ThrowsClass)
+      addExceptionsAttribute(mirrorMethod, throws)
+      addAnnotations(mirrorMethod, others)
+      addParamAnnotations(mirrorMethod, m.info.params.map(_.annotations))
+
       val mirrorCode = mirrorMethod.getCode().asInstanceOf[JExtendedCode]
       mirrorCode.emitGETSTATIC(moduleName,
                                nme.MODULE_INSTANCE_FIELD.toString,
@@ -815,14 +825,6 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
       mirrorCode.emitINVOKEVIRTUAL(moduleName, mirrorMethod.getName, javaType(m).asInstanceOf[JMethodType])
       mirrorCode emitRETURN mirrorMethod.getReturnType()
 
-      addRemoteException(isRemoteClass, mirrorMethod.isPublic, m)
-      // only add generic signature if the method is concrete; bug #1745
-      if (!m.isDeferred) { addGenericSignature(mirrorMethod, m, module) }
-
-      val (throws, others) = m.annotations partition (_.symbol == ThrowsClass)
-      addExceptionsAttribute(mirrorMethod, throws)
-      addAnnotations(mirrorMethod, others)
-      addParamAnnotations(mirrorMethod, m.info.params.map(_.annotations))
     }
 
     /** Add forwarders for all methods defined in `module` that don't conflict
@@ -1151,7 +1153,7 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
                                     mkArray(m.params map (p => javaName(p.sym))))
 
       val isRemoteClass = (clasz.symbol hasAnnotation RemoteAttr)
-      addRemoteException(isRemoteClass, jmethod.isPublic, m.symbol)
+      addRemoteExceptionAnnot(isRemoteClass, jmethod.isPublic, m.symbol)
 
       if (!jmethod.isAbstract() && !method.native) {
         val jcode = jmethod.getCode().asInstanceOf[JExtendedCode]
