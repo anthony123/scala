@@ -406,33 +406,30 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
       vp
     }
 
-    /** Returns the ScalaSignature annotation if it must be added to this class,
-     *  none otherwise; furthermore, it adds to `jclass` the ScalaSig marker
-     *  attribute (marking that a scala signature annotation is present) or the
-     *  Scala marker attribute (marking that the signature for this class is in
-     *  another file). The annotation that is returned by this method must be
-     *  added to the class' annotations list when generating them.
+    /** Returns a ScalaSignature annotation if it must be added to this class, none otherwise.
+     *  This annotation must be added to the class' annotations list when generating them.
+     *
+     *  Depending on whether the returned option is defined, it adds to `jclass` one of:
+     *    (a) the ScalaSig marker attribute
+     *        (indicating that a scala-signature-annotation aka pickle is present in this class); or
+     *    (b) the Scala marker attribute
+     *        (indicating that a scala-signature-annotation aka pickle is to be found in another file).
+     *
      *
      *  @param jclass The class file that is being readied.
-     *  @param sym    The symbol for which the signature has been entered in
-     *                the symData map. This is different than the symbol
+     *  @param sym    The symbol for which the signature has been entered in the symData map.
+     *                This is different than the symbol
      *                that is being generated in the case of a mirror class.
      *  @return       An option that is:
-     *                - defined and contains an annotation info of the
-     *                  ScalaSignature type, instantiated with the pickle
-     *                  signature for sym (a ScalaSig marker attribute has
-     *                  been written);
-     *                - undefined if the jclass/sym couple must not contain a
-     *                  signature (a Scala marker attribute has been written).
+     *                - defined and contains an AnnotationInfo of the ScalaSignature type,
+     *                  instantiated with the pickle signature for sym.
+     *                - empty if the jclass/sym pair must not contain a pickle.
      *
      */
     def scalaSignatureAddingMarker(jclass: JClass, sym: Symbol): Option[AnnotationInfo] = {
       currentRun.symData get sym match {
         case Some(pickle) if !nme.isModuleName(newTermName(jclass.getName)) =>
-          val scalaAttr =
-            fjbgContext.JOtherAttribute(jclass, jclass, tpnme.ScalaSignatureATTR.toString,
-                                        versionPickle.bytes, versionPickle.writeIndex)
-          jclass addAttribute scalaAttr
+          jclass addAttribute markerLocalPickle(jclass)
           val scalaAnnot = {
             val sigBytes = ScalaSigBytes(pickle.bytes.take(pickle.writeIndex))
             AnnotationInfo(sigBytes.sigAnnot, Nil, List((nme.bytes, sigBytes)))
@@ -442,11 +439,17 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
           currentRun.symData -= sym.companionSymbol
           Some(scalaAnnot)
         case _ =>
-          val markerAttr =
-            fjbgContext.JOtherAttribute(jclass, jclass, tpnme.ScalaATTR.toString, new Array[Byte](0), 0)
-          jclass addAttribute markerAttr
+          jclass addAttribute markerForeignPickle(jclass)
           None
       }
+    }
+
+    private def markerLocalPickle(jclass: JClass): JOtherAttribute = {
+      fjbgContext.JOtherAttribute(jclass, jclass, tpnme.ScalaSignatureATTR.toString, versionPickle.bytes, versionPickle.writeIndex)
+    }
+
+    private def markerForeignPickle(jclass: JClass): JOtherAttribute = {
+      fjbgContext.JOtherAttribute(jclass, jclass, tpnme.ScalaATTR.toString, new Array[Byte](0), 0)
     }
 
     /** Add the given 'throws' attributes to jmethod. */
@@ -775,7 +778,7 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
      *  Used only addForwarders().
      *
      * */
-    def addForwarder(isRemoteClass: Boolean, jclass: JClass, module: Symbol, m: Symbol) {
+    private def addForwarder(isRemoteClass: Boolean, jclass: JClass, module: Symbol, m: Symbol) {
       val moduleName     = javaName(module)
       val methodInfo     = module.thisType.memberInfo(m)
       val paramJavaTypes = methodInfo.paramTypes map javaType
