@@ -1052,13 +1052,14 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
 
       }
 
-      clasz.fields  foreach genField
-      clasz.methods foreach genMethod
+      addEnclosingMethodAttribute()
 
       val ssa = scalaSignatureAddingMarker(jclass, c.symbol)
       addGenericSignature(jclass, c.symbol, c.symbol.owner)
       addAnnotations(jclass, c.symbol.annotations ++ ssa)
-      addEnclosingMethodAttribute()
+
+      clasz.fields  foreach genField
+      clasz.methods foreach genMethod
 
       addInnerClasses(clasz.symbol, jclass)
       bytecodeWriter.writeClass("" + c.symbol.name, jclass, c.symbol)
@@ -2087,10 +2088,12 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
                                            "" + cunit.source)
 
       log("Dumping mirror class for '%s'".format(mirrorClass.getName))
-      val isRemoteClass = (modsym hasAnnotation RemoteAttr)
-      addForwarders(isRemoteClass, mirrorClass, modsym)
+
       val ssa = scalaSignatureAddingMarker(mirrorClass, modsym.companionSymbol)
       addAnnotations(mirrorClass, modsym.annotations ++ ssa)
+
+      val isRemoteClass = (modsym hasAnnotation RemoteAttr)
+      addForwarders(isRemoteClass, mirrorClass, modsym)
 
       addInnerClasses(modsym, mirrorClass)
       bytecodeWriter.writeClass("" + modsym.name, mirrorClass, modsym)
