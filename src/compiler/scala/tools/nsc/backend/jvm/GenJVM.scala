@@ -457,27 +457,36 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
       fjbgContext.JOtherAttribute(jclass, jclass, tpnme.ScalaATTR.toString, new Array[Byte](0), 0)
     }
 
+    /**
+     * Quoting from JVMS 4.7.5 The Exceptions Attribute
+     *   "The Exceptions attribute indicates which checked exceptions a method may throw.
+     *    There may be at most one Exceptions attribute in each method_info structure."
+     *
+     * The contents of that attribute are determined by the `String[] exceptions` argument to ASM's ClassVisitor.visitMethod()
+     * This method returns such list of internal names.
+     *
+     */
+    def getExceptions(excs: List[AnnotationInfo]): List[String] = {
+      for (AnnotationInfo(tp, List(exc), _) <- excs.distinct if tp.typeSymbol == ThrowsClass)
+      yield {
+        val Literal(const) = exc
+        javaName(const.typeValue.typeSymbol)
+      }
+    }
+
     /** Add the given 'throws' attributes to jmethod. */
-    def addExceptionsAttribute(jmethod: JMethod, excs: List[AnnotationInfo]) {
+    def addExceptionsAttribute(jmethod: JMethod, excs: List[String]) {
       if (excs.isEmpty) return
 
       val cpool = jmethod.getConstantPool
       val buf: ByteBuffer = ByteBuffer.allocate(512)
-      var nattr = 0
 
-      // put some random value; the actual number is determined at the end
-      buf putShort 0xbaba.toShort
+      buf putShort (excs.size.toShort)
 
-      for (AnnotationInfo(tp, List(exc), _) <- excs.distinct if tp.typeSymbol == ThrowsClass) {
-        val Literal(const) = exc
-        buf.putShort(
-          cpool.addClass(
-            javaName(const.typeValue.typeSymbol)).shortValue)
-        nattr += 1
+      for (iname <- excs) {
+        buf.putShort(cpool.addClass(iname).shortValue)
       }
 
-      assert(nattr > 0, nattr)
-      buf.putShort(0, nattr.toShort)
       addAttribute(jmethod, tpnme.ExceptionsATTR, buf)
     }
 
@@ -810,7 +819,12 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
       )
 
       // only add generic signature if the method is concrete; bug #1745
-      val sig = if (m.isDeferred) null else getGenericSignature(m, module);
+      // TODO needed? for(ann <- m.annotations) { ann.symbol.initialize }
+      val jgensig = if (m.isDeferred) null else getGenericSignature(m, module);
+      val isJMethodPublic = ((flags & JAccessFlags.ACC_PUBLIC) != 0) // tautologically true because of the PublicStatic above
+      addRemoteExceptionAnnot(isRemoteClass, isJMethodPublic, m)
+      val (throws, others) = m.annotations partition (_.symbol == ThrowsClass)
+      val thrownExceptions: List[String] = getExceptions(throws)
 
       /** Forwarders must not be marked final, as the JVM will not allow
        *  redefinition of a final static method, and we don't know what classes
@@ -823,15 +837,12 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
         mkArray(paramJavaTypes),
         mkArray(paramNames))
 
-      addRemoteExceptionAnnot(isRemoteClass, mirrorMethod.isPublic, m)
-
       // typestate: entering mode with valid call sequences:
       //   [ visitAnnotationDefault ] ( visitAnnotation | visitParameterAnnotation | visitAttribute )*
 
-      addGenericSignature(mirrorMethod, sig)
+      addGenericSignature(mirrorMethod, jgensig)             // TODO ASM: made redundant by `jgensig`          arg to visitMethod
+      addExceptionsAttribute(mirrorMethod, thrownExceptions) // TODO ASM: made redundant by `thrownExceptions` arg to visitMethod
 
-      val (throws, others) = m.annotations partition (_.symbol == ThrowsClass)
-      addExceptionsAttribute(mirrorMethod, throws)
       addAnnotations(mirrorMethod, others)
       addParamAnnotations(mirrorMethod, m.info.params.map(_.annotations))
 
@@ -1204,23 +1215,27 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
       if (m.symbol.isStrictFP) { flags |= ACC_STRICT   }
       if (method.native)       { flags |= ACC_NATIVE   } // native methods of objects are generated in mirror classes
 
-      val sig = getGenericSignature(m.symbol, clasz.symbol)
+      // TODO needed? for(ann <- m.symbol.annotations) { ann.symbol.initialize }
+      val jgensig = getGenericSignature(m.symbol, clasz.symbol)
+      val isRemoteClass = (clasz.symbol hasAnnotation RemoteAttr)
+      val isJMethodPublic = ((flags & JAccessFlags.ACC_PUBLIC) != 0)
+      addRemoteExceptionAnnot(isRemoteClass, isJMethodPublic, m.symbol)
+      val (excs, others) = m.symbol.annotations partition (_.symbol == ThrowsClass)
+      val thrownExceptions: List[String] = getExceptions(excs)
+
       jmethod = jclass.addNewMethod(flags,
                                     javaName(m.symbol),
                                     resTpe,
                                     mkArray(m.params map (p => javaType(p.kind))),
                                     mkArray(m.params map (p => javaName(p.sym))))
 
-      val isRemoteClass = (clasz.symbol hasAnnotation RemoteAttr)
-      addRemoteExceptionAnnot(isRemoteClass, jmethod.isPublic, m.symbol)
 
       // typestate: entering mode with valid call sequences:
       //   [ visitAnnotationDefault ] ( visitAnnotation | visitParameterAnnotation | visitAttribute )*
 
-      addGenericSignature(jmethod, sig)
+      addGenericSignature(jmethod, jgensig)             // TODO ASM: made redundant by `jgensig`          arg to visitMethod
+      addExceptionsAttribute(jmethod, thrownExceptions) // TODO ASM: made redundant by `thrownExceptions` arg to visitMethod
 
-      val (excs, others) = m.symbol.annotations partition (_.symbol == ThrowsClass)
-      addExceptionsAttribute(jmethod, excs)
       addAnnotations(jmethod, others)
       addParamAnnotations(jmethod, m.params.map(_.sym.annotations))
 
