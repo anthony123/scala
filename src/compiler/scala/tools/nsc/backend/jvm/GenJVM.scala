@@ -601,49 +601,66 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
 
     def getCurrentCUnit(): CompilationUnit
 
-    def addGenericSignature(jmember: JMember, sym: Symbol, owner: Symbol) {
-      if (needsGenericSignature(sym)) {
-        val memberTpe = beforeErasure(owner.thisType.memberInfo(sym))
-        // println("addGenericSignature sym: " + sym.fullName + " : " + memberTpe + " sym.info: " + sym.info)
-        // println("addGenericSignature: "+ (sym.ownerChain map (x => (x.name, x.isImplClass))))
-        erasure.javaSig(sym, memberTpe) foreach { sig =>
-          debuglog("sig(" + jmember.getName + ", " + sym + ", " + owner + ")      " + sig)
-          /** Since we're using a sun internal class for signature validation,
-           *  we have to allow for it not existing or otherwise malfunctioning:
-           *  in which case we treat every signature as valid.  Medium term we
-           *  should certainly write independent signature validation.
-           */
-          if (settings.Xverify.value && SigParser.isParserAvailable && !isValidSignature(sym, sig)) {
-            getCurrentCUnit().warning(sym.pos,
-                """|compiler bug: created invalid generic signature for %s in %s
-                   |signature: %s
-                   |if this is reproducible, please report bug at http://lampsvn.epfl.ch/trac/scala
-                """.trim.stripMargin.format(sym, sym.owner.skipPackageObject.fullName, sig))
-            return
-          }
-          if ((settings.check.value contains "genjvm")) {
-            val normalizedTpe = beforeErasure(erasure.prepareSigMap(memberTpe))
-            val bytecodeTpe = owner.thisType.memberInfo(sym)
-            if (!sym.isType && !sym.isConstructor && !(erasure.erasure(sym, normalizedTpe) =:= bytecodeTpe)) {
-              getCurrentCUnit().warning(sym.pos,
-                  """|compiler bug: created generic signature for %s in %s that does not conform to its erasure
-                     |signature: %s
-                     |original type: %s
-                     |normalized type: %s
-                     |erasure type: %s
-                     |if this is reproducible, please report bug at http://lampsvn.epfl.ch/trac/scala
-                  """.trim.stripMargin.format(sym, sym.owner.skipPackageObject.fullName, sig, memberTpe, normalizedTpe, bytecodeTpe))
-               return
-            }
-          }
-          val index = jmember.getConstantPool.addUtf8(sig).toShort
-          if (opt.verboseDebug)
-            beforeErasure(println("add generic sig "+sym+":"+sym.info+" ==> "+sig+" @ "+index))
+    /** @return
+     *   - `null` if no Java signature is to be added (`null` is what ASM expects in these cases).
+     *   - otherwise the signature in question
+     */
+    def getGenericSignature(sym: Symbol, owner: Symbol): String = {
+      if (!needsGenericSignature(sym)) { return null }
 
-          val buf = ByteBuffer.allocate(2)
-          buf putShort index
-          addAttribute(jmember, tpnme.SignatureATTR, buf)
+      val memberTpe = beforeErasure(owner.thisType.memberInfo(sym))
+      // println("addGenericSignature sym: " + sym.fullName + " : " + memberTpe + " sym.info: " + sym.info)
+      // println("addGenericSignature: "+ (sym.ownerChain map (x => (x.name, x.isImplClass))))
+
+      val jsOpt = erasure.javaSig(sym, memberTpe)
+      if (jsOpt.isEmpty) { return null }
+
+      val sig = jsOpt.get
+
+      // TODO ASM's CheckClassAdapter can be used to perform this check (without resort to SunSignatureParser)
+      // TODO it delegates to one of CheckMethodAdapter.{ checkClassSignature(), checkMethodSignature(), checkFieldSignature() }
+      // TODO All those checks (including SunSignatureParser's) seem to be syntactic only in nature.
+      // TODO CheckClassAdapter lives in asm-util.jar (merely 37KB)
+
+      /** Since we're using a sun internal class for signature validation,
+       *  we have to allow for it not existing or otherwise malfunctioning:
+       *  in which case we treat every signature as valid.  Medium term we
+       *  should certainly write independent signature validation.
+       */
+      if (settings.Xverify.value && SigParser.isParserAvailable && !isValidSignature(sym, sig)) {
+        getCurrentCUnit().warning(sym.pos,
+            """|compiler bug: created invalid generic signature for %s in %s
+               |signature: %s
+               |if this is reproducible, please report bug at http://lampsvn.epfl.ch/trac/scala
+            """.trim.stripMargin.format(sym, sym.owner.skipPackageObject.fullName, sig))
+        return null
+      }
+      if ((settings.check.value contains "genjvm")) {
+        val normalizedTpe = beforeErasure(erasure.prepareSigMap(memberTpe))
+        val bytecodeTpe = owner.thisType.memberInfo(sym)
+        if (!sym.isType && !sym.isConstructor && !(erasure.erasure(sym, normalizedTpe) =:= bytecodeTpe)) {
+          getCurrentCUnit().warning(sym.pos,
+              """|compiler bug: created generic signature for %s in %s that does not conform to its erasure
+                 |signature: %s
+                 |original type: %s
+                 |normalized type: %s
+                 |erasure type: %s
+                 |if this is reproducible, please report bug at http://lampsvn.epfl.ch/trac/scala
+              """.trim.stripMargin.format(sym, sym.owner.skipPackageObject.fullName, sig, memberTpe, normalizedTpe, bytecodeTpe))
+           return null
         }
+      }
+
+      sig
+    }
+
+    def addGenericSignature(jmember: JMember, sig: String) {
+      if(sig != null) {
+        val index = jmember.getConstantPool.addUtf8(sig).toShort
+
+        val buf = ByteBuffer.allocate(2)
+        buf putShort index
+        addAttribute(jmember, tpnme.SignatureATTR, buf)
       }
     }
 
@@ -788,6 +805,9 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
         if (m.isVarargsMethod) ACC_VARARGS else 0
       )
 
+      // only add generic signature if the method is concrete; bug #1745
+      val sig = if (m.isDeferred) null else getGenericSignature(m, module);
+
       /** Forwarders must not be marked final, as the JVM will not allow
        *  redefinition of a final static method, and we don't know what classes
        *  might be subclassing the companion class.  See SI-4827.
@@ -800,13 +820,19 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
         mkArray(paramNames))
 
       addRemoteExceptionAnnot(isRemoteClass, mirrorMethod.isPublic, m)
-      // only add generic signature if the method is concrete; bug #1745
-      if (!m.isDeferred) { addGenericSignature(mirrorMethod, m, module) }
+
+      // typestate: entering mode with valid call sequences:
+      //   [ visitAnnotationDefault ] ( visitAnnotation | visitParameterAnnotation | visitAttribute )*
+
+      addGenericSignature(mirrorMethod, sig)
 
       val (throws, others) = m.annotations partition (_.symbol == ThrowsClass)
       addExceptionsAttribute(mirrorMethod, throws)
       addAnnotations(mirrorMethod, others)
       addParamAnnotations(mirrorMethod, m.info.params.map(_.annotations))
+
+      // typestate: entering mode with valid call sequences:
+      //   visitCode ( visitFrame | visitXInsn | visitLabel | visitTryCatchBlock | visitLocalVariable | visitLineNumber )* visitMaxs ] visitEnd
 
       val mirrorCode = mirrorMethod.getCode().asInstanceOf[JExtendedCode]
       mirrorCode.emitGETSTATIC(moduleName,
@@ -1020,22 +1046,25 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
 
       val ifaces = getSuperInterfaces(c)
 
+      val sig = getGenericSignature(c.symbol, c.symbol.owner)
       jclass = fjbgContext.JClass(javaFlags(c.symbol),
                                   name,
                                   javaName(superClass),
                                   ifaces,
                                   c.cunit.source.toString)
 
-      // typestate: entering mode with allowed calls:
+      // typestate: entering mode with valid call sequences:
       //   [ visitSource ] [ visitOuterClass ] ( visitAnnotation | visitAttribute )*
 
       addEnclosingMethodAttribute()
 
       val ssa = scalaSignatureAddingMarker(jclass, c.symbol)
-      addGenericSignature(jclass, c.symbol, c.symbol.owner)
+
+      addGenericSignature(jclass, sig)
+
       addAnnotations(jclass, c.symbol.annotations ++ ssa)
 
-      // typestate: entering mode with allowed calls:
+      // typestate: entering mode with valid call sequences:
       //   ( visitInnerClass | visitField | visitMethod )* visitEnd
 
       if (isStaticModule(c.symbol) || serialVUID != None || isParcelableClass) {
@@ -1107,13 +1136,15 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
     def genField(f: IField) {
       debuglog("Adding field: " + f.symbol.fullName)
 
+      val sig = getGenericSignature(f.symbol, clasz.symbol)
       val jfield = jclass.addNewField(
         javaFlags(f.symbol) | javaFieldFlags(f.symbol),
         javaName(f.symbol),
         javaType(f.symbol.tpe)
       )
 
-      addGenericSignature(jfield, f.symbol, clasz.symbol)
+      addGenericSignature(jfield, sig)
+
       addAnnotations(jfield, f.symbol.annotations)
     }
 
@@ -1153,6 +1184,7 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
       if (m.symbol.isStrictFP) { flags |= ACC_STRICT   }
       if (method.native)       { flags |= ACC_NATIVE   } // native methods of objects are generated in mirror classes
 
+      val sig = getGenericSignature(m.symbol, clasz.symbol)
       jmethod = jclass.addNewMethod(flags,
                                     javaName(m.symbol),
                                     resTpe,
@@ -1162,17 +1194,21 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
       val isRemoteClass = (clasz.symbol hasAnnotation RemoteAttr)
       addRemoteExceptionAnnot(isRemoteClass, jmethod.isPublic, m.symbol)
 
-      // typestate: entering mode with allowed calls:
+      // typestate: entering mode with valid call sequences:
       //   [ visitAnnotationDefault ] ( visitAnnotation | visitParameterAnnotation | visitAttribute )*
 
-      addGenericSignature(jmethod, m.symbol, clasz.symbol)
+      addGenericSignature(jmethod, sig)
+
       val (excs, others) = m.symbol.annotations partition (_.symbol == ThrowsClass)
       addExceptionsAttribute(jmethod, excs)
       addAnnotations(jmethod, others)
       addParamAnnotations(jmethod, m.params.map(_.sym.annotations))
 
-      // typestate: entering mode with allowed calls:
+      // typestate: entering mode with valid call sequences:
       //   visitCode ( visitFrame | visitXInsn | visitLabel | visitTryCatchBlock | visitLocalVariable | visitLineNumber )* visitMaxs ] visitEnd
+      // In addition, the visitXInsn and visitLabel methods must be called in the sequential order of the bytecode instructions of the visited code,
+      // visitTryCatchBlock must be called before the labels passed as arguments have been visited, and
+      // the visitLocalVariable and visitLineNumber methods must be called after the labels passed as arguments have been visited.
 
       val hasCodeAttribute = (!jmethod.isAbstract() && !method.native)
       if (hasCodeAttribute) {
