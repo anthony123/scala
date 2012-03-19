@@ -303,14 +303,15 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
      *    object C
      *  }
      *
-     *  then method will return NoSymbol for A, the same symbol for A.B (corresponding to A$B class) and A$C$ symbol
-     *  for A.C.
+     *  then method will return:
+     *    NoSymbol for A,
+     *    the same symbol for A.B (corresponding to A$B class), and
+     *    A$C$ symbol for A.C.
      */
     def innerClassSymbolFor(s: Symbol): Symbol =
       if (s.isClass) s else if (s.isModule) s.moduleClass else NoSymbol
 
-    /** Return the a name of this symbol that can be used on the Java
-     *  platform.  It removes spaces from names.
+    /** Return the a name of this symbol that can be used on the Java platform.  It removes spaces from names.
      *
      *  Special handling:
      *    scala.Nothing erases to scala.runtime.Nothing$
@@ -319,8 +320,8 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
      *  This is needed because they are not real classes, and they mean
      *  'abrupt termination upon evaluation of that expression' or null respectively.
      *  This handling is done already in GenICode, but here we need to remove
-     *  references from method signatures to these types, because such classes can
-     *  not exist in the classpath: the type checker will be very confused.
+     *  references from method signatures to these types, because such classes
+     *  cannot exist in the classpath: the type checker will be very confused.
      */
     def javaName(sym: Symbol): String = {
 
@@ -395,7 +396,10 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
 
     // -----------------------------------------------------------------------------------------
     // Custom attribute (JVMS 4.7.1) "ScalaSig" used as marker only
-    // (i.e., the pickle is contained in a custom annotation, see `addAnnotations()`, and TODO SIP).
+    // i.e., the pickle is contained in a custom annotation, see:
+    //   (1) `addAnnotations()`,
+    //   (2) SID # 10 (draft) - Storage of pickled Scala signatures in class files, http://www.scala-lang.org/sid/10
+    //   (3) SID # 5 - Internals of Scala Annotations, http://www.scala-lang.org/sid/5
     // That annotation in turn is not related to `addGenericSignature()` (JVMS 4.7.9)
     // other than both ending up encoded as attributes (JVMS 4.7)
     // (with the caveat that the "ScalaSig" attribute is associated to some classes,
@@ -803,11 +807,7 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
       ( CASE | SPECIALIZED | LIFTED | PROTECTED | STATIC | EXPANDEDNAME | BridgeAndPrivateFlags )
     }
 
-    /** Add a forwarder for method m.
-     *
-     *  Used only from addForwarders().
-     *
-     * */
+    /** Add a forwarder for method m. Used only from addForwarders(). */
     private def addForwarder(isRemoteClass: Boolean, jclass: JClass, module: Symbol, m: Symbol) {
       val moduleName     = javaName(module)
       val methodInfo     = module.thisType.memberInfo(m)
@@ -818,17 +818,16 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
         if (m.isVarargsMethod) ACC_VARARGS else 0
       )
 
-      // only add generic signature if the method is concrete; bug #1745
       // TODO needed? for(ann <- m.annotations) { ann.symbol.initialize }
-      val jgensig = if (m.isDeferred) null else getGenericSignature(m, module);
+      val jgensig = if (m.isDeferred) null else getGenericSignature(m, module); // only add generic signature if method concrete; bug #1745
       val isJMethodPublic = ((flags & JAccessFlags.ACC_PUBLIC) != 0) // tautologically true because of the PublicStatic above
       addRemoteExceptionAnnot(isRemoteClass, isJMethodPublic, m)
       val (throws, others) = m.annotations partition (_.symbol == ThrowsClass)
       val thrownExceptions: List[String] = getExceptions(throws)
 
-      /** Forwarders must not be marked final, as the JVM will not allow
-       *  redefinition of a final static method, and we don't know what classes
-       *  might be subclassing the companion class.  See SI-4827.
+      /** Forwarders must not be marked final,
+       *  as the JVM will not allow redefinition of a final static method,
+       *  and we don't know what classes might be subclassing the companion class.  See SI-4827.
        */
       val mirrorMethod = jclass.addNewMethod(
         flags,
@@ -904,9 +903,8 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
     self: JPlainBuilder =>
 
     /** From the reference documentation of the Android SDK:
-     *  The `Parcelable` interface identifies classes whose instances can be
-     *  written to and restored from a `Parcel`. Classes implementing the
-     *  `Parcelable` interface must also have a static field called `CREATOR`,
+     *  The `Parcelable` interface identifies classes whose instances can be written to and restored from a `Parcel`.
+     *  Classes implementing the `Parcelable` interface must also have a static field called `CREATOR`,
      *  which is an object implementing the `Parcelable.Creator` interface.
      */
     private val androidFieldName = newTermName("CREATOR")
@@ -960,8 +958,10 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
     val toStringType      = new JMethodType(JAVA_LANG_STRING, JType.EMPTY_ARRAY)  // TODO use ASMType.getMethodType
     val arrayCloneType    = new JMethodType(JAVA_LANG_OBJECT, JType.EMPTY_ARRAY)
 
-    /** Map from type kinds to the Java reference types. It is used for
-     *  loading class constants. @see Predef.classOf.
+    /** Map from type kinds to the Java reference types.
+     *  It is used to push class literals onto the operand stack.
+     *  @see Predef.classOf
+     *  @see genConstant()
      */
     private val classLiteral = immutable.Map[TypeKind, JObjectType](
       UNIT   -> new JObjectType("java.lang.Void"),
@@ -1462,9 +1462,8 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
             }
           }
 
-          /* Add the last interval. Note that since the intervals are
-           * open-ended to the right, we have to give a number past the actual
-           * code!
+          /* Add the last interval. Note that since the intervals are open-ended to the right,
+           * we have to give a number past the actual code!
            */
           if (start >= 0) {
             ranges ::= ((start, jcode.getPC()))
@@ -1590,8 +1589,7 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
 
             case lf @ LOAD_FIELD(field, isStatic) =>
               var owner = javaName(lf.hostClass)
-              debuglog("LOAD_FIELD with owner: " + owner +
-                    " flags: " + Flags.flagsToString(field.owner.flags))
+              debuglog("LOAD_FIELD with owner: " + owner + " flags: " + Flags.flagsToString(field.owner.flags))
               val fieldJName = javaName(field)
               val fieldJType = javaType(field)
               if (isStatic) jcode.emitGETSTATIC(owner, fieldJName, fieldJType)
