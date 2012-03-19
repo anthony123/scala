@@ -191,7 +191,12 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
 
       bytecodeWriter.close()
       classes.clear()
-      javaNameCache.clear()
+
+      /* don't javaNameCache.clear() because that causes the following tests to fail:
+       *   test/files/run/macro-repl-dontexpand.scala
+       *   test/files/run/repl-exceptions.scala
+       *   test/files/jvm/interpreter.scala
+       */
     }
   }
 
@@ -620,7 +625,7 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
       // TODO ASM's CheckClassAdapter can be used to perform this check (without resort to SunSignatureParser)
       // TODO it delegates to one of CheckMethodAdapter.{ checkClassSignature(), checkMethodSignature(), checkFieldSignature() }
       // TODO All those checks (including SunSignatureParser's) seem to be syntactic only in nature.
-      // TODO CheckClassAdapter lives in asm-util.jar (merely 37KB)
+      // TODO CheckClassAdapter lives in asm-util.jar (that's a mere 37KB)
 
       /** Since we're using a sun internal class for signature validation,
        *  we have to allow for it not existing or otherwise malfunctioning:
@@ -2141,10 +2146,17 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
 
       log("Dumping mirror class for '%s'".format(mirrorClass.getName))
 
+      // typestate: entering mode with valid call sequences:
+      //   [ visitSource ] [ visitOuterClass ] ( visitAnnotation | visitAttribute )*
+
       val ssa = scalaSignatureAddingMarker(mirrorClass, modsym.companionSymbol)
       addAnnotations(mirrorClass, modsym.annotations ++ ssa)
 
       val isRemoteClass = (modsym hasAnnotation RemoteAttr)
+
+      // typestate: entering mode with valid call sequences:
+      //   ( visitInnerClass | visitField | visitMethod )* visitEnd
+
       addForwarders(isRemoteClass, mirrorClass, modsym)
 
       addInnerClasses(modsym, mirrorClass)
