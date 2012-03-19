@@ -622,10 +622,9 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
 
       val sig = jsOpt.get
 
-      // TODO ASM's CheckClassAdapter can be used to perform this check (without resort to SunSignatureParser)
-      // TODO it delegates to one of CheckMethodAdapter.{ checkClassSignature(), checkMethodSignature(), checkFieldSignature() }
-      // TODO All those checks (including SunSignatureParser's) seem to be syntactic only in nature.
-      // TODO CheckClassAdapter lives in asm-util.jar (that's a mere 37KB)
+      // TODO Instead of scala.tools.reflect.SigParser (frontend to sun.reflect.generics.parser.SignatureParser)
+      // TODO ASM's CheckMethodAdapter.{ checkClassSignature(), checkMethodSignature(), checkFieldSignature() }
+      // TODO can be used instead. All seem to be syntactic only. CheckMethodAdapter lives in asm-util.jar (which weighs 37KB)
 
       /** Since we're using a sun internal class for signature validation,
        *  we have to allow for it not existing or otherwise malfunctioning:
@@ -1061,7 +1060,11 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
       // typestate: entering mode with valid call sequences:
       //   [ visitSource ] [ visitOuterClass ] ( visitAnnotation | visitAttribute )*
 
-      addEnclosingMethodAttribute()
+      val enclM = getEnclosingMethodAttribute()
+      if(enclM != null) {
+        val EnclMethodEntry(className, methodName, methodType) = enclM
+        jclass addAttribute fjbgContext.JEnclosingMethodAttribute(jclass, className, methodName, methodType)
+      }
 
       val ssa = scalaSignatureAddingMarker(jclass, c.symbol)
 
@@ -1109,17 +1112,32 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
 
     }
 
-    private def addEnclosingMethodAttribute() { // JVMS 4.7.7
+    /**
+     * @param owner internal name of the enclosing class of the class.
+     *
+     * @param name the name of the method that contains the class, or
+     *        `null` if the class is not enclosed in a method of its enclosing class.
+
+     * @param desc the descriptor of the method that contains the class, or
+     *        `null` if the class is not enclosed in a method of its enclosing class.
+     */
+    case class EnclMethodEntry(owner: String, name: String, desc: JMethodType)
+
+    /**
+     * @return null if the current class is not internal to a method
+     *
+     * Quoting from JVMS 4.7.7 The EnclosingMethod Attribute
+     *   A class must have an EnclosingMethod attribute if and only if it is a local class or an anonymous class.
+     *   A class may have no more than one EnclosingMethod attribute.
+     *
+     */
+    private def getEnclosingMethodAttribute(): EnclMethodEntry = { // JVMS 4.7.7
+      var res: EnclMethodEntry = null
       val clazz = clasz.symbol
       val sym = clazz.originalEnclosingMethod
       if (sym.isMethod) {
         debuglog("enclosing method for %s is %s (in %s)".format(clazz, sym, sym.enclClass))
-        jclass addAttribute fjbgContext.JEnclosingMethodAttribute(
-          jclass,
-          javaName(sym.enclClass),
-          javaName(sym),
-          javaType(sym)
-        )
+        res = EnclMethodEntry(javaName(sym.enclClass), javaName(sym), javaType(sym).asInstanceOf[JMethodType])
       } else if (clazz.isAnonymousClass) {
         val enclClass = clazz.rawowner
         assert(enclClass.isClass, enclClass)
@@ -1128,14 +1146,11 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
           log("Ran out of room looking for an enclosing method for %s: no constructor here.".format(enclClass, clazz))
         } else {
           debuglog("enclosing method for %s is %s (in %s)".format(clazz, sym, enclClass))
-          jclass addAttribute fjbgContext.JEnclosingMethodAttribute(
-            jclass,
-            javaName(enclClass),
-            javaName(sym),
-            javaType(sym).asInstanceOf[JMethodType]
-          )
+          res = EnclMethodEntry(javaName(enclClass), javaName(sym), javaType(sym).asInstanceOf[JMethodType])
         }
       }
+
+      res
     }
 
     def genField(f: IField) {
