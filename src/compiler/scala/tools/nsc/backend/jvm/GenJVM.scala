@@ -11,7 +11,6 @@ import scala.collection.{ mutable, immutable }
 import scala.reflect.internal.pickling.{ PickleFormat, PickleBuffer }
 import scala.tools.reflect.SigParser
 import scala.tools.nsc.symtab._
-import scala.tools.nsc.util.{ SourceFile, NoSourceFile }
 import scala.reflect.internal.ClassfileConstants._
 import ch.epfl.lamp.fjbg._
 import JAccessFlags._
@@ -212,6 +211,10 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
 
   private def mkFlags(args: Int*) = args.foldLeft(0)(_ | _)
 
+  @inline final private def hasPublicBitSet(flags: Int) = ((flags & JAccessFlags.ACC_PUBLIC) != 0)
+
+  @inline final private def isRemote(s: Symbol) = (s hasAnnotation RemoteAttr)
+
   /**
    * Return the Java modifiers for the given symbol.
    * Java modifiers for classes:
@@ -262,7 +265,7 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
   def javaFieldFlags(sym: Symbol) = {
     mkFlags(
       if (sym hasAnnotation TransientAttr) ACC_TRANSIENT else 0,
-      if (sym hasAnnotation VolatileAttr) ACC_VOLATILE else 0,
+      if (sym hasAnnotation VolatileAttr)  ACC_VOLATILE  else 0,
       if (sym.isMutable) 0 else ACC_FINAL
     )
   }
@@ -282,7 +285,7 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
     /** Specialized array conversion to prevent calling
      *  java.lang.reflect.Array.newInstance via TraversableOnce.toArray
      */
-    def mkArray(xs: Traversable[JType]): Array[JType] = { val a = new Array[JType](xs.size); xs.copyToArray(a); a }
+    def mkArray(xs: Traversable[JType]):  Array[JType]  = { val a = new Array[JType](xs.size);  xs.copyToArray(a); a }
     def mkArray(xs: Traversable[String]): Array[String] = { val a = new Array[String](xs.size); xs.copyToArray(a); a }
 
     // -----------------------------------------------------------------------------------------
@@ -595,13 +598,6 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
       nannots
     }
 
-    /**Run the signature parser to catch bogus signatures. */
-    def isValidSignature(sym: Symbol, sig: String) = (
-      if (sym.isMethod) SigParser verifyMethod sig
-      else if (sym.isTerm) SigParser verifyType sig
-      else SigParser verifyClass sig
-    )
-
     // @M don't generate java generics sigs for (members of) implementation
     // classes, as they are monomorphic (TODO: ok?)
     private def needsGenericSignature(sym: Symbol) = !(
@@ -624,6 +620,7 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
      *   - otherwise the signature in question
      */
     def getGenericSignature(sym: Symbol, owner: Symbol): String = {
+
       if (!needsGenericSignature(sym)) { return null }
 
       val memberTpe = beforeErasure(owner.thisType.memberInfo(sym))
@@ -638,20 +635,30 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
       // TODO Instead of scala.tools.reflect.SigParser (frontend to sun.reflect.generics.parser.SignatureParser)
       // TODO ASM's CheckMethodAdapter.{ checkClassSignature(), checkMethodSignature(), checkFieldSignature() }
       // TODO can be used instead. All seem to be syntactic only. CheckMethodAdapter lives in asm-util.jar (which weighs 37KB)
+      // TODO SigParser is also used in Erasure. The ASM-based version could replace it altogether.
 
       /** Since we're using a sun internal class for signature validation,
        *  we have to allow for it not existing or otherwise malfunctioning:
        *  in which case we treat every signature as valid.  Medium term we
        *  should certainly write independent signature validation.
        */
-      if (settings.Xverify.value && SigParser.isParserAvailable && !isValidSignature(sym, sig)) {
-        getCurrentCUnit().warning(sym.pos,
-            """|compiler bug: created invalid generic signature for %s in %s
-               |signature: %s
-               |if this is reproducible, please report bug at http://lampsvn.epfl.ch/trac/scala
-            """.trim.stripMargin.format(sym, sym.owner.skipPackageObject.fullName, sig))
-        return null
+      if (settings.Xverify.value && SigParser.isParserAvailable) {
+        // Run the signature parser to catch bogus signatures.
+        val isValidSignature = (
+          if (sym.isMethod)    SigParser verifyMethod sig
+          else if (sym.isTerm) SigParser verifyType   sig
+          else                 SigParser verifyClass  sig
+        )
+        if(!isValidSignature) {
+          getCurrentCUnit().warning(sym.pos,
+              """|compiler bug: created invalid generic signature for %s in %s
+                 |signature: %s
+                 |if this is reproducible, please report bug at http://issues.scala-lang.org/
+              """.trim.stripMargin.format(sym, sym.owner.skipPackageObject.fullName, sig))
+          return null
+        }
       }
+
       if ((settings.check.value contains "genjvm")) {
         val normalizedTpe = beforeErasure(erasure.prepareSigMap(memberTpe))
         val bytecodeTpe = owner.thisType.memberInfo(sym)
@@ -662,7 +669,7 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
                  |original type: %s
                  |normalized type: %s
                  |erasure type: %s
-                 |if this is reproducible, please report bug at http://lampsvn.epfl.ch/trac/scala
+                 |if this is reproducible, please report bug at http://issues.scala-lang.org/
               """.trim.stripMargin.format(sym, sym.owner.skipPackageObject.fullName, sig, memberTpe, normalizedTpe, bytecodeTpe))
            return null
         }
@@ -753,13 +760,13 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
           innerClassBuffer += m
       }
 
-      val allInners = innerClassBuffer.toList
+      val allInners: List[Symbol] = innerClassBuffer.toList
       if (allInners.nonEmpty) {
         debuglog(csym.fullName('.') + " contains " + allInners.size + " inner classes.")
         val innerClassesAttr = jclass.getInnerClasses()
         // sort them so inner classes succeed their enclosing class
         // to satisfy the Eclipse Java compiler
-        for (innerSym <- allInners sortBy (_.name.length)) { // TODO why not sortBy (_.name) ??
+        for (innerSym <- allInners sortBy (_.name.length)) { // TODO why not sortBy (_.name.toString()) ??
           val flags = {
             val staticFlag = if (innerSym.rawowner.hasModuleFlag) ACC_STATIC else 0
             (javaFlags(innerSym) | staticFlag) & INNER_CLASSES_FLAGS
@@ -786,7 +793,7 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
     def addRemoteExceptionAnnot(isRemoteClass: Boolean, isJMethodPublic: Boolean, meth: Symbol) {
       val needsAnnotation = (
         (  isRemoteClass ||
-           (meth hasAnnotation RemoteAttr) && isJMethodPublic
+           isRemote(meth) && isJMethodPublic
         ) && !(meth.throwsAnnotations contains RemoteExceptionClass)
       )
       if (needsAnnotation) {
@@ -820,8 +827,7 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
 
       // TODO needed? for(ann <- m.annotations) { ann.symbol.initialize }
       val jgensig = if (m.isDeferred) null else getGenericSignature(m, module); // only add generic signature if method concrete; bug #1745
-      val isJMethodPublic = ((flags & JAccessFlags.ACC_PUBLIC) != 0) // tautologically true because of the PublicStatic above
-      addRemoteExceptionAnnot(isRemoteClass, isJMethodPublic, m)
+      addRemoteExceptionAnnot(isRemoteClass, hasPublicBitSet(flags), m)
       val (throws, others) = m.annotations partition (_.symbol == ThrowsClass)
       val thrownExceptions: List[String] = getExceptions(throws)
 
@@ -1089,12 +1095,12 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
       if (isStaticModule(c.symbol) || serialVUID != None || isParcelableClass) {
 
         if (isStaticModule(c.symbol)) { addModuleInstanceField }
-        addStaticInit(jclass, c.lookupStaticCtor)
+        addStaticInit(c.lookupStaticCtor)
 
       } else {
 
         for (constructor <- c.lookupStaticCtor) {
-          addStaticInit(jclass, Some(constructor))
+          addStaticInit(Some(constructor))
         }
         val skipStaticForwarders = (c.symbol.isInterface || settings.noForwarders.value)
         if (!skipStaticForwarders) {
@@ -1107,8 +1113,7 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
             }
             if (isCandidateForForwarders) {
               log("Adding static forwarders from '%s' to implementations in '%s'".format(c.symbol, lmoc))
-              val isRemoteClass = (clasz.symbol hasAnnotation RemoteAttr)
-              addForwarders(isRemoteClass, jclass, lmoc.moduleClass)
+              addForwarders(isRemote(clasz.symbol), jclass, lmoc.moduleClass)
             }
           }
         }
@@ -1210,16 +1215,16 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
       if (m.symbol.isClassConstructor)
         resTpe = JType.VOID
 
-      var flags = javaFlags(m.symbol)
-      if (jclass.isInterface)  { flags |= ACC_ABSTRACT }
-      if (m.symbol.isStrictFP) { flags |= ACC_STRICT   }
-      if (method.native)       { flags |= ACC_NATIVE   } // native methods of objects are generated in mirror classes
+      val flags = mkFlags(
+        javaFlags(m.symbol),
+        if (jclass.isInterface)  ACC_ABSTRACT else 0,
+        if (m.symbol.isStrictFP) ACC_STRICT   else 0,
+        if (method.native)       ACC_NATIVE   else 0 // native methods of objects are generated in mirror classes
+      )
 
       // TODO needed? for(ann <- m.symbol.annotations) { ann.symbol.initialize }
       val jgensig = getGenericSignature(m.symbol, clasz.symbol)
-      val isRemoteClass = (clasz.symbol hasAnnotation RemoteAttr)
-      val isJMethodPublic = ((flags & JAccessFlags.ACC_PUBLIC) != 0)
-      addRemoteExceptionAnnot(isRemoteClass, isJMethodPublic, m.symbol)
+      addRemoteExceptionAnnot(isRemote(clasz.symbol), hasPublicBitSet(flags), m.symbol)
       val (excs, others) = m.symbol.annotations partition (_.symbol == ThrowsClass)
       val thrownExceptions: List[String] = getExceptions(excs)
 
@@ -1295,12 +1300,12 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
     }
 
     /* Typestate: should be called before emitting fields (because it invokes addCreatorCode() which adds an IField to the current IClass). */
-    def addStaticInit(cls: JClass, mopt: Option[IMethod]) {
-      val clinitMethod = cls.addNewMethod(PublicStatic,
-                                          "<clinit>",
-                                          JType.VOID,
-                                          JType.EMPTY_ARRAY,
-                                          new Array[String](0))
+    def addStaticInit(mopt: Option[IMethod]) {
+      val clinitMethod = jclass.addNewMethod(PublicStatic,
+                                             "<clinit>",
+                                             JType.VOID,
+                                             JType.EMPTY_ARRAY,
+                                             new Array[String](0))
       val clinit = clinitMethod.getCode().asInstanceOf[JExtendedCode]
 
       mopt match {
@@ -1336,15 +1341,15 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
        	  genCode(m)
 
        	case None =>
-          legacyStaticInitializer(cls, clinit)
+          legacyStaticInitializer(clinit)
       }
     }
 
     /* used only from addStaticInit() */
-    private def legacyStaticInitializer(cls: JClass, clinit: JExtendedCode) {
+    private def legacyStaticInitializer(clinit: JExtendedCode) {
       if (isStaticModule(clasz.symbol)) {
-        clinit emitNEW cls.getName()
-        clinit.emitINVOKESPECIAL(cls.getName(),
+        clinit emitNEW jclass.getName()
+        clinit.emitINVOKESPECIAL(jclass.getName(),
                                  JMethod.INSTANCE_CONSTRUCTOR_NAME,
                                  JMethodType.ARGLESS_VOID_FUNCTION)
       }
@@ -2180,12 +2185,10 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
       val ssa = scalaSignatureAddingMarker(mirrorClass, modsym.companionSymbol)
       addAnnotations(mirrorClass, modsym.annotations ++ ssa)
 
-      val isRemoteClass = (modsym hasAnnotation RemoteAttr)
-
       // typestate: entering mode with valid call sequences:
       //   ( visitInnerClass | visitField | visitMethod )* visitEnd
 
-      addForwarders(isRemoteClass, mirrorClass, modsym)
+      addForwarders(isRemote(modsym), mirrorClass, modsym)
 
       addInnerClasses(modsym, mirrorClass)
       bytecodeWriter.writeClass("" + modsym.name, mirrorClass, modsym)
