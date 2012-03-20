@@ -1274,7 +1274,10 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
           }
         }
 
-        for (local <- m.locals if ! m.params.contains(local)) {
+
+        assert( m.locals forall { local => (m.params contains local) == local.arg }, m.locals )
+
+        for (local <- m.locals if !local.arg) {
           debuglog("add local var: " + local)
           jmethod.addNewLocalVariable(javaType(local.kind), javaName(local.sym))
         }
@@ -2036,7 +2039,7 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
       // genCode starts here
       genBlocks(linearization)
 
-      if (this.method.exh != Nil) { genExceptionHandlers() }
+      if (this.method.exh.nonEmpty) { genExceptionHandlers() }
 
     } // end of BytecodeGenerator.genCode()
 
@@ -2127,8 +2130,8 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
     }
 
     /**
-     * Compute the indexes of each local variable of the given
-     * method. *Does not assume the parameters come first!*
+     * Compute the indexes of each local variable of the given method.
+     * *Does not assume the parameters come first!*
      *
      * Invoked only from genMethod().
      *
@@ -2142,7 +2145,7 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
         idx += sizeOf(l.kind)
       }
 
-      for (l <- m.locals if !(m.params contains l)) {
+      for (l <- m.locals if !l.arg) {
         debuglog("Index value for " + l + "{" + l.## + "}: " + idx)
         l.index = idx
         idx += sizeOf(l.kind)
