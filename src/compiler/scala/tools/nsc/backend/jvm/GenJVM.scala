@@ -1441,12 +1441,31 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
         case x :: y :: ys => nextBlock = y; genBlock(x); genBlocks(y :: ys)
       }
 
-      /**Generate exception handlers for the current method. */
+      /**Generate exception handlers for the current method.
+       *
+       * Quoting from the JVMS 4.7.3 The Code Attribute
+       * The items of the Code_attribute structure are as follows:
+       *   . . .
+       *   exception_table[]
+       *     Each entry in the exception_table array describes one
+       *     exception handler in the code array. The order of the handlers in
+       *     the exception_table array is significant.
+       *     Each exception_table entry contains the following four items:
+       *       start_pc, end_pc:
+       *         ... The value of end_pc either must be a valid index into
+       *         the code array of the opcode of an instruction or must be equal to code_length,
+       *         the length of the code array.
+       *       handler_pc:
+       *         The value of the handler_pc item indicates the start of the exception handler
+       *       catch_type:
+       *         ... If the value of the catch_type item is zero,
+       *         this exception handler is called for all exceptions.
+       *         This is used to implement finally
+       */
       def genExceptionHandlers() {
 
         /** Return a list of pairs of intervals where the handler is active.
-         *  The intervals in the list have to be inclusive in the beginning and
-         *  exclusive in the end: [start, end).
+         *  The intervals in the list are inclusive in the beginning and exclusive in the end: [start, end).
          */
         def ranges(e: ExceptionHandler): List[(Int, Int)] = {
           var covered = e.covered
@@ -1489,8 +1508,8 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
           if (p._1 < p._2) {
             debuglog("Adding exception handler " + e + "at block: " + e.startBlock + " for " + method +
                   " from: " + p._1 + " to: " + p._2 + " catching: " + e.cls);
-            val cls = if (e.cls == NoSymbol || e.cls == ThrowableClass) null
-                      else javaName(e.cls)
+            val cls: String = if (e.cls == NoSymbol || e.cls == ThrowableClass) null
+                              else javaName(e.cls)
             jcode.addExceptionHandler(p._1, p._2,
                                       labels(e.startBlock).getAnchor(),
                                       cls)
