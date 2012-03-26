@@ -13,6 +13,7 @@ import scala.tools.nsc.symtab._
 import scala.tools.nsc.io.AbstractFile
 
 import org.objectweb.asm
+import asm.Label
 
 /**
  *  @author  Iulian Dragos (version 1.0, FJBG-based implementation)
@@ -1794,17 +1795,22 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
 
       val labels: collection.Map[BasicBlock, asm.Label] = mutable.HashMap(linearization map (_ -> new asm.Label()) : _*)
 
-      // maps a BasicBlock to the one following it in the linearization
-      val linNext: collection.Map[BasicBlock, BasicBlock] = {
-        val result = mutable.HashMap.empty[BasicBlock, BasicBlock]
+      val onePastLast = new asm.Label // token for the mythical instruction past the last instruction in the method being emitted
+
+      // maps a BasicBlock b to the Label that corresponds to b's successor in the linearization. The last BasicBlock is mapped to the onePastLast label.
+      val linNext: collection.Map[BasicBlock, asm.Label] = {
+        val result = mutable.HashMap.empty[BasicBlock, asm.Label]
         var rest = linearization
         var prev = rest.head
         rest = rest.tail
         while(!rest.isEmpty) {
-          result += (prev -> rest.head)
+          result += (prev -> labels(rest.head))
           prev = rest.head
           rest = rest.tail
         }
+        assert(!result.contains(prev))
+        result += (prev -> onePastLast)
+
         result
       }
 
@@ -1872,7 +1878,6 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
             }
             if(start ne null) {
               // find interval end
-              assert(rest.nonEmpty, e)
               var end = start // for the time being
               while(!rest.isEmpty && (e.covered(rest.head))) {
                 end  = rest.head
@@ -1892,7 +1897,7 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
                    " from: " + p.start + " to: " + p.end + " catching: " + e.cls);
           val cls: String = if (e.cls == NoSymbol || e.cls == ThrowableClass) null
                             else javaName(e.cls)
-          jmethod.visitTryCatchBlock(labels(p.start), labels(linNext(p.end)),
+          jmethod.visitTryCatchBlock(labels(p.start), linNext(p.end),
                                      labels(e.startBlock), cls)
         }
       } // end of genCode()'s genExceptionHandlers()
@@ -2423,14 +2428,14 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
           jmethod.visitLocalVariable(name, descr, null, start, end, indexOf(local))
         }
         if (!isStatic) {
-          val onePastLast = new asm.Label
-          jmethod.visitLabel(onePastLast)
           jmethod.visitLocalVariable("this", thisDescr, null, labels(m.startBlock), onePastLast, 0)
         }
       }
 
       // genCode starts here
       genBlocks(linearization)
+
+      jmethod.visitLabel(onePastLast)
 
       if (this.method.exh.nonEmpty) { genExceptionHandlers() }
 
