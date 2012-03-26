@@ -1588,6 +1588,31 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
           }
       }
 
+      def newarray(elem: TypeKind) {
+        if(elem.isRefOrArrayType) {
+          jmethod.visitTypeInsn(Opcodes.ANEWARRAY, javaType(elem).getInternalName)
+        } else {
+          val rand = {
+            if(elem.isIntSizedType) {
+              (elem: @unchecked) match {
+                case BOOL   => Opcodes.T_BOOLEAN
+                case BYTE   => Opcodes.T_BYTE
+                case SHORT  => Opcodes.T_SHORT
+                case CHAR   => Opcodes.T_CHAR
+                case INT    => Opcodes.T_INT
+              }
+            } else {
+              (elem: @unchecked) match {
+                case LONG   => Opcodes.T_LONG
+                case FLOAT  => Opcodes.T_FLOAT
+                case DOUBLE => Opcodes.T_DOUBLE
+              }
+            }
+          }
+          jmethod.visitIntInsn(Opcodes.NEWARRAY, rand)
+        }
+      }
+
 
       @inline def load( idx: Int, tk: TypeKind) { emitVarInsn(Opcodes.ILOAD,  idx, tk) }
       @inline def store(idx: Int, tk: TypeKind) { emitVarInsn(Opcodes.ISTORE, idx, tk) }
@@ -2011,9 +2036,7 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
               val className = javaName(cls)
               jmethod.visitTypeInsn(Opcodes.NEW, className)
 
-            case CREATE_ARRAY(elem, 1) =>
-              val opc = (if(elem.isRefOrArrayType) Opcodes.ANEWARRAY else Opcodes.NEWARRAY)
-              jmethod.visitTypeInsn(opc, javaType(elem).getInternalName)
+            case CREATE_ARRAY(elem, 1) => jcode newarray elem
 
             case CREATE_ARRAY(elem, dims) =>
               jmethod.visitMultiANewArrayInsn(descriptor(ArrayN(elem, dims)), dims)
