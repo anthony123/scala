@@ -1456,7 +1456,11 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
           jmethod.visitEnd()
 
        	case None =>
+          clinitMethod.visitCode()
           legacyStaticInitializer(clinitMethod)
+          clinitMethod.visitMaxs(0, 0) // just to follow protocol, dummy arguments
+          clinitMethod.visitEnd()
+
       }
     }
 
