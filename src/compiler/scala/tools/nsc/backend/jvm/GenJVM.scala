@@ -320,7 +320,6 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
     val EMPTY_STRING_ARRAY = Array.empty[String]
 
     val mdesc_arglessvoid = "()V"
-    val tdesc_jlString    = JAVA_LANG_STRING.getDescriptor
 
     // -----------------------------------------------------------------------------------------
     // factory methods
@@ -546,7 +545,7 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
      *        (indicating that a scala-signature-annotation aka pickle is to be found in another file).
      *
      *
-     *  @param jclass The class file that is being readied.
+     *  @param jclassName The class file that is being readied.
      *  @param sym    The symbol for which the signature has been entered in the symData map.
      *                This is different than the symbol
      *                that is being generated in the case of a mirror class.
@@ -1129,8 +1128,15 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
     }
 
     var clasz:    IClass = _           // this var must be assigned only by genClass()
-    var jclass:   asm.ClassWriter = _  // this var must be assigned only by genClass()
-    var thisName: String = _           // this var must be assigned only by genClass()
+    var jclass:   asm.ClassWriter = _  // the classfile being emitted
+    var thisName: String = _           // the internal name of jclass
+
+    def thisDescr: String = {
+      assert(thisName != null, "thisDescr invoked too soon.")
+      val res = asm.Type.getObjectType(thisName).getDescriptor
+
+      res
+    }
 
     def getCurrentCUnit(): CompilationUnit = { clasz.cunit }
 
@@ -1392,7 +1398,7 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
       val fv =
         jclass.visitField(PublicStaticFinal, // TODO confirm whether we really don't want ACC_SYNTHETIC nor ACC_DEPRECATED
                           strMODULE_INSTANCE_FIELD,
-                          thisName,
+                          thisDescr,
                           null, // no java-generic-signature
                           null  // no initial value
         )
@@ -1854,7 +1860,7 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
               jname == INSTANCE_CONSTRUCTOR_NAME) {
             isModuleInitialized = true
             jmethod.visitVarInsn(asm.Opcodes.ALOAD, 0)
-            jmethod.visitFieldInsn(asm.Opcodes.PUTSTATIC, thisName, strMODULE_INSTANCE_FIELD, thisName)
+            jmethod.visitFieldInsn(asm.Opcodes.PUTSTATIC, thisName, strMODULE_INSTANCE_FIELD, thisDescr)
           }
         }
 
@@ -1953,7 +1959,7 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
 
             case CREATE_ARRAY(elem, 1) =>
               val opc = (if(elem.isRefOrArrayType) Opcodes.ANEWARRAY else Opcodes.NEWARRAY)
-              jmethod.visitTypeInsn(opc, javaType(elem).getDescriptor)
+              jmethod.visitTypeInsn(opc, javaType(elem).getInternalName)
 
             case CREATE_ARRAY(elem, dims) =>
               jmethod.visitMultiANewArrayInsn(descriptor(ArrayN(elem, dims)), dims)
@@ -1965,7 +1971,7 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
                   case ARRAY(elem)    => javaArrayType(javaType(elem))
                   case _              => abort("Unknown reference type in IS_INSTANCE: " + tpe)
                 }
-              jmethod.visitTypeInsn(Opcodes.INSTANCEOF, jtyp.getDescriptor)
+              jmethod.visitTypeInsn(Opcodes.INSTANCEOF, jtyp.getInternalName)
 
             case CHECK_CAST(tpe) =>
               tpe match {
@@ -1976,8 +1982,8 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
                   }
 
                 case ARRAY(elem)    =>
-                  val descr = javaArrayType(javaType(elem)).getDescriptor
-                  jmethod.visitTypeInsn(Opcodes.CHECKCAST, descr)
+                  val iname = javaArrayType(javaType(elem)).getInternalName
+                  jmethod.visitTypeInsn(Opcodes.CHECKCAST, iname)
 
                 case _              => abort("Unknown reference type in IS_INSTANCE: " + tpe)
               }
@@ -2342,7 +2348,7 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
         if (!isStatic) {
           val onePastLast = new asm.Label
           jmethod.visitLabel(onePastLast)
-          jmethod.visitLocalVariable("this", thisName, null, labels(m.startBlock), onePastLast, 0)
+          jmethod.visitLocalVariable("this", thisDescr, null, labels(m.startBlock), onePastLast, 0)
         }
       }
 
@@ -2550,12 +2556,12 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
 
       // push the string array of field information
       constructor.visitLdcInsn(new java.lang.Integer(fieldList.length))
-      constructor.visitTypeInsn(asm.Opcodes.ANEWARRAY, tdesc_jlString)
+      constructor.visitTypeInsn(asm.Opcodes.ANEWARRAY, JAVA_LANG_STRING.getInternalName)
       push(fieldList)
 
       // push the string array of method information
       constructor.visitLdcInsn(new java.lang.Integer(methodList.length))
-      constructor.visitTypeInsn(asm.Opcodes.ANEWARRAY, tdesc_jlString)
+      constructor.visitTypeInsn(asm.Opcodes.ANEWARRAY, JAVA_LANG_STRING.getInternalName)
       push(methodList)
 
       // invoke the superclass constructor, which will do the
