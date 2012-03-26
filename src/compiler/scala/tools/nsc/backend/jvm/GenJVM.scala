@@ -705,7 +705,7 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
           // and http://docs.oracle.com/javase/tutorial/i18n/text/string.html (Byte Encodings and Strings)
           val ba: Array[Byte] = sb.encodedBytes // TODO when are all the `encodedBytes` lazy vals GC'ed?
           val s: String = new java.lang.String(ba, "UTF8")
-          av.visit(name, ba)
+          av.visit(name, s)
 
         case sb@ScalaSigBytes(bytes) if sb.isLong =>
           // see http://www.scala-lang.org/sid/10 (Storage of pickled Scala signatures in class files)
@@ -905,7 +905,7 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
 
       mirrorMethod.visitCode()
 
-      mirrorMethod.visitFieldInsn(asm.Opcodes.GETSTATIC, moduleName, strMODULE_INSTANCE_FIELD, moduleName)
+      mirrorMethod.visitFieldInsn(asm.Opcodes.GETSTATIC, moduleName, strMODULE_INSTANCE_FIELD, descriptor(module))
 
       var index = 0
       for(jparamType <- paramJavaTypes) {
@@ -1000,7 +1000,7 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
         asm.Opcodes.GETSTATIC,
         moduleName,
         strMODULE_INSTANCE_FIELD,
-        moduleName
+        asm.Type.getObjectType(moduleName).getDescriptor
       )
 
       clinit.visitMethodInsn(
