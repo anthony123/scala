@@ -321,6 +321,9 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
 
     val mdesc_arglessvoid = "()V"
 
+    val CLASS_CONSTRUCTOR_NAME    = "<clinit>"
+    val INSTANCE_CONSTRUCTOR_NAME = "<init>"
+
     // -----------------------------------------------------------------------------------------
     // factory methods
     // -----------------------------------------------------------------------------------------
@@ -1027,16 +1030,13 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
     val MIN_SWITCH_DENSITY = 0.7
 
     val StringBuilderClassName = javaName(definitions.StringBuilderClass)
-    val BoxesRunTime = "scala.runtime.BoxesRunTime"
+    val BoxesRunTime = "scala/runtime/BoxesRunTime"
 
     val StringBuilderType = asm.Type.getObjectType(StringBuilderClassName)
     val mdesc_toString    = "()Ljava/lang/String;"
     val mdesc_arrayClone  = "()Ljava/lang/Object;"
 
     val tdesc_long        = asm.Type.LONG_TYPE.getDescriptor // ie. "J"
-
-    val CLASS_CONSTRUCTOR_NAME    = "<clinit>"
-    val INSTANCE_CONSTRUCTOR_NAME = "<init>"
 
     /** Map from type kinds to the Java reference types.
      *  It is used to push class literals onto the operand stack.
@@ -1413,7 +1413,7 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
 
       val clinitMethod: asm.MethodVisitor = jclass.visitMethod(
         PublicStatic, // TODO confirm whether we really don't want ACC_SYNTHETIC nor ACC_DEPRECATED
-        "<clinit>",
+        CLASS_CONSTRUCTOR_NAME,
         mdesc_arglessvoid,
         null, // no java-generic-signature
         null  // no throwable exceptions
@@ -1449,8 +1449,8 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
 
        	  method = m
        	  jmethod = clinitMethod
+          jMethodName = CLASS_CONSTRUCTOR_NAME
           jmethod.visitCode()
-          jMethodName = "<clinit>"
        	  genCode(m, false, true)
           jmethod.visitMaxs(0, 0) // just to follow protocol, dummy arguments
           jmethod.visitEnd()
@@ -1465,7 +1465,7 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
       if (isStaticModule(clasz.symbol)) {
         clinit.visitTypeInsn(asm.Opcodes.NEW, thisName)
         clinit.visitMethodInsn(asm.Opcodes.INVOKESPECIAL,
-                               thisName, "init", mdesc_arglessvoid)
+                               thisName, INSTANCE_CONSTRUCTOR_NAME, mdesc_arglessvoid)
       }
 
       serialVUID foreach { value =>
@@ -1990,7 +1990,7 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
 
             /** Special handling to access native Array.clone() */
             case call @ CALL_METHOD(definitions.Array_clone, Dynamic) =>
-              val target: String = javaType(call.targetTypeKind).getDescriptor()
+              val target: String = javaType(call.targetTypeKind).getInternalName
               jcode.invokevirtual(target, "clone", mdesc_arrayClone)
 
             case call @ CALL_METHOD(method, style) => genCallMethod(call)
@@ -2567,7 +2567,7 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
 
       val constructor = beanInfoClass.visitMethod(
         asm.Opcodes.ACC_PUBLIC,
-        "<init>",
+        INSTANCE_CONSTRUCTOR_NAME,
         mdesc_arglessvoid,
         null, // no java-generic-signature
         EMPTY_STRING_ARRAY // no throwable exceptions
@@ -2616,7 +2616,7 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
 
       // invoke the superclass constructor, which will do the
       // necessary java reflection and create Method objects.
-      constructor.visitMethodInsn(asm.Opcodes.INVOKESPECIAL, "scala/beans/ScalaBeanInfo", "<init>", conJType.getDescriptor)
+      constructor.visitMethodInsn(asm.Opcodes.INVOKESPECIAL, "scala/beans/ScalaBeanInfo", INSTANCE_CONSTRUCTOR_NAME, conJType.getDescriptor)
       constructor.visitInsn(asm.Opcodes.RETURN)
 
       constructor.visitMaxs(0, 0) // just to follow protocol, dummy arguments
