@@ -1133,9 +1133,7 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
 
     def thisDescr: String = {
       assert(thisName != null, "thisDescr invoked too soon.")
-      val res = asm.Type.getObjectType(thisName).getDescriptor
-
-      res
+      asm.Type.getObjectType(thisName).getDescriptor
     }
 
     def getCurrentCUnit(): CompilationUnit = { clasz.cunit }
@@ -1491,38 +1489,44 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
     // -----------------------------------------------------------------------------------------
 
     private def genConstant(mv: asm.MethodVisitor, const: Constant) { // TODO use JCode instead of MethodVisitor?
-      if(const.isNonUnitAnyVal) {
-        mv.visitLdcInsn(const.value)
-      } else {
-        const.tag match {
+      const.tag match {
 
-          case UnitTag    => ()
+        case BooleanTag => jcode.boolconst(const.booleanValue)
 
-          case StringTag  =>
-            assert(const.value != null, const) // TODO this invariant isn't documented in `case class Constant`
-            mv.visitLdcInsn(const.stringValue) // `stringValue` special-cases null, but not for a const with StringTag
+        case ByteTag    => jcode.iconst(const.byteValue)
+        case ShortTag   => jcode.iconst(const.shortValue)
+        case CharTag    => jcode.iconst(const.charValue)
+        case IntTag     => jcode.iconst(const.intValue)
 
-          case NullTag    => mv.visitInsn(asm.Opcodes.ACONST_NULL)
+        case LongTag    => jcode.lconst(const.longValue)
+        case FloatTag   => jcode.fconst(const.floatValue)
+        case DoubleTag  => jcode.dconst(const.doubleValue)
 
-          case ClassTag   =>
-            val kind = toTypeKind(const.typeValue)
-            val toPush: asm.Type =
-              if (kind.isValueType) classLiteral(kind)
-              else javaType(kind);
-            mv.visitLdcInsn(toPush)
+        case UnitTag    => ()
 
-          case EnumTag   =>
-            val sym = const.symbolValue
-            mv.visitFieldInsn(
-              asm.Opcodes.GETSTATIC,
-              javaName(sym.owner),
-              javaName(sym),
-              javaType(sym.tpe.underlying).getDescriptor()
-            )
+        case StringTag  =>
+          assert(const.value != null, const) // TODO this invariant isn't documented in `case class Constant`
+          mv.visitLdcInsn(const.stringValue) // `stringValue` special-cases null, but not for a const with StringTag
 
-          case _         =>
-            abort("Unknown constant value: " + const)
-        }
+        case NullTag    => mv.visitInsn(asm.Opcodes.ACONST_NULL)
+
+        case ClassTag   =>
+          val kind = toTypeKind(const.typeValue)
+          val toPush: asm.Type =
+            if (kind.isValueType) classLiteral(kind)
+            else javaType(kind);
+          mv.visitLdcInsn(toPush)
+
+        case EnumTag   =>
+          val sym = const.symbolValue
+          mv.visitFieldInsn(
+            asm.Opcodes.GETSTATIC,
+            javaName(sym.owner),
+            javaName(sym),
+            javaType(sym.tpe.underlying).getDescriptor()
+          )
+
+        case _ => abort("Unknown constant value: " + const)
       }
     }
 
@@ -1534,6 +1538,52 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
     object jcode {
 
       import asm.Opcodes;
+
+      def aconst(cst: AnyRef) {
+          if (cst == null) { jmethod.visitInsn(Opcodes.ACONST_NULL) }
+          else             { jmethod.visitLdcInsn(cst) }
+      }
+
+      @inline final def boolconst(b: Boolean) { iconst(if(b) 1 else 0) }
+
+      def iconst(cst: Int) {
+          if (cst >= -1 && cst <= 5) {
+              jmethod.visitInsn(Opcodes.ICONST_0 + cst)
+          } else if (cst >= java.lang.Byte.MIN_VALUE && cst <= java.lang.Byte.MAX_VALUE) {
+              jmethod.visitIntInsn(Opcodes.BIPUSH, cst)
+          } else if (cst >= java.lang.Short.MIN_VALUE && cst <= java.lang.Short.MAX_VALUE) {
+              jmethod.visitIntInsn(Opcodes.SIPUSH, cst)
+          } else {
+              jmethod.visitLdcInsn(new Integer(cst))
+          }
+      }
+
+      def lconst(cst: Long) {
+          if (cst == 0L || cst == 1L) {
+              jmethod.visitInsn(Opcodes.LCONST_0 + cst.asInstanceOf[Int])
+          } else {
+              jmethod.visitLdcInsn(new java.lang.Long(cst))
+          }
+      }
+
+      def fconst(cst: Float) {
+          val bits: Int = java.lang.Float.floatToIntBits(cst)
+          if (bits == 0L || bits == 0x3f800000 || bits == 0x40000000) { // 0..2
+              jmethod.visitInsn(Opcodes.FCONST_0 + cst.asInstanceOf[Int])
+          } else {
+              jmethod.visitLdcInsn(new java.lang.Float(cst))
+          }
+      }
+
+      def dconst(cst: Double) {
+          val bits: Long = java.lang.Double.doubleToLongBits(cst)
+          if (bits == 0L || bits == 0x3ff0000000000000L) { // +0.0d and 1.0d
+              jmethod.visitInsn(Opcodes.DCONST_0 + cst.asInstanceOf[Int])
+          } else {
+              jmethod.visitLdcInsn(new java.lang.Double(cst))
+          }
+      }
+
 
       @inline def load( idx: Int, tk: TypeKind) { emitVarInsn(Opcodes.ILOAD,  idx, tk) }
       @inline def store(idx: Int, tk: TypeKind) { emitVarInsn(Opcodes.ISTORE, idx, tk) }
