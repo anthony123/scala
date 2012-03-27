@@ -6,7 +6,6 @@
 package scala.tools.nsc
 package backend.jvm
 
-import ch.epfl.lamp.fjbg._
 import java.io.{ DataOutputStream, FileOutputStream, OutputStream, File => JFile }
 import scala.tools.nsc.io._
 import scala.tools.nsc.util.ScalaClassLoader

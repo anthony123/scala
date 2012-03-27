@@ -2195,7 +2195,9 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
             case MONITOR_EXIT()  => emit(Opcodes.MONITOREXIT)
 
             case SCOPE_ENTER(lv) =>
-              if(!lv.sym.isSynthetic) { // TODO check: does GenICode emit SCOPE_ENTER, SCOPE_EXIT for synthetic vars?
+              // locals removed by closelim (via CopyPropagation) may have left behind SCOPE_ENTER, SCOPE_EXIT that are to be ignored
+              val relevant = (!lv.sym.isSynthetic && m.locals.contains(lv))
+              if(relevant) { // TODO check: does GenICode emit SCOPE_ENTER, SCOPE_EXIT for synthetic vars?
                 assert(!scopeEntered.contains(lv), instr)
                 // this label will have DEBUG bit set in its flags (ie ASM ignores it for dataflow purposes)
                 // similarly, these labels aren't tracked in the `labels` map.
@@ -2205,7 +2207,8 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
               }
 
             case SCOPE_EXIT(lv) =>
-              if(!lv.sym.isSynthetic) {
+              val relevant = (!lv.sym.isSynthetic && m.locals.contains(lv))
+              if(relevant) {
                 assert(scopeEntered.contains(lv), instr)
                 val start = scopeEntered.remove(lv).get
                 // this label will have DEBUG bit set in its flags (ie ASM ignores it for dataflow purposes)
@@ -2222,6 +2225,8 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
         }
 
       } // end of genCode()'s genBlock()
+
+      assert(scopeEntered.isEmpty, scopeEntered)
 
       /**
        * Emits one or more conversion instructions based on the types given as arguments.
