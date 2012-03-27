@@ -1875,14 +1875,35 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
         }
 
         def getMerged(): collection.Map[Local, List[Interval]] = {
-          // TODO should but isn't
+          // TODO should but isn't: unbalanced start(s) of scope(s)
           val shouldBeEmpty = pending filter { p => val Pair(k, st) = p; st.nonEmpty };
 
           val merged = mutable.Map.empty[Local, List[Interval]]
-          for(LocVarEntry(lv, start, end) <- seen) {
-            val ranges = merged.getOrElseUpdate(lv, Nil)
-            val coalesced = fuse(ranges, Interval(start, end))
-            merged.update(lv, coalesced)
+
+            def addToMerged(lv: Local, start: Label, end: Label) {
+              val ranges = merged.getOrElseUpdate(lv, Nil)
+              val coalesced = fuse(ranges, Interval(start, end))
+              merged.update(lv, coalesced)
+            }
+
+          for(LocVarEntry(lv, start, end) <- seen) { addToMerged(lv, start, end) }
+
+          /* for each var with unbalanced start(s) of scope(s):
+               (a) take the earliest start (among unbalanced and balanced starts)
+               (b) take the latest end (onePastLast if none available)
+               (c) merge the thus made-up interval
+           */
+          for(Pair(k, st) <- shouldBeEmpty) {
+            var start = st.toList.sortBy(_.getOffset).head
+            if(merged.isDefinedAt(k)) {
+              val balancedStart = merged(k).head.lstart
+              if(balancedStart.getOffset < start.getOffset) {
+                start = balancedStart;
+              }
+            }
+            val endOpt: Option[Label] = for(ranges <- merged.get(k)) yield ranges.last.lend;
+            val end = endOpt.getOrElse(onePastLast)
+            addToMerged(k, start, end)
           }
 
           merged
@@ -2492,20 +2513,18 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
       } // end of genCode()'s genPrimitive()
 
       def genLocalVariableTable() {
-
         // TODO check that method params are added too.
         var anonCounter = 0
         // TODO check if we need sthg like `mergeEntries`
         // TODO assert "There may be no more than one LocalVariableTable attribute per local variable in the Code attribute"
         for(Pair(local, ranges) <- scoping.getMerged()) {
-          val name = {
-            val jn = javaName(local.sym)
-            if (jn eq null) { anonCounter += 1; "<anon" + anonCounter + ">" }
-            else { jn }
+          var name = javaName(local.sym)
+          if (name == null) {
+            anonCounter += 1;
+            name = "<anon" + anonCounter + ">"
           }
-          val descr = javaType(local.kind).getDescriptor
           for(Interval(start, end) <- ranges) {
-            jmethod.visitLocalVariable(name, descr, null, start, end, indexOf(local))
+            jmethod.visitLocalVariable(name, descriptor(local.kind), null, start, end, indexOf(local))
           }
         }
         if (!isStatic) {
