@@ -1814,12 +1814,90 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
         result
       }
 
-      // track those instruction ranges where certain locals are in scope.
-      // used to later emit the LocalVariableTable attribute (JVMS 4.7.13)
-      val scopeEntered = mutable.Map.empty[Local, asm.Label]
-      var locVarTable: List[LocVarEntry] = Nil
-
       case class LocVarEntry(local: Local, start: asm.Label, end: asm.Label) // start is inclusive while end exclusive.
+
+      case class Interval(lstart: asm.Label, lend: asm.Label) {
+        @inline final def start = lstart.getOffset
+        @inline final def end   = lend.getOffset
+
+        def precedes(that: Interval): Boolean = { this.end < that.start }
+
+        def overlaps(that: Interval): Boolean = { !(this.precedes(that) || that.precedes(this)) }
+
+        def mergeWith(that: Interval): Interval = {
+          val newStart = if(this.start <= that.start) this.lstart else that.lstart;
+          val newEnd   = if(this.end   <= that.end)   that.lend   else this.lend;
+          Interval(newStart, newEnd)
+        }
+
+        def repOK: Boolean = { start <= end }
+
+      }
+
+      /** Track those instruction ranges where certain locals are in scope. Used to later emit the LocalVariableTable attribute (JVMS 4.7.13) */
+      object scoping {
+
+        private val pending = mutable.Map.empty[Local, mutable.Stack[Label]]
+        private var seen: List[LocVarEntry] = Nil
+
+        private def fuse(ranges: List[Interval], added: Interval): List[Interval] = {
+          assert(added.repOK, added)
+          if(ranges.isEmpty) { return List(added) }
+          // precond: ranges is sorted by increasing start
+          var fused: List[Interval] = Nil
+          var done = false
+          var rest = ranges
+          while(!done && rest.nonEmpty) {
+            val current = rest.head
+            assert(current.repOK, current)
+            rest = rest.tail
+            if(added precedes current) {
+              fused = fused ::: ( added :: current :: rest )
+              done = true
+            } else if(current overlaps added) {
+              fused = fused ::: ( added.mergeWith(current) :: rest )
+              done = true
+            }
+          }
+          if(!done) { fused = fused ::: List(added) }
+          assert(repOK(fused), fused)
+
+          fused
+        }
+
+        def pushScope(lv: Local, start: Label) {
+          val st = pending.getOrElseUpdate(lv, mutable.Stack.empty[Label])
+          st.push(start)
+        }
+        def popScope(lv: Local, end: Label) {
+          val start = pending(lv).pop()
+          seen ::= LocVarEntry(lv, start, end)
+        }
+
+        def getMerged(): collection.Map[Local, List[Interval]] = {
+          // TODO should but isn't
+          val shouldBeEmpty = pending filter { p => val Pair(k, st) = p; st.nonEmpty };
+
+          val merged = mutable.Map.empty[Local, List[Interval]]
+          for(LocVarEntry(lv, start, end) <- seen) {
+            val ranges = merged.getOrElseUpdate(lv, Nil)
+            val coalesced = fuse(ranges, Interval(start, end))
+            merged.update(lv, coalesced)
+          }
+
+          merged
+        }
+
+        private def repOK(fused: List[Interval]): Boolean = {
+          fused match {
+            case Nil      => true
+            case h :: Nil => h.repOK
+            case h :: n :: rest =>
+              h.repOK && h.precedes(n) && !h.overlaps(n) && repOK(n :: rest)
+          }
+        }
+
+      }
 
       var nextBlock: BasicBlock = linearization.head
 
@@ -2198,24 +2276,21 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
               // locals removed by closelim (via CopyPropagation) may have left behind SCOPE_ENTER, SCOPE_EXIT that are to be ignored
               val relevant = (!lv.sym.isSynthetic && m.locals.contains(lv))
               if(relevant) { // TODO check: does GenICode emit SCOPE_ENTER, SCOPE_EXIT for synthetic vars?
-                assert(!scopeEntered.contains(lv), instr)
                 // this label will have DEBUG bit set in its flags (ie ASM ignores it for dataflow purposes)
                 // similarly, these labels aren't tracked in the `labels` map.
                 val start = new asm.Label
-                scopeEntered += (lv -> start)
                 jmethod.visitLabel(start)
+                scoping.pushScope(lv, start)
               }
 
             case SCOPE_EXIT(lv) =>
               val relevant = (!lv.sym.isSynthetic && m.locals.contains(lv))
               if(relevant) {
-                assert(scopeEntered.contains(lv), instr)
-                val start = scopeEntered.remove(lv).get
                 // this label will have DEBUG bit set in its flags (ie ASM ignores it for dataflow purposes)
                 // similarly, these labels aren't tracked in the `labels` map.
                 val end = new asm.Label
                 jmethod.visitLabel(end)
-                locVarTable ::= LocVarEntry(lv, start, end)
+                scoping.popScope(lv, end)
               }
 
             case LOAD_EXCEPTION(_) =>
@@ -2225,8 +2300,6 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
         }
 
       } // end of genCode()'s genBlock()
-
-      assert(scopeEntered.isEmpty, scopeEntered)
 
       /**
        * Emits one or more conversion instructions based on the types given as arguments.
@@ -2419,18 +2492,21 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
       } // end of genCode()'s genPrimitive()
 
       def genLocalVariableTable() {
+
         // TODO check that method params are added too.
         var anonCounter = 0
         // TODO check if we need sthg like `mergeEntries`
         // TODO assert "There may be no more than one LocalVariableTable attribute per local variable in the Code attribute"
-        for(LocVarEntry(local, start, end) <- locVarTable) {
+        for(Pair(local, ranges) <- scoping.getMerged()) {
           val name = {
             val jn = javaName(local.sym)
             if (jn eq null) { anonCounter += 1; "<anon" + anonCounter + ">" }
             else { jn }
           }
           val descr = javaType(local.kind).getDescriptor
-          jmethod.visitLocalVariable(name, descr, null, start, end, indexOf(local))
+          for(Interval(start, end) <- ranges) {
+            jmethod.visitLocalVariable(name, descr, null, start, end, indexOf(local))
+          }
         }
         if (!isStatic) {
           jmethod.visitLocalVariable("this", thisDescr, null, labels(m.startBlock), onePastLast, 0)
