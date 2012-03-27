@@ -2454,7 +2454,7 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
             case (CMPL, FLOAT)  => emit(Opcodes.FCMPL)
             case (CMPG, FLOAT)  => emit(Opcodes.FCMPG)
             case (CMPL, DOUBLE) => emit(Opcodes.DCMPL)
-            case (CMPG, DOUBLE) => emit(Opcodes.DCMPG) // TODO there's a bug in the "old" GenJVM for this case (it emits DCMPL instead of DCMPG)
+            case (CMPG, DOUBLE) => emit(Opcodes.DCMPL) // TODO bug? why not DCMPG? http://docs.oracle.com/javase/specs/jvms/se5.0/html/Instructions2.doc3.html
           }
 
           case Conversion(src, dst) =>
