@@ -2513,10 +2513,15 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
       } // end of genCode()'s genPrimitive()
 
       def genLocalVariableTable() {
-        // TODO check that method params are added too.
+        // adding `this` and method params.
+        if (!isStatic) {
+          jmethod.visitLocalVariable("this", thisDescr, null, labels(m.startBlock), onePastLast, 0)
+        }
+        for(lv <- m.params) {
+          jmethod.visitLocalVariable(javaName(lv.sym), descriptor(lv.kind), null, labels(m.startBlock), onePastLast, indexOf(lv))
+        }
+        // adding non-param locals
         var anonCounter = 0
-        // TODO check if we need sthg like `mergeEntries`
-        // TODO assert "There may be no more than one LocalVariableTable attribute per local variable in the Code attribute"
         for(Pair(local, ranges) <- scoping.getMerged()) {
           var name = javaName(local.sym)
           if (name == null) {
@@ -2527,9 +2532,7 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
             jmethod.visitLocalVariable(name, descriptor(local.kind), null, start, end, indexOf(local))
           }
         }
-        if (!isStatic) {
-          jmethod.visitLocalVariable("this", thisDescr, null, labels(m.startBlock), onePastLast, 0)
-        }
+        // TODO assert "There may be no more than one LocalVariableTable attribute per local variable in the Code attribute"
       }
 
       // genCode starts here
