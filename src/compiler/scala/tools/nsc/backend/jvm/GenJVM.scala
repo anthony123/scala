@@ -1372,7 +1372,7 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
             jmethod.visitFieldInsn(asm.Opcodes.GETFIELD,
                                    javaName(clasz.symbol), // field owner
                                    javaName(outerField),   // field name
-                                   descriptor(outerField)    // field descriptor
+                                   descriptor(outerField)  // field descriptor
             )
             assert(_this.kind.isReferenceType, _this.kind)
             jmethod.visitVarInsn(asm.Opcodes.ASTORE, indexOf(_this))
@@ -1788,6 +1788,10 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
                 emitVars: Boolean, // this param name hides the instance-level var
                 isStatic: Boolean) {
 
+      // ------------------------------------------------------------------------------------------------------------
+      // Part 1 of genCode(): setting up one-to-one correspondence between ASM Labels and BasicBlocks `linearization`
+      // ------------------------------------------------------------------------------------------------------------
+
       val linearization: List[BasicBlock] = linearizer.linearize(m)
       if(linearization.isEmpty) { return }
 
@@ -1814,111 +1818,221 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
         result
       }
 
-      case class LocVarEntry(local: Local, start: asm.Label, end: asm.Label) // start is inclusive while end exclusive.
+      // ------------------------------------------------------------------------------------------------------------
+      // Part 2 of genCode(): demarcating exception handler boundaries (visitTryCatchBlock() must be invoked before visitLabel() in genBlock())
+      // ------------------------------------------------------------------------------------------------------------
 
-      case class Interval(lstart: asm.Label, lend: asm.Label) {
-        @inline final def start = lstart.getOffset
-        @inline final def end   = lend.getOffset
+        /**Generate exception handlers for the current method.
+         *
+         * Quoting from the JVMS 4.7.3 The Code Attribute
+         * The items of the Code_attribute structure are as follows:
+         *   . . .
+         *   exception_table[]
+         *     Each entry in the exception_table array describes one
+         *     exception handler in the code array. The order of the handlers in
+         *     the exception_table array is significant.
+         *     Each exception_table entry contains the following four items:
+         *       start_pc, end_pc:
+         *         ... The value of end_pc either must be a valid index into
+         *         the code array of the opcode of an instruction or must be equal to code_length,
+         *         the length of the code array.
+         *       handler_pc:
+         *         The value of the handler_pc item indicates the start of the exception handler
+         *       catch_type:
+         *         ... If the value of the catch_type item is zero,
+         *         this exception handler is called for all exceptions.
+         *         This is used to implement finally
+         */
+        def genExceptionHandlers() {
 
-        def precedes(that: Interval): Boolean = { this.end < that.start }
-
-        def overlaps(that: Interval): Boolean = { !(this.precedes(that) || that.precedes(this)) }
-
-        def mergeWith(that: Interval): Interval = {
-          val newStart = if(this.start <= that.start) this.lstart else that.lstart;
-          val newEnd   = if(this.end   <= that.end)   that.lend   else this.lend;
-          Interval(newStart, newEnd)
-        }
-
-        def repOK: Boolean = { start <= end }
-
-      }
-
-      /** Track those instruction ranges where certain locals are in scope. Used to later emit the LocalVariableTable attribute (JVMS 4.7.13) */
-      object scoping {
-
-        private val pending = mutable.Map.empty[Local, mutable.Stack[Label]]
-        private var seen: List[LocVarEntry] = Nil
-
-        private def fuse(ranges: List[Interval], added: Interval): List[Interval] = {
-          assert(added.repOK, added)
-          if(ranges.isEmpty) { return List(added) }
-          // precond: ranges is sorted by increasing start
-          var fused: List[Interval] = Nil
-          var done = false
-          var rest = ranges
-          while(!done && rest.nonEmpty) {
-            val current = rest.head
-            assert(current.repOK, current)
-            rest = rest.tail
-            if(added precedes current) {
-              fused = fused ::: ( added :: current :: rest )
-              done = true
-            } else if(current overlaps added) {
-              fused = fused ::: ( added.mergeWith(current) :: rest )
-              done = true
-            }
-          }
-          if(!done) { fused = fused ::: List(added) }
-          assert(repOK(fused), fused)
-
-          fused
-        }
-
-        def pushScope(lv: Local, start: Label) {
-          val st = pending.getOrElseUpdate(lv, mutable.Stack.empty[Label])
-          st.push(start)
-        }
-        def popScope(lv: Local, end: Label) {
-          val start = pending(lv).pop()
-          seen ::= LocVarEntry(lv, start, end)
-        }
-
-        def getMerged(): collection.Map[Local, List[Interval]] = {
-          // TODO should but isn't: unbalanced start(s) of scope(s)
-          val shouldBeEmpty = pending filter { p => val Pair(k, st) = p; st.nonEmpty };
-
-          val merged = mutable.Map.empty[Local, List[Interval]]
-
-            def addToMerged(lv: Local, start: Label, end: Label) {
-              val ranges = merged.getOrElseUpdate(lv, Nil)
-              val coalesced = fuse(ranges, Interval(start, end))
-              merged.update(lv, coalesced)
-            }
-
-          for(LocVarEntry(lv, start, end) <- seen) { addToMerged(lv, start, end) }
-
-          /* for each var with unbalanced start(s) of scope(s):
-               (a) take the earliest start (among unbalanced and balanced starts)
-               (b) take the latest end (onePastLast if none available)
-               (c) merge the thus made-up interval
+          /** Return a list of pairs of intervals where the handler is active.
+           *  Each interval is closed on both ends, ie. inclusive both in the left and right endpoints: [start, end].
+           *  Preconditions:
+           *    - e.covered non-empty
+           *  Postconditions for the result:
+           *    - always non-empty
+           *    - intervals are sorted as per `linearization`
+           *    - the argument's `covered` blocks have been grouped into maximally contiguous intervals,
+           *      ie. between any two intervals in the result there is a non-empty gap.
+           *    - each of the `covered` blocks in the argument is contained in some interval in the result
            */
-          for(Pair(k, st) <- shouldBeEmpty) {
-            var start = st.toList.sortBy(_.getOffset).head
-            if(merged.isDefinedAt(k)) {
-              val balancedStart = merged(k).head.lstart
-              if(balancedStart.getOffset < start.getOffset) {
-                start = balancedStart;
+          def intervals(e: ExceptionHandler): List[BlockInteval] = {
+            assert(e.covered.nonEmpty, e)
+            var result: List[BlockInteval] = Nil
+            var rest = linearization
+
+            // find intervals
+            while(!rest.isEmpty) {
+              // find interval start
+              var start: BasicBlock = null
+              while(!rest.isEmpty && (start eq null)) {
+                if(e.covered(rest.head)) { start = rest.head }
+                rest = rest.tail
+              }
+              if(start ne null) {
+                // find interval end
+                var end = start // for the time being
+                while(!rest.isEmpty && (e.covered(rest.head))) {
+                  end  = rest.head
+                  rest = rest.tail
+                }
+                result = BlockInteval(start, end) :: result
               }
             }
-            val endOpt: Option[Label] = for(ranges <- merged.get(k)) yield ranges.last.lend;
-            val end = endOpt.getOrElse(onePastLast)
-            addToMerged(k, start, end)
+
+            assert(result.nonEmpty, e)
+
+            result
           }
 
-          merged
+          for (e <- this.method.exh ; p <- intervals(e)) {
+            debuglog("Adding exception handler " + e + "at block: " + e.startBlock + " for " + method +
+                     " from: " + p.start + " to: " + p.end + " catching: " + e.cls);
+            val cls: String = if (e.cls == NoSymbol || e.cls == ThrowableClass) null
+                              else javaName(e.cls)
+            jmethod.visitTryCatchBlock(labels(p.start), linNext(p.end),
+                                       labels(e.startBlock), cls)
+          }
+        } // end of genCode()'s genExceptionHandlers()
+
+      if (m.exh.nonEmpty) { genExceptionHandlers() }
+
+      // ------------------------------------------------------------------------------------------------------------
+      // Part 3 of genCode(): "Infrastructure" to later emit debug info for local variables and method params (LocalVariablesTable bytecode attribute).
+      // ------------------------------------------------------------------------------------------------------------
+
+        case class LocVarEntry(local: Local, start: asm.Label, end: asm.Label) // start is inclusive while end exclusive.
+
+        case class Interval(lstart: asm.Label, lend: asm.Label) {
+          @inline final def start = lstart.getOffset
+          @inline final def end   = lend.getOffset
+
+          def precedes(that: Interval): Boolean = { this.end < that.start }
+
+          def overlaps(that: Interval): Boolean = { !(this.precedes(that) || that.precedes(this)) }
+
+          def mergeWith(that: Interval): Interval = {
+            val newStart = if(this.start <= that.start) this.lstart else that.lstart;
+            val newEnd   = if(this.end   <= that.end)   that.lend   else this.lend;
+            Interval(newStart, newEnd)
+          }
+
+          def repOK: Boolean = { start <= end }
+
         }
 
-        private def repOK(fused: List[Interval]): Boolean = {
-          fused match {
-            case Nil      => true
-            case h :: Nil => h.repOK
-            case h :: n :: rest =>
-              h.repOK && h.precedes(n) && !h.overlaps(n) && repOK(n :: rest)
+        /** Track those instruction ranges where certain locals are in scope. Used to later emit the LocalVariableTable attribute (JVMS 4.7.13) */
+        object scoping {
+
+          private val pending = mutable.Map.empty[Local, mutable.Stack[Label]]
+          private var seen: List[LocVarEntry] = Nil
+
+          private def fuse(ranges: List[Interval], added: Interval): List[Interval] = {
+            assert(added.repOK, added)
+            if(ranges.isEmpty) { return List(added) }
+            // precond: ranges is sorted by increasing start
+            var fused: List[Interval] = Nil
+            var done = false
+            var rest = ranges
+            while(!done && rest.nonEmpty) {
+              val current = rest.head
+              assert(current.repOK, current)
+              rest = rest.tail
+              if(added precedes current) {
+                fused = fused ::: ( added :: current :: rest )
+                done = true
+              } else if(current overlaps added) {
+                fused = fused ::: ( added.mergeWith(current) :: rest )
+                done = true
+              }
+            }
+            if(!done) { fused = fused ::: List(added) }
+            assert(repOK(fused), fused)
+
+            fused
+          }
+
+          def pushScope(lv: Local, start: Label) {
+            val st = pending.getOrElseUpdate(lv, mutable.Stack.empty[Label])
+            st.push(start)
+          }
+          def popScope(lv: Local, end: Label) {
+            val start = pending(lv).pop()
+            seen ::= LocVarEntry(lv, start, end)
+          }
+
+          def getMerged(): collection.Map[Local, List[Interval]] = {
+            // TODO should but isn't: unbalanced start(s) of scope(s)
+            val shouldBeEmpty = pending filter { p => val Pair(k, st) = p; st.nonEmpty };
+
+            val merged = mutable.Map.empty[Local, List[Interval]]
+
+              def addToMerged(lv: Local, start: Label, end: Label) {
+                val ranges = merged.getOrElseUpdate(lv, Nil)
+                val coalesced = fuse(ranges, Interval(start, end))
+                merged.update(lv, coalesced)
+              }
+
+            for(LocVarEntry(lv, start, end) <- seen) { addToMerged(lv, start, end) }
+
+            /* for each var with unbalanced start(s) of scope(s):
+                 (a) take the earliest start (among unbalanced and balanced starts)
+                 (b) take the latest end (onePastLast if none available)
+                 (c) merge the thus made-up interval
+             */
+            for(Pair(k, st) <- shouldBeEmpty) {
+              var start = st.toList.sortBy(_.getOffset).head
+              if(merged.isDefinedAt(k)) {
+                val balancedStart = merged(k).head.lstart
+                if(balancedStart.getOffset < start.getOffset) {
+                  start = balancedStart;
+                }
+              }
+              val endOpt: Option[Label] = for(ranges <- merged.get(k)) yield ranges.last.lend;
+              val end = endOpt.getOrElse(onePastLast)
+              addToMerged(k, start, end)
+            }
+
+            merged
+          }
+
+          private def repOK(fused: List[Interval]): Boolean = {
+            fused match {
+              case Nil      => true
+              case h :: Nil => h.repOK
+              case h :: n :: rest =>
+                h.repOK && h.precedes(n) && !h.overlaps(n) && repOK(n :: rest)
+            }
+          }
+
+        }
+
+      def genLocalVariableTable() {
+        // adding `this` and method params.
+        if (!isStatic) {
+          jmethod.visitLocalVariable("this", thisDescr, null, labels(m.startBlock), onePastLast, 0)
+        }
+        for(lv <- m.params) {
+          jmethod.visitLocalVariable(javaName(lv.sym), descriptor(lv.kind), null, labels(m.startBlock), onePastLast, indexOf(lv))
+        }
+        // adding non-param locals
+        var anonCounter = 0
+        for(Pair(local, ranges) <- scoping.getMerged()) {
+          var name = javaName(local.sym)
+          if (name == null) {
+            anonCounter += 1;
+            name = "<anon" + anonCounter + ">"
+          }
+          for(Interval(start, end) <- ranges) {
+            jmethod.visitLocalVariable(name, descriptor(local.kind), null, start, end, indexOf(local))
           }
         }
-
+        // TODO assert "There may be no more than one LocalVariableTable attribute per local variable in the Code attribute"
       }
+
+      // ------------------------------------------------------------------------------------------------------------
+      // Part 4 of genCode(): "Utilities" to emit code proper (most prominently: genBlock()).
+      // ------------------------------------------------------------------------------------------------------------
 
       var nextBlock: BasicBlock = linearization.head
 
@@ -1927,79 +2041,6 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
         case x :: Nil => nextBlock = null; genBlock(x)
         case x :: y :: ys => nextBlock = y; genBlock(x); genBlocks(y :: ys)
       }
-
-      /**Generate exception handlers for the current method.
-       *
-       * Quoting from the JVMS 4.7.3 The Code Attribute
-       * The items of the Code_attribute structure are as follows:
-       *   . . .
-       *   exception_table[]
-       *     Each entry in the exception_table array describes one
-       *     exception handler in the code array. The order of the handlers in
-       *     the exception_table array is significant.
-       *     Each exception_table entry contains the following four items:
-       *       start_pc, end_pc:
-       *         ... The value of end_pc either must be a valid index into
-       *         the code array of the opcode of an instruction or must be equal to code_length,
-       *         the length of the code array.
-       *       handler_pc:
-       *         The value of the handler_pc item indicates the start of the exception handler
-       *       catch_type:
-       *         ... If the value of the catch_type item is zero,
-       *         this exception handler is called for all exceptions.
-       *         This is used to implement finally
-       */
-      def genExceptionHandlers() {
-
-        /** Return a list of pairs of intervals where the handler is active.
-         *  Each interval is closed on both ends, ie. inclusive both in the left and right endpoints: [start, end].
-         *  Preconditions:
-         *    - e.covered non-empty
-         *  Postconditions for the result:
-         *    - always non-empty
-         *    - intervals are sorted as per `linearization`
-         *    - the argument's `covered` blocks have been grouped into maximally contiguous intervals,
-         *      ie. between any two intervals in the result there is a non-empty gap.
-         *    - each of the `covered` blocks in the argument is contained in some interval in the result
-         */
-        def intervals(e: ExceptionHandler): List[BlockInteval] = {
-          assert(e.covered.nonEmpty, e)
-          var result: List[BlockInteval] = Nil
-          var rest = linearization
-
-          // find intervals
-          while(!rest.isEmpty) {
-            // find interval start
-            var start: BasicBlock = null
-            while(!rest.isEmpty && (start eq null)) {
-              if(e.covered(rest.head)) { start = rest.head }
-              rest = rest.tail
-            }
-            if(start ne null) {
-              // find interval end
-              var end = start // for the time being
-              while(!rest.isEmpty && (e.covered(rest.head))) {
-                end  = rest.head
-                rest = rest.tail
-              }
-              result = BlockInteval(start, end) :: result
-            }
-          }
-
-          assert(result.nonEmpty, e)
-
-          result
-        }
-
-        for (e <- this.method.exh ; p <- intervals(e)) {
-          debuglog("Adding exception handler " + e + "at block: " + e.startBlock + " for " + method +
-                   " from: " + p.start + " to: " + p.end + " catching: " + e.cls);
-          val cls: String = if (e.cls == NoSymbol || e.cls == ThrowableClass) null
-                            else javaName(e.cls)
-          jmethod.visitTryCatchBlock(labels(p.start), linNext(p.end),
-                                     labels(e.startBlock), cls)
-        }
-      } // end of genCode()'s genExceptionHandlers()
 
       def isAccessibleFrom(target: Symbol, site: Symbol): Boolean = {
         target.isPublic || target.isProtected && {
@@ -2512,35 +2553,13 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
         }
       } // end of genCode()'s genPrimitive()
 
-      def genLocalVariableTable() {
-        // adding `this` and method params.
-        if (!isStatic) {
-          jmethod.visitLocalVariable("this", thisDescr, null, labels(m.startBlock), onePastLast, 0)
-        }
-        for(lv <- m.params) {
-          jmethod.visitLocalVariable(javaName(lv.sym), descriptor(lv.kind), null, labels(m.startBlock), onePastLast, indexOf(lv))
-        }
-        // adding non-param locals
-        var anonCounter = 0
-        for(Pair(local, ranges) <- scoping.getMerged()) {
-          var name = javaName(local.sym)
-          if (name == null) {
-            anonCounter += 1;
-            name = "<anon" + anonCounter + ">"
-          }
-          for(Interval(start, end) <- ranges) {
-            jmethod.visitLocalVariable(name, descriptor(local.kind), null, start, end, indexOf(local))
-          }
-        }
-        // TODO assert "There may be no more than one LocalVariableTable attribute per local variable in the Code attribute"
-      }
+      // ------------------------------------------------------------------------------------------------------------
+      // Part 5 of genCode(): the executable part of genCode() starts here.
+      // ------------------------------------------------------------------------------------------------------------
 
-      // genCode starts here
       genBlocks(linearization)
 
       jmethod.visitLabel(onePastLast)
-
-      if (this.method.exh.nonEmpty) { genExceptionHandlers() }
 
       if(emitVars)  { genLocalVariableTable() }
       if(emitLines) { /* TODO emitLines */ }
