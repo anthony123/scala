@@ -2031,7 +2031,15 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
       }
 
       // ------------------------------------------------------------------------------------------------------------
-      // Part 4 of genCode(): "Utilities" to emit code proper (most prominently: genBlock()).
+      // Part 4 of genCode(): Bookkeeping (to later emit debug info) of association between line-number and instruction position.
+      // ------------------------------------------------------------------------------------------------------------
+
+      case class LineNumberEntry(line: Int, start: asm.Label)
+      var lastLineNr: Int = -1
+      var lnEntries: List[LineNumberEntry] = Nil
+
+      // ------------------------------------------------------------------------------------------------------------
+      // Part 5 of genCode(): "Utilities" to emit code proper (most prominently: genBlock()).
       // ------------------------------------------------------------------------------------------------------------
 
       var nextBlock: BasicBlock = linearization.head
@@ -2107,11 +2115,21 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
 
         debuglog("Generating code for block: " + b)
 
-        /** local variables whose scope includes this block. */
-        val varsInBlock: mutable.Set[Local] = new mutable.HashSet
         // val lastInstr = b.lastInstruction
 
         for (instr <- b) {
+
+          if(instr.pos.isDefined) {
+            val iPos = instr.pos
+            val currentLineNr = iPos.line
+            val skip = (currentLineNr == lastLineNr) // if(iPos.isRange) iPos.sameRange(lastPos) else
+            if(!skip) {
+              lastLineNr = currentLineNr
+              val lineLab = new asm.Label
+              jmethod.visitLabel(lineLab)
+              lnEntries ::= LineNumberEntry(currentLineNr, lineLab)
+            }
+          }
 
           instr match {
             case THIS(_)               => jmethod.visitVarInsn(Opcodes.ALOAD, 0)
@@ -2554,7 +2572,7 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
       } // end of genCode()'s genPrimitive()
 
       // ------------------------------------------------------------------------------------------------------------
-      // Part 5 of genCode(): the executable part of genCode() starts here.
+      // Part 6 of genCode(): the executable part of genCode() starts here.
       // ------------------------------------------------------------------------------------------------------------
 
       genBlocks(linearization)
@@ -2562,7 +2580,9 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
       jmethod.visitLabel(onePastLast)
 
       if(emitVars)  { genLocalVariableTable() }
-      if(emitLines) { /* TODO emitLines */ }
+      if(emitLines) {
+        for(LineNumberEntry(line, start) <- lnEntries.sortBy(_.start.getOffset)) { jmethod.visitLineNumber(line, start) }
+      }
 
     } // end of BytecodeGenerator.genCode()
 
