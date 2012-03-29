@@ -533,11 +533,13 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
       vp
     }
 
-    val pickleMarkerLocal =
+    def pickleMarkerLocal = {
       createJAttribute(tpnme.ScalaSignatureATTR.toString, versionPickle.bytes, 0, versionPickle.writeIndex)
+    }
 
-    val pickleMarkerForeign =
+    def pickleMarkerForeign = {
       createJAttribute(tpnme.ScalaATTR.toString, new Array[Byte](0), 0, 0)
+    }
 
     /** Returns a ScalaSignature annotation if it must be added to this class, none otherwise.
      *  This annotation must be added to the class' annotations list when generating them.
@@ -710,23 +712,13 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
     }
 
     def strEncode(bytes: Array[Byte]): String = {
-
+      // why all this? See http://www.scala-lang.org/sid/10 (Storage of pickled Scala signatures in class files)
       val ca = ubytesToCharArray(sevenBitsMayBeZero(bytes))
-      val s: String = new java.lang.String(ca) // TODO ba would also have worked
-
-      val bvA = new asm.ByteVector // debug
-      bvA.putUTF8(s)
-
-      val enc: Array[Byte] = scala.reflect.internal.pickling.ByteCodecs.encode(bytes) // debug
-
-      var idx = 0
-      while(idx < enc.size) {
-        // assert(enc(idx) == bvA.getByte(idx + 2))
-        idx += 1
-      }
-      // assert(bvA.getLength == enc.size + 2)
-
-      s
+      new java.lang.String(ca)
+      // debug val bvA = new asm.ByteVector; bvA.putUTF8(s)
+      // debug val enc: Array[Byte] = scala.reflect.internal.pickling.ByteCodecs.encode(bytes)
+      // debug assert(enc(idx) == bvA.getByte(idx + 2))
+      // debug assert(bvA.getLength == enc.size + 2)
     }
 
     def emitArgument(av:   asm.AnnotationVisitor,
@@ -2723,6 +2715,7 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
                               null /* SourceDebugExtension */)
 
       val ssa = getAnnotPickle(mirrorName, modsym.companionSymbol)
+      mirrorClass.visitAttribute(if(ssa.isDefined) pickleMarkerLocal else pickleMarkerForeign)
       emitAnnotations(mirrorClass, modsym.annotations ++ ssa)
 
       // typestate: entering mode with valid call sequences:
