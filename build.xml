@@ -286,10 +286,7 @@ INITIALISATION
     <path id="aux.libs">
       <fileset dir="${lib.dir}">
         <include name="fjbg.jar"/>
-        <include name="asm-4.0.jar"/>
-        <include name="asm-tree-4.0.jar"/>
-        <include name="asm-analysis-4.0.jar"/>
-        <include name="asm-util-4.0.jar"/>
+        <include name="asm-debug-all-4.0.jar"/>
         <include name="msil.jar"/>
         <include name="forkjoin.jar"/>
       </fileset>

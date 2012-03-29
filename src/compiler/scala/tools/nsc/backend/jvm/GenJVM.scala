@@ -681,6 +681,54 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
       sig
     }
 
+    def sevenBitsMayBeZero(bytes: Array[Byte]): Array[Byte] = {
+      mapToNextModSevenBits(scala.reflect.internal.pickling.ByteCodecs.encode8to7(bytes))
+    }
+
+    def mapToNextModSevenBits(src: Array[Byte]): Array[Byte] = {
+      var i = 0
+      val srclen = src.length
+      while (i < srclen) {
+        val in = src(i)
+        src(i) = (if (in == 0x7f) 0.toByte else (in + 1).toByte)
+        i += 1
+      }
+      src
+    }
+
+    def ubytesToCharArray(bytes: Array[Byte]): Array[Char] = {
+      val ca = new Array[Char](bytes.size)
+      var idx = 0
+      while(idx < bytes.size) {
+        val b: Byte = bytes(idx)
+        assert((b & ~0x7f) == 0)
+        ca(idx) = b.asInstanceOf[Char]
+        idx += 1
+      }
+
+      ca
+    }
+
+    def strEncode(bytes: Array[Byte]): String = {
+
+      val ca = ubytesToCharArray(sevenBitsMayBeZero(bytes))
+      val s: String = new java.lang.String(ca) // TODO ba would also have worked
+
+      val bvA = new asm.ByteVector // debug
+      bvA.putUTF8(s)
+
+      val enc: Array[Byte] = scala.reflect.internal.pickling.ByteCodecs.encode(bytes) // debug
+
+      var idx = 0
+      while(idx < enc.size) {
+        // assert(enc(idx) == bvA.getByte(idx + 2))
+        idx += 1
+      }
+      // assert(bvA.getLength == enc.size + 2)
+
+      s
+    }
+
     def emitArgument(av:   asm.AnnotationVisitor,
                      name: String,
                      arg:  ClassfileAnnotArg) {
@@ -703,21 +751,35 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
 
         case sb@ScalaSigBytes(bytes) if !sb.isLong =>
           // see http://www.scala-lang.org/sid/10 (Storage of pickled Scala signatures in class files)
-          // and http://docs.oracle.com/javase/tutorial/i18n/text/string.html (Byte Encodings and Strings)
-          val ba: Array[Byte] = sb.encodedBytes // TODO when are all the `encodedBytes` lazy vals GC'ed?
-          val s: String = new java.lang.String(ba, "UTF8")
-          av.visit(name, s)
+          av.visit(name, strEncode(sb.bytes)) // TODO when are all the `encodedBytes` lazy vals GC'ed?
 
         case sb@ScalaSigBytes(bytes) if sb.isLong =>
           // see http://www.scala-lang.org/sid/10 (Storage of pickled Scala signatures in class files)
           // and http://docs.oracle.com/javase/tutorial/i18n/text/string.html (Byte Encodings and Strings)
-          val stringCount = (sb.encodedBytes.length / 65534) + 1
-          val arr = new Array[String](stringCount)
-          for (i <- 0 until stringCount) {
-            val j = i * 65535
-            val ba = sb.encodedBytes.slice(j, j + 65535)
-            arr(i) = new java.lang.String(ba, "UTF8")
+          var strs: List[String] = Nil
+          val bSeven: Array[Byte] = sevenBitsMayBeZero(sb.bytes)
+          // chop into slices of at most 65534 bytes, counting 0x00 as taking two bytes (as per JVMS 4.4.7 The CONSTANT_Utf8_info Structure)
+          var prevOffset = 0
+          var offset     = 0
+          var encLength  = 0
+          while(offset < bSeven.size) {
+            val newEncLength = encLength.toLong + (if(bSeven(offset) == 0) 2 else 1)
+            if(newEncLength > 65535) {
+              val ba = bSeven.slice(prevOffset, offset)
+              strs ::= new java.lang.String(ubytesToCharArray(ba))
+              encLength = 0
+              prevOffset = offset
+            } else {
+              encLength += 1
+              offset    += 1
+            }
           }
+          if(prevOffset < offset) {
+            assert(offset == bSeven.length)
+            val ba = bSeven.slice(prevOffset, offset)
+            strs ::= new java.lang.String(ubytesToCharArray(ba))
+          }
+          val arr = strs.reverse.toArray
           av.visit(name, arr)
 
         case ArrayAnnotArg(args) =>
@@ -1146,7 +1208,7 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
       thisName = javaName(c.symbol) // the internal name of the class being emitted
 
       val ps = c.symbol.info.parents
-      val superClass: Symbol = if(ps.isEmpty) ObjectClass else ps.head.typeSymbol;
+      val superClass: String = if(ps.isEmpty) JAVA_LANG_OBJECT.getInternalName else javaName(ps.head.typeSymbol);
 
       val ifaces = getSuperInterfaces(c)
 
@@ -1157,7 +1219,7 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
       )
       jclass  = createJClass(flags,
                              thisName, thisSignature,
-                             javaName(superClass), ifaces)
+                             superClass, ifaces)
 
       // typestate: entering mode with valid call sequences:
       //   [ visitSource ] [ visitOuterClass ] ( visitAnnotation | visitAttribute )*
@@ -2579,10 +2641,10 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
 
       jmethod.visitLabel(onePastLast)
 
-      if(emitVars)  { genLocalVariableTable() }
       if(emitLines) {
         for(LineNumberEntry(line, start) <- lnEntries.sortBy(_.start.getOffset)) { jmethod.visitLineNumber(line, start) }
       }
+      if(emitVars)  { genLocalVariableTable() }
 
     } // end of BytecodeGenerator.genCode()
 
@@ -2649,7 +2711,7 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
       val mirrorClass = createJClass(flags,
                                      mirrorName,
                                      null /* no java-generic-signature */,
-                                     JAVA_LANG_OBJECT.getDescriptor,
+                                     JAVA_LANG_OBJECT.getInternalName,
                                      EMPTY_STRING_ARRAY)
 
       log("Dumping mirror class for '%s'".format(mirrorName))
