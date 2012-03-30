@@ -84,7 +84,7 @@ import scala.collection.{ mutable, immutable }
  */
 class ModifierFlags {
   final val IMPLICIT      = 0x00000200
-  final val FINAL         = 0x00000020
+  final val FINAL         = 0x00000020    // May not be overridden. Note that java final implies much more than scala final.
   final val PRIVATE       = 0x00000004
   final val PROTECTED     = 0x00000001
 
@@ -107,7 +107,7 @@ class ModifierFlags {
                                           // pre: PRIVATE or PROTECTED are also set
   final val JAVA          = 0x00100000    // symbol was defined by a Java class
   final val STATIC        = 0x00800000    // static field, method or class
-  final val CASEACCESSOR  = 0x01000000    // symbol is a case parameter (or its accessor)
+  final val CASEACCESSOR  = 0x01000000    // symbol is a case parameter (or its accessor, or a GADT skolem)
   final val TRAIT         = 0x02000000    // symbol is a trait
   final val DEFAULTPARAM  = 0x02000000    // the parameter has a default value
   final val PARAMACCESSOR = 0x20000000    // for field definitions generated for primary constructor
@@ -468,33 +468,34 @@ class Flags extends ModifierFlags {
   protected final val rawFlagPickledOrder: Array[Long] = pickledListOrder.toArray
 
   def flagOfModifier(mod: Modifier): Long = mod match {
-    case Modifier.`protected` => PROTECTED
-    case Modifier.`private` => PRIVATE
-    case Modifier.`override` => OVERRIDE
-    case Modifier.`abstract` => ABSTRACT
-    case Modifier.`final`=> FINAL
-    case Modifier.`sealed`=> SEALED
-    case Modifier.`implicit`=> IMPLICIT
-    case Modifier.`lazy`=> LAZY
-    case Modifier.`case`=> CASE
-    case Modifier.`trait`=> TRAIT
-    case Modifier.deferred => DEFERRED
-    case Modifier.interface => INTERFACE
-    case Modifier.mutable => MUTABLE
-    case Modifier.parameter => PARAM
-    case Modifier.`macro` => MACRO
-    case Modifier.covariant => COVARIANT
-    case Modifier.contravariant => CONTRAVARIANT
-    case Modifier.preSuper => PRESUPER
+    case Modifier.`protected`      => PROTECTED
+    case Modifier.`private`        => PRIVATE
+    case Modifier.`override`       => OVERRIDE
+    case Modifier.`abstract`       => ABSTRACT
+    case Modifier.`final`          => FINAL
+    case Modifier.`sealed`         => SEALED
+    case Modifier.`implicit`       => IMPLICIT
+    case Modifier.`lazy`           => LAZY
+    case Modifier.`case`           => CASE
+    case Modifier.`trait`          => TRAIT
+    case Modifier.deferred         => DEFERRED
+    case Modifier.interface        => INTERFACE
+    case Modifier.mutable          => MUTABLE
+    case Modifier.parameter        => PARAM
+    case Modifier.`macro`          => MACRO
+    case Modifier.covariant        => COVARIANT
+    case Modifier.contravariant    => CONTRAVARIANT
+    case Modifier.preSuper         => PRESUPER
     case Modifier.abstractOverride => ABSOVERRIDE
-    case Modifier.local => LOCAL
-    case Modifier.java => JAVA
-    case Modifier.static => STATIC
-    case Modifier.caseAccessor => CASEACCESSOR
+    case Modifier.local            => LOCAL
+    case Modifier.java             => JAVA
+    case Modifier.static           => STATIC
+    case Modifier.caseAccessor     => CASEACCESSOR
     case Modifier.defaultParameter => DEFAULTPARAM
-    case Modifier.defaultInit => DEFAULTINIT
-    case Modifier.paramAccessor => PARAMACCESSOR
-    case Modifier.bynameParameter => BYNAMEPARAM
+    case Modifier.defaultInit      => DEFAULTINIT
+    case Modifier.paramAccessor    => PARAMACCESSOR
+    case Modifier.bynameParameter  => BYNAMEPARAM
+    case _                         => 0
   }
 
   def flagsOfModifiers(mods: List[Modifier]): Long =

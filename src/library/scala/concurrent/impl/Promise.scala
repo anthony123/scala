@@ -14,7 +14,7 @@ import java.util.concurrent.TimeUnit.{ NANOSECONDS, MILLISECONDS }
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater
 import scala.concurrent.{Awaitable, ExecutionContext, resolve, resolver, blocking, CanAwait, TimeoutException}
 //import scala.util.continuations._
-import scala.util.Duration
+import scala.concurrent.util.Duration
 import scala.util.Try
 import scala.util
 import scala.annotation.tailrec
@@ -22,7 +22,7 @@ import scala.annotation.tailrec
 
 
 
-trait Promise[T] extends scala.concurrent.Promise[T] with Future[T] {
+private[concurrent] trait Promise[T] extends scala.concurrent.Promise[T] with Future[T] {
 
   def future = this
 

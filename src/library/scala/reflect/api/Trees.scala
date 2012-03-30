@@ -74,11 +74,24 @@ trait Trees { self: Universe =>
     val id = nodeCount
     nodeCount += 1
 
-    private[this] var rawpos: Position = NoPosition
+    /** Prefix under which to print this tree type.  Defaults to product
+     *  prefix (e.g. DefTree) but because that is used in reification
+     *  it cannot be altered without breaking reflection.
+     */
+    def printingPrefix = productPrefix
 
-    def pos = rawpos
-    def pos_=(pos: Position) = rawpos = pos
-    def setPos(pos: Position): this.type = { rawpos = pos; this }
+    def pos: Position = annotationToPosition(rawannot)
+    def pos_=(pos: Position): Unit = annotation = pos
+    def setPos(newpos: Position): this.type = { pos = newpos; this }
+
+    private[this] var rawannot: TreeAnnotation = NoTreeAnnotation
+    def annotation: TreeAnnotation = rawannot
+    def annotation_=(annot: TreeAnnotation): Unit = {
+      _checkSetAnnotation(this, annot)
+      rawannot = annot
+    }
+
+    def setAnnotation(annot: TreeAnnotation): this.type = { annotation = annot; this }
 
     private[this] var rawtpe: Type = _
 
@@ -159,11 +172,12 @@ trait Trees { self: Universe =>
     def foreach(f: Tree => Unit) { new ForeachTreeTraverser(f).traverse(this) }
 
     /** Find all subtrees matching predicate `p` */
-    def filter(f: Tree => Boolean): List[Tree] = {
+    def withFilter(f: Tree => Boolean): List[Tree] = {
       val ft = new FilterTreeTraverser(f)
       ft.traverse(this)
       ft.hits.toList
     }
+    def filter(f: Tree => Boolean): List[Tree] = withFilter(f)
 
     /** Returns optionally first tree (in a preorder traversal) which satisfies predicate `p`,
      *  or None if none exists.
@@ -216,7 +230,7 @@ trait Trees { self: Universe =>
       duplicateTree(this).asInstanceOf[this.type]
 
     private[scala] def copyAttrs(tree: Tree): this.type = {
-      pos = tree.pos
+      annotation = tree.annotation
       tpe = tree.tpe
       if (hasSymbol) symbol = tree.symbol
       this
@@ -249,6 +263,7 @@ trait Trees { self: Universe =>
    *  are in DefTrees.
    */
   trait RefTree extends SymTree {
+    def qualifier: Tree    // empty for Idents
     def name: Name
   }
 
@@ -309,7 +324,7 @@ trait Trees { self: Universe =>
    *  quite frequently called modules to reduce ambiguity.
    */
   case class ModuleDef(mods: Modifiers, name: TermName, impl: Template)
-       extends ImplDef
+        extends ImplDef
 
   /** A common base class for ValDefs and DefDefs.
    */
@@ -319,8 +334,13 @@ trait Trees { self: Universe =>
     def rhs: Tree
   }
 
-  /** A value definition (this includes vars as well, which differ from
-   *  vals only in having the MUTABLE flag set in their Modifiers.)
+  /** Broadly speaking, a value definition.  All these are encoded as ValDefs:
+   *
+   *   - immutable values, e.g. "val x"
+   *   - mutable values, e.g. "var x" - the MUTABLE flag set in mods
+   *   - lazy values, e.g. "lazy val x" - the LAZY flag set in mods
+   *   - method parameters, see vparamss in DefDef - the PARAM flag is set in mods
+   *   - explicit self-types, e.g. class A { self: Bar => } - !!! not sure what is set.
    */
   case class ValDef(mods: Modifiers, name: TermName, tpt: Tree, rhs: Tree) extends ValOrDefDef
 
@@ -390,7 +410,6 @@ trait Trees { self: Universe =>
     //   {
     //      def bar  // owner is local dummy
     //   }
-    // System.err.println("TEMPLATE: " + parents)
   }
 
   /** Block of expressions (semicolon separated expressions) */
@@ -485,16 +504,14 @@ trait Trees { self: Universe =>
   /** Factory method for object creation `new tpt(args_1)...(args_n)`
    *  A `New(t, as)` is expanded to: `(new t).<init>(as)`
    */
-  def New(tpt: Tree, argss: List[List[Tree]]): Tree = {
-    // todo. we need to expose names in scala.reflect.api
-    val superRef: Tree = Select(New(tpt), nme.CONSTRUCTOR)
-    if (argss.isEmpty) Apply(superRef, Nil)
-    else (superRef /: argss) (Apply)
+  def New(tpt: Tree, argss: List[List[Tree]]): Tree = argss match {
+    case Nil        => new ApplyConstructor(tpt, Nil)
+    case xs :: rest => rest.foldLeft(new ApplyConstructor(tpt, xs): Tree)(Apply)
   }
   /** 0-1 argument list new, based on a type.
    */
   def New(tpe: Type, args: Tree*): Tree =
-    New(TypeTree(tpe), List(args.toList))
+    new ApplyConstructor(TypeTree(tpe), args.toList)
 
   /** Type annotation, eliminated by explicit outer */
   case class Typed(expr: Tree, tpt: Tree)
@@ -532,6 +549,10 @@ trait Trees { self: Universe =>
   class ApplyToImplicitArgs(fun: Tree, args: List[Tree]) extends Apply(fun, args)
 
   class ApplyImplicitView(fun: Tree, args: List[Tree]) extends Apply(fun, args)
+
+  class ApplyConstructor(tpt: Tree, args: List[Tree]) extends Apply(Select(New(tpt), nme.CONSTRUCTOR), args) {
+    override def printingPrefix = "ApplyConstructor"
+  }
 
   /** Dynamic value application.
    *  In a dynamic application   q.f(as)
@@ -571,7 +592,9 @@ trait Trees { self: Universe =>
     Select(qualifier, sym.name) setSymbol sym
 
   /** Identifier <name> */
-  case class Ident(name: Name) extends RefTree
+  case class Ident(name: Name) extends RefTree {
+    def qualifier: Tree = EmptyTree
+  }
 
   def Ident(name: String): Ident =
     Ident(newTermName(name))
@@ -740,6 +763,12 @@ trait Trees { self: Universe =>
       treeCopy.ClassDef(cdef, mods0, name0, tparams0, applyToImpl(impl0))
     case t =>
       sys.error("Not a ClassDef: " + t + "/" + t.getClass)
+  }
+  def deriveModuleDef(mdef: Tree)(applyToImpl: Template => Template): ModuleDef = mdef match {
+    case ModuleDef(mods0, name0, impl0) =>
+      treeCopy.ModuleDef(mdef, mods0, name0, applyToImpl(impl0))
+    case t =>
+      sys.error("Not a ModuleDef: " + t + "/" + t.getClass)
   }
   def deriveCaseDef(cdef: Tree)(applyToBody: Tree => Tree): CaseDef = cdef match {
     case CaseDef(pat0, guard0, body0) =>

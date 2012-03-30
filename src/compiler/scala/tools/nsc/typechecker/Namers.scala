@@ -315,9 +315,10 @@ trait Namers extends MethodSynthesis {
         case DefDef(_, _, _, _, _, _)               => owner.newMethod(name.toTermName, pos, flags)
         case ClassDef(_, _, _, _)                   => owner.newClassSymbol(name.toTypeName, pos, flags)
         case ModuleDef(_, _, _)                     => owner.newModule(name, pos, flags)
-        case ValDef(_, _, _, _) if isParameter      => owner.newValueParameter(name, pos, flags)
         case PackageDef(pid, _)                     => createPackageSymbol(pos, pid)
-        case ValDef(_, _, _, _)                     => owner.newValue(name, pos, flags)
+        case ValDef(_, _, _, _)                     =>
+          if (isParameter) owner.newValueParameter(name, pos, flags)
+          else owner.newValue(name, pos, flags)
       }
     }
     private def createFieldSymbol(tree: ValDef): TermSymbol =
@@ -456,7 +457,7 @@ trait Namers extends MethodSynthesis {
       // The object Foo is still in scope, but because it is not compiled in current run
       // it should be ditched and a new one created.
       if (m != NoSymbol && currentRun.compiles(m)) m
-      else enterSyntheticSym(creator(cdef))
+      else enterSyntheticSym(atPos(cdef.pos.focus)(creator(cdef)))
     }
 
     private def checkSelectors(tree: Import): Unit = {
@@ -665,6 +666,10 @@ trait Namers extends MethodSynthesis {
           "If possible, define " + tree.symbol + " in " + owner.skipPackageObject + " instead."
         )
       }
+      
+      // Suggested location only.
+      if (mods.isImplicit)
+        enterImplicitClass(tree)
     }
 
     // this logic is needed in case typer was interrupted half
@@ -1270,11 +1275,12 @@ trait Namers extends MethodSynthesis {
       if (sym.isModule) annotate(sym.moduleClass)
 
       def getSig = tree match {
-        case cdef @ ClassDef(_, _, tparams, impl) =>
+        case cdef @ ClassDef(_, name, tparams, impl) =>
           val clazz = tree.symbol
           val result = createNamer(tree).classSig(tparams, impl)
           clazz setInfo result
           if (clazz.isDerivedValueClass) {
+            log("Ensuring companion for derived value class " + name + " at " + cdef.pos.show)
             clazz setFlag FINAL
             enclosingNamerWithScope(clazz.owner.info.decls).ensureCompanionObject(cdef)
           }

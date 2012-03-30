@@ -394,7 +394,7 @@ self =>
 
       // object Main
       def moduleName  = newTermName(ScriptRunner scriptMain settings)
-      def moduleBody  = Template(List(scalaAnyRefConstr), emptyValDef, List(emptyInit, mainDef))
+      def moduleBody  = Template(List(atPos(o2p(in.offset))(scalaAnyRefConstr)), emptyValDef, List(emptyInit, mainDef))
       def moduleDef   = ModuleDef(NoMods, moduleName, moduleBody)
 
       // package <empty> { ... }
@@ -1394,13 +1394,7 @@ self =>
             }
           }
         } else if (in.token == MATCH) {
-          t = atPos(t.pos.startOrPoint, in.skipToken()) {
-            /** For debugging pattern matcher transition issues */
-            if (settings.Ypmatnaive.value)
-              makeSequencedMatch(stripParens(t), inBracesOrNil(caseClauses()))
-            else
-              Match(stripParens(t), inBracesOrNil(caseClauses()))
-          }
+          t = atPos(t.pos.startOrPoint, in.skipToken())(Match(stripParens(t), inBracesOrNil(caseClauses())))
         }
         // in order to allow anonymous functions as statements (as opposed to expressions) inside
         // templates, we have to disambiguate them from self type declarations - bug #1565
@@ -2738,7 +2732,7 @@ self =>
       def anyrefParents() = {
         val caseParents = if (mods.isCase) List(productConstr, serializableConstr) else Nil
         parents0 ::: caseParents match {
-          case Nil  => List(scalaAnyRefConstr)
+          case Nil  => List(atPos(o2p(in.offset))(scalaAnyRefConstr))
           case ps   => ps
         }
       }

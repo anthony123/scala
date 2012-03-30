@@ -764,8 +764,24 @@ trait Definitions extends reflect.api.StandardDefinitions {
       else
         removeRedundantObjects(parents)
     }
+
+    def typeStringNoPackage(tp: Type) =
+      "" + tp stripPrefix tp.typeSymbol.enclosingPackage.fullName + "."
+
+    def briefParentsString(parents: List[Type]) =
+      normalizedParents(parents) map typeStringNoPackage mkString " with "
+
     def parentsString(parents: List[Type]) =
       normalizedParents(parents) mkString " with "
+
+    def typeParamsString(tp: Type) = tp match {
+      case PolyType(tparams, _) => tparams map (_.defString) mkString ("[", ",", "]")
+      case _                    => ""
+    }
+    def valueParamsString(tp: Type) = tp match {
+      case MethodType(params, _) => params map (_.defString) mkString ("(", ",", ")")
+      case _                     => ""
+    }
 
     // members of class java.lang.{ Object, String }
     lazy val Object_## = enterNewMethod(ObjectClass, nme.HASHHASH, Nil, inttype, FINAL)
@@ -904,6 +920,20 @@ trait Definitions extends reflect.api.StandardDefinitions {
     def termMember(owner: Symbol, name: String): Symbol = owner.info.member(newTermName(name))
     def typeMember(owner: Symbol, name: String): Symbol = owner.info.member(newTypeName(name))
 
+    def findMemberFromRoot(fullName: Name): Symbol = {
+      val segs = nme.segments(fullName.toString, fullName.isTermName)
+      if (segs.isEmpty) NoSymbol
+      else findNamedMember(segs.tail, definitions.RootClass.info member segs.head)
+    }
+    def findNamedMember(fullName: Name, root: Symbol): Symbol = {
+      val segs = nme.segments(fullName.toString, fullName.isTermName)
+      if (segs.isEmpty || segs.head != root.simpleName) NoSymbol
+      else findNamedMember(segs.tail, root)
+    }
+    def findNamedMember(segs: List[Name], root: Symbol): Symbol =
+      if (segs.isEmpty) root
+      else findNamedMember(segs.tail, root.info member segs.head)
+
     def getMember(owner: Symbol, name: Name): Symbol = {
       if (owner == NoSymbol) NoSymbol
       else owner.info.nonPrivateMember(name) match {
@@ -911,6 +941,7 @@ trait Definitions extends reflect.api.StandardDefinitions {
         case result   => result
       }
     }
+    
     def packageExists(packageName: String): Boolean =
       getModuleIfDefined(packageName).isPackage
 
@@ -955,7 +986,7 @@ trait Definitions extends reflect.api.StandardDefinitions {
         case (_, restpe)             => NullaryMethodType(restpe)
       }
 
-      msym setInfoAndEnter polyType(tparams, mtpe)
+      msym setInfoAndEnter genPolyType(tparams, mtpe)
     }
 
     /** T1 means one type parameter.

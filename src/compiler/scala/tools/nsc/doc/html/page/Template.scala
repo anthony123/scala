@@ -11,13 +11,19 @@ package page
 import model._
 import scala.xml.{ NodeSeq, Text, UnprefixedAttribute }
 
-class Template(tpl: DocTemplateEntity) extends HtmlPage {
+class Template(universe: doc.Universe, tpl: DocTemplateEntity) extends HtmlPage {
 
   val path =
     templateToPath(tpl)
 
-  val title =
-    tpl.qualifiedName
+  def title = {
+    val s = universe.settings
+
+    tpl.name +
+    ( if (!s.doctitle.isDefault) " - " + s.doctitle.value else "" ) +
+    ( if (!s.docversion.isDefault) (" " + s.docversion.value) else "" ) +
+    " - " + tpl.qualifiedName
+  }
 
   val headers =
     <xml:group>
@@ -29,7 +35,7 @@ class Template(tpl: DocTemplateEntity) extends HtmlPage {
     </xml:group>
 
   val valueMembers =
-    tpl.methods.filterNot(_.isBridge) ++ tpl.values ++ tpl.templates.filter(x => x.isObject || x.isPackage) sorted
+    tpl.methods ++ tpl.values ++ tpl.templates.filter(x => x.isObject || x.isPackage) sorted
 
   val (absValueMembers, nonAbsValueMembers) =
     valueMembers partition (_.isAbstract)
@@ -339,6 +345,17 @@ class Template(tpl: DocTemplateEntity) extends HtmlPage {
       }
     }
 
+    val fullSignature: Seq[scala.xml.Node] = {
+      mbr match {
+        case nte: NonTemplateMemberEntity if nte.isUseCase =>
+          <div class="full-signature-block toggleContainer">
+            <span class="toggle">Full Signature</span>
+            <div class="hiddenContent full-signature-usecase">{ signature(nte.useCaseOf.get,true) }</div>
+          </div>
+        case _ => NodeSeq.Empty
+      }
+    }    
+
     val selfType: Seq[scala.xml.Node] = mbr match {
       case dtpl: DocTemplateEntity if (isSelf && !dtpl.selfType.isEmpty && !isReduced) =>
         <dt>Self Type</dt>
@@ -372,7 +389,7 @@ class Template(tpl: DocTemplateEntity) extends HtmlPage {
       case dtpl: DocTemplateEntity if (isSelf && dtpl.sourceUrl.isDefined && dtpl.inSource.isDefined && !isReduced) =>
         val (absFile, line) = dtpl.inSource.get
         <dt>Source</dt>
-        <dd>{ <a href={ dtpl.sourceUrl.get.toString }>{ Text(absFile.file.getName) }</a> }</dd>
+        <dd>{ <a href={ dtpl.sourceUrl.get.toString } target="_blank">{ Text(absFile.file.getName) }</a> }</dd>
       case _ => NodeSeq.Empty
     }
 
@@ -438,7 +455,9 @@ class Template(tpl: DocTemplateEntity) extends HtmlPage {
           if(!comment.throws.isEmpty) {
             <dt>Exceptions thrown</dt>
             <dd>{
-              val exceptionsXml: Iterable[scala.xml.NodeSeq] = (for(exception <- comment.throws ) yield <span class="cmt">{Text(exception._1) ++ bodyToHtml(exception._2)}</span> )
+              val exceptionsXml: Iterable[scala.xml.NodeSeq] =
+                for(exception <- comment.throws.toList.sortBy(_._1) ) yield
+                  <span class="cmt">{Text(exception._1) ++ bodyToHtml(exception._2)}</span>
               exceptionsXml.reduceLeft(_ ++ Text("") ++ _)
             }</dd>
           } else NodeSeq.Empty
@@ -458,7 +477,7 @@ class Template(tpl: DocTemplateEntity) extends HtmlPage {
     }
     // end attributes block vals ---
 
-    val attributesInfo = attributes ++ definitionClasses ++ selfType ++ annotations ++ deprecation ++ migration ++ sourceLink ++ mainComment
+    val attributesInfo = attributes ++ definitionClasses ++ fullSignature ++ selfType ++ annotations ++ deprecation ++ migration ++ sourceLink ++ mainComment
     val attributesBlock =
       if (attributesInfo.isEmpty)
         NodeSeq.Empty

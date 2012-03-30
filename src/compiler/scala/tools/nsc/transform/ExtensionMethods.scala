@@ -28,6 +28,9 @@ abstract class ExtensionMethods extends Transform with TypingTransformers {
   /** the following two members override abstract members in Transform */
   val phaseName: String = "extmethods"
 
+  /** The following flags may be set by this phase: */
+  override def phaseNewFlags: Long = notPRIVATE
+
   def newTransformer(unit: CompilationUnit): Transformer =
     new Extender(unit)
 
@@ -101,11 +104,12 @@ abstract class ExtensionMethods extends Transform with TypingTransformers {
         case Template(_, _, _) =>
           if (currentOwner.isDerivedValueClass) {
             extensionDefs(currentOwner.companionModule) = new mutable.ListBuffer[Tree]
+            currentOwner.primaryConstructor.makeNotPrivate(NoSymbol)
             super.transform(tree)
           } else if (currentOwner.isStaticOwner) {
             super.transform(tree)
           } else tree
-        case DefDef(mods, name, tparams, vparamss, tpt, rhs) if tree.symbol.isMethodWithExtension =>
+        case DefDef(_, _, tparams, vparamss, _, rhs) if tree.symbol.isMethodWithExtension =>
           val companion = currentOwner.companionModule
           val origMeth = tree.symbol
           val extensionName = extensionNames(origMeth).head
@@ -132,15 +136,13 @@ abstract class ExtensionMethods extends Transform with TypingTransformers {
               gen.mkTypeApply(gen.mkAttributedRef(companion), extensionMeth, origTpeParams map (_.tpe)),
               List(This(currentOwner)))
           val extensionCall = atOwner(origMeth) {
-            localTyper.typed {
-              atPos(rhs.pos) {
-                (extensionCallPrefix /: vparamss) {
-                  case (fn, params) => Apply(fn, params map (param => Ident(param.symbol)))
-                }
+            localTyper.typedPos(rhs.pos) {
+              (extensionCallPrefix /: vparamss) {
+                case (fn, params) => Apply(fn, params map (param => Ident(param.symbol)))
               }
             }
           }
-          treeCopy.DefDef(tree, mods, name, tparams, vparamss, tpt, extensionCall)
+          deriveDefDef(tree)(_ => extensionCall)
         case _ =>
           super.transform(tree)
       }
@@ -148,14 +150,12 @@ abstract class ExtensionMethods extends Transform with TypingTransformers {
 
     override def transformStats(stats: List[Tree], exprOwner: Symbol): List[Tree] =
       super.transformStats(stats, exprOwner) map {
-        case stat @ ModuleDef(mods, name, tmpl @ Template(parents, self, body)) =>
-          extensionDefs.remove(stat.symbol) match {
-            case Some(buf) =>
-              val extensionDefs = buf.toList map { mdef => atOwner(stat.symbol) { localTyper.typed(mdef) } }
-              treeCopy.ModuleDef(stat, mods, name, treeCopy.Template(tmpl, parents, self, body ++ extensionDefs))
-            case None =>
-              stat
-          }
+        case md @ ModuleDef(_, _, _) if extensionDefs contains md.symbol =>
+          val defns = extensionDefs(md.symbol).toList map (member =>
+            atOwner(md.symbol)(localTyper.typedPos(md.pos.focus)(member))
+          )
+          extensionDefs -= md.symbol
+          deriveModuleDef(md)(tmpl => deriveTemplate(tmpl)(_ ++ defns))
         case stat =>
           stat
       }

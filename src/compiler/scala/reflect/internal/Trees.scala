@@ -283,10 +283,16 @@ trait Trees extends api.Trees { self: SymbolTable =>
     }
   }
 
-  private object posAssigner extends Traverser {
+  trait PosAssigner extends Traverser {
+    var pos: Position
+  }
+  protected[this] lazy val posAssigner: PosAssigner = new DefaultPosAssigner
+
+  protected class DefaultPosAssigner extends PosAssigner {
     var pos: Position = _
     override def traverse(t: Tree) {
-      if (t != EmptyTree && t.pos == NoPosition) {
+      if (t eq EmptyTree) ()
+      else if (t.pos == NoPosition) {
         t.setPos(pos)
         super.traverse(t)   // TODO: bug? shouldn't the traverse be outside of the if?
         // @PP: it's pruning whenever it encounters a node with a
@@ -344,8 +350,9 @@ trait Trees extends api.Trees { self: SymbolTable =>
     "subst[%s, %s](%s)".format(fromStr, toStr, (from, to).zipped map (_ + " -> " + _) mkString ", ")
   }
 
-  // NOTE: if symbols in `from` occur multiple times in the `tree` passed to `transform`,
-  // the resulting Tree will be a graph, not a tree... this breaks all sorts of stuff,
+  // NOTE: calls shallowDuplicate on trees in `to` to avoid problems when symbols in `from`
+  // occur multiple times in the `tree` passed to `transform`,
+  // otherwise, the resulting Tree would be a graph, not a tree... this breaks all sorts of stuff,
   // notably concerning the mutable aspects of Trees (such as setting their .tpe)
   class TreeSubstituter(from: List[Symbol], to: List[Tree]) extends Transformer {
     override def transform(tree: Tree): Tree = tree match {
