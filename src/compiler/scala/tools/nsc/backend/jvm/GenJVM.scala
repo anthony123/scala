@@ -243,16 +243,30 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
     val privateFlag =
       sym.isPrivate || (sym.isPrimaryConstructor && isTopLevelModule(sym.owner))
 
-    // This does not check .isFinal (which checks flags for the FINAL flag),
-    // instead checking rawflags for that flag so as to exclude symbols which
-    // received lateFINAL.  These symbols are eligible for inlining, but to
-    // avoid breaking proxy software which depends on subclassing, we avoid
-    // insisting on their finality in the bytecode.
+    // Final: the only fields which can receive ACC_FINAL are eager vals.
+    // Neither vars nor lazy vals can, because:
+    //
+    // Source: http://docs.oracle.com/javase/specs/jls/se7/html/jls-17.html#jls-17.5.3
+    // "Another problem is that the specification allows aggressive
+    // optimization of final fields. Within a thread, it is permissible to
+    // reorder reads of a final field with those modifications of a final
+    // field that do not take place in the constructor."
+    //
+    // A var or lazy val which is marked final still has meaning to the
+    // scala compiler. The word final is heavily overloaded unfortunately;
+    // for us it means "not overridable". At present you can't override
+    // vars regardless; this may change.
+    //
+    // The logic does not check .isFinal (which checks flags for the FINAL flag,
+    // and includes symbols marked lateFINAL) instead inspecting rawflags so
+    // we can exclude lateFINAL. Such symbols are eligible for inlining, but to
+    // avoid breaking proxy software which depends on subclassing, we do not
+    // emit ACC_FINAL.
     val finalFlag = (
          ((sym.rawflags & (Flags.FINAL | Flags.MODULE)) != 0)
       && !sym.enclClass.isInterface
       && !sym.isClassConstructor
-      && !sym.isMutable  // fix for SI-3569, it is too broad?
+      && !sym.isMutable // lazy vals and vars both
     )
 
     import asm.Opcodes._
@@ -270,7 +284,7 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
   }
 
   def javaFieldFlags(sym: Symbol) = {
-    mkFlags(
+    javaFlags(sym) | mkFlags(
       if (sym hasAnnotation TransientAttr) asm.Opcodes.ACC_TRANSIENT else 0,
       if (sym hasAnnotation VolatileAttr)  asm.Opcodes.ACC_VOLATILE  else 0,
       if (sym.isMutable) 0 else asm.Opcodes.ACC_FINAL
@@ -658,7 +672,7 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
           getCurrentCUnit().warning(sym.pos,
               """|compiler bug: created invalid generic signature for %s in %s
                  |signature: %s
-                 |if this is reproducible, please report bug at http://issues.scala-lang.org/
+                 |if this is reproducible, please report bug at https://issues.scala-lang.org/
               """.trim.stripMargin.format(sym, sym.owner.skipPackageObject.fullName, sig))
           return null
         }
@@ -1344,7 +1358,6 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
       val javagensig = getGenericSignature(f.symbol, clasz.symbol)
 
       val flags = mkFlags(
-        javaFlags(f.symbol),
         javaFieldFlags(f.symbol),
         if(isDeprecated(f.symbol)) asm.Opcodes.ACC_DEPRECATED else 0 // ASM pseudo access flag
       )
