@@ -864,17 +864,20 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
       val allInners: List[Symbol] = innerClassBuffer.toList
       if (allInners.nonEmpty) {
         debuglog(csym.fullName('.') + " contains " + allInners.size + " inner classes.")
-        // sort them so inner classes succeed their enclosing class
-        // to satisfy the Eclipse Java compiler
+
+        // entries ready to be serialized into the classfile, used to detect duplicates.
+        val entries = mutable.Map.empty[String, String]
+
+        // sort them so inner classes succeed their enclosing class to satisfy the Eclipse Java compiler
         for (innerSym <- allInners sortBy (_.name.length)) { // TODO why not sortBy (_.name.toString()) ??
           val flags = mkFlags(
             if (innerSym.rawowner.hasModuleFlag) asm.Opcodes.ACC_STATIC else 0,
             javaFlags(innerSym),
             if(isDeprecated(innerSym)) asm.Opcodes.ACC_DEPRECATED else 0 // ASM pseudo-access flag
           ) & (INNER_CLASSES_FLAGS | asm.Opcodes.ACC_DEPRECATED)
-          val jname = javaName(innerSym)
-          val oname = outerName(innerSym)
-          val iname = innerName(innerSym)
+          val jname = javaName(innerSym)  // never null
+          val oname = outerName(innerSym) // null when method-enclosed
+          val iname = innerName(innerSym) // null for anonymous inner class
 
           // Mimicking javap inner class output
           debuglog(
@@ -882,7 +885,31 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
             else "//%s=class %s of class %s".format(iname, jname, oname)
           )
 
-          jclass.visitInnerClass(jname, oname, iname, flags)
+          assert(jname != null, "javaName is broken.") // documentation
+          val doAdd = entries.get(jname) match {
+            // TODO is it ok for prevOName to be be null? (Someone should really document the invariants of the InnerClasses bytecode attribute)
+            case Some(prevOName) =>
+              // this occurs e.g. when innerClassBuffer contains both class Thread$State, object Thread$State,
+              // i.e. for them it must be the case that oname == java/lang/Thread
+              assert(prevOName == oname, "duplicate")
+              false
+            case None => true
+          }
+
+          if(doAdd) {
+            entries += (jname -> oname)
+            jclass.visitInnerClass(jname, oname, iname, flags)
+          }
+
+          /*
+           * TODO Add assert for: (JVMS 4.7.6 The InnerClasses attribute)
+           * If a class file has a version number that is greater than or equal to 51.0, and
+           * has an InnerClasses attribute in its attributes table, then for all entries in the
+           * classes array of the InnerClasses attribute, the value of the
+           * outer_class_info_index item must be zero if the value of the
+           * inner_name_index item is zero.
+           */
+
         }
       }
     }
