@@ -643,17 +643,16 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
       if (!needsGenericSignature(sym)) { return null }
 
       val memberTpe = beforeErasure(owner.thisType.memberInfo(sym))
-      // println("getGenericSignature sym: " + sym.fullName + " : " + memberTpe + " sym.info: " + sym.info)
-      // println("getGenericSignature: "+ (sym.ownerChain map (x => (x.name, x.isImplClass))))
 
       val jsOpt: Option[String] = erasure.javaSig(sym, memberTpe)
       if (jsOpt.isEmpty) { return null }
 
       val sig = jsOpt.get
+      log(sig) // This seems useful enough in the general case.
 
 
-          def wrap(op: => Any) =
-            try   { op ; true }
+          def wrap(op: => Unit) =
+            try   { op; true }
             catch { case _ => false }
 
 
@@ -662,10 +661,9 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
         val isValidSignature = wrap {
           // Alternative: scala.tools.reflect.SigParser (frontend to sun.reflect.generics.parser.SignatureParser)
           import asm.util.CheckMethodAdapter
-          true // TODO make checkMethodSignature etc public (currently static-protected)
-          // if (sym.isMethod)    { CheckMethodAdapter checkMethodSignature sig } // requires asm-util.jar
-          // else if (sym.isTerm) { CheckMethodAdapter checkFieldSignature  sig }
-          // else                 { CheckMethodAdapter checkClassSignature  sig }
+          if (sym.isMethod)    { CheckMethodAdapter checkMethodSignature sig } // requires asm-util.jar
+          else if (sym.isTerm) { CheckMethodAdapter checkFieldSignature  sig }
+          else                 { CheckMethodAdapter checkClassSignature  sig }
         }
 
         if(!isValidSignature) {
@@ -678,7 +676,7 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
         }
       }
 
-      if ((settings.check.value contains "genjvm")) {
+      if ((settings.check containsName phaseName)) {
         val normalizedTpe = beforeErasure(erasure.prepareSigMap(memberTpe))
         val bytecodeTpe = owner.thisType.memberInfo(sym)
         if (!sym.isType && !sym.isConstructor && !(erasure.erasure(sym)(normalizedTpe) =:= bytecodeTpe)) {

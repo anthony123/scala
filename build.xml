@@ -316,7 +316,6 @@ INITIALISATION
     <path id="aux.libs">
       <fileset dir="${lib.dir}">
         <include name="fjbg.jar"/>
-        <include name="asm-debug-all-4.0.jar"/>
         <include name="msil.jar"/>
         <include name="forkjoin.jar"/>
       </fileset>
@@ -1139,7 +1138,6 @@ PACKED QUICK BUILD (PACK)
       <pathelement location="${build-pack.dir}/lib/scala-compiler.jar"/>
       <pathelement location="${build-pack.dir}/lib/scala-partest.jar"/>
       <pathelement location="${build-pack.dir}/lib/scalap.jar"/>
-      <pathelement location="${lib.dir}/asm-debug-all-4.0.jar"/>
       <pathelement location="${build-pack.dir}/lib/scala-actors.jar"/>
       <pathelement location="${ant.jar}"/>
       <pathelement location="${jline.jar}"/>
