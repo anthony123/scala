@@ -1891,6 +1891,17 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
 
       var isModuleInitialized = false
 
+      /* TODO test/files/run/private-inline.scala after -optimize is chock full of
+       * BasicBlocks containing just JUMP(whereTo), where no exception handler straddles them.
+       * They should be collapsed by IMethod.normalize() but aren't.
+       * That was fine in FJBG times when by the time the exception table was emitted,
+       * it already contained "anchored" labels (ie instruction offsets were known)
+       * and thus ranges with identical (start, end) (i.e, identical after GenJVM omitted the JUMPs in question)
+       * could be weeded out to avoid "java.lang.ClassFormatError: Illegal exception table range"
+       * Now that visitTryCatchBlock() must be called before Labels are resolved,
+       * it would be great to have gotten rid of the BasicBlocks described above (to recap, consisting of just a JUMP).
+       */
+
       val labels: collection.Map[BasicBlock, asm.Label] = mutable.HashMap(linearization map (_ -> new asm.Label()) : _*)
 
       val onePastLast = new asm.Label // token for the mythical instruction past the last instruction in the method being emitted
@@ -1979,13 +1990,26 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
             result
           }
 
-          for (e <- this.method.exh ; p <- intervals(e)) {
+          /* TODO test/files/run/exceptions-2.scala displays an ExceptionHandler.covered that contains
+           * blocks not in the linearization (dead-code?). Is that well-formed or not?
+           * For now, we ignore those blocks (after all, that's what `genBlocks(linearization)` in effect does).
+           */
+          for (e <- this.method.exh) {
+            val ignore: Set[BasicBlock] = (e.covered filterNot { b => linearization contains b } )
+            // TODO someday assert(ignore.isEmpty, ignore)
+            if(ignore.nonEmpty) {
+              e.covered  = e.covered filterNot ignore
+            }
+          }
+
+          // an ExceptionHandler lacking covered blocks doesn't get an entry in the Exceptions table.
+          // TODO in that case, ExceptionHandler.cls doesn't go through javaName(). What if cls is an inner class?
+          for (e <- this.method.exh ; if e.covered.nonEmpty ; p <- intervals(e)) {
             debuglog("Adding exception handler " + e + "at block: " + e.startBlock + " for " + method +
                      " from: " + p.start + " to: " + p.end + " catching: " + e.cls);
             val cls: String = if (e.cls == NoSymbol || e.cls == ThrowableClass) null
                               else javaName(e.cls)
-            jmethod.visitTryCatchBlock(labels(p.start), linNext(p.end),
-                                       labels(e.startBlock), cls)
+            jmethod.visitTryCatchBlock(labels(p.start), linNext(p.end), labels(e.startBlock), cls)
           }
         } // end of genCode()'s genExceptionHandlers()
 
