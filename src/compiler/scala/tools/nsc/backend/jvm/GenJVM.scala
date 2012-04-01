@@ -732,6 +732,7 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
         val ba = bSeven.slice(prevOffset, offset)
         strs ::= new java.lang.String(ubytesToCharArray(ba))
       }
+      assert(strs.size > 1, "encode instead as one String via strEncode()") // TODO too strict?
       strs.reverse.toArray
     }
 
@@ -767,7 +768,7 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
         case sb@ScalaSigBytes(bytes) =>
           // see http://www.scala-lang.org/sid/10 (Storage of pickled Scala signatures in class files)
           // also JVMS Sec. 4.7.16.1 The element_value structure and JVMS Sec. 4.4.7 The CONSTANT_Utf8_info Structure.
-          val assocValue = (if(sb.isLong) arrEncode(sb) else strEncode(sb))
+          val assocValue = (if(sb.fitsInOneString) strEncode(sb) else arrEncode(sb))
           av.visit(name, assocValue)
           // for the lazy val in ScalaSigBytes to be GC'ed, the invoker of emitAnnotations() should hold the ScalaSigBytes in a method-local var that doesn't escape.
 

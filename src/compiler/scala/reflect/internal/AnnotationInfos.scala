@@ -76,12 +76,16 @@ trait AnnotationInfos extends api.AnnotationInfos { self: SymbolTable =>
    */
   case class ScalaSigBytes(bytes: Array[Byte]) extends ClassfileAnnotArg {
     override def toString = (bytes map { byte => (byte & 0xff).toHexString }).mkString("[ ", " ", " ]")
+    lazy val encodedBytes = ByteCodecs.encode(bytes)    // TODO remove after migration to ASM-based GenJVM complete
+    def isLong: Boolean = (encodedBytes.length > 65535) // TODO remove after migration to ASM-based GenJVM complete
     lazy val sevenBitsMayBeZero: Array[Byte] = {
       mapToNextModSevenBits(scala.reflect.internal.pickling.ByteCodecs.encode8to7(bytes))
     }
-    def isLong: Boolean = {
+    def fitsInOneString: Boolean = {
       val numZeros = (sevenBitsMayBeZero count { b => b == 0 })
-      (sevenBitsMayBeZero.length + numZeros) > 65535
+      val res = (sevenBitsMayBeZero.length + numZeros) <= 65535
+      assert(this.isLong == !res, "as things stand, can't just replace `isLong()` calls with `fitsInOneString()`")
+      res
     }
     def sigAnnot: Type =
       if (this.isLong)
