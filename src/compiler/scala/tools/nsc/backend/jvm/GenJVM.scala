@@ -184,11 +184,12 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
 
       bytecodeWriter.close()
       classes.clear()
+      reverseJavaName.clear()
 
       /* don't javaNameCache.clear() because that causes the following tests to fail:
        *   test/files/run/macro-repl-dontexpand.scala
-       *   test/files/run/repl-exceptions.scala
        *   test/files/jvm/interpreter.scala
+       * TODO but why? what use could javaNameCache possibly see once GenJVM is over?
        */
 
       /* TODO After emitting all class files (e.g., in a separate compiler phase) ASM can perform bytecode verification:
@@ -213,6 +214,13 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
     RuntimeNothingClass -> binarynme.RuntimeNothing,
     NullClass           -> binarynme.RuntimeNull,
     RuntimeNullClass    -> binarynme.RuntimeNull
+  )
+
+  val reverseJavaName = mutable.Map.empty[String, Symbol] ++= List(
+    binarynme.RuntimeNothing.toString() -> NothingClass,
+    binarynme.RuntimeNothing.toString() -> RuntimeNothingClass,
+    binarynme.RuntimeNull.toString()    -> NullClass,
+    binarynme.RuntimeNull.toString()    -> RuntimeNullClass
   )
 
   private def mkFlags(args: Int*) = args.foldLeft(0)(_ | _)
@@ -309,28 +317,49 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
    */
   class CustomAttr(name: String, b: Array[Byte]) extends asm.Attribute(name, b) { }
 
+  /* The internal name of the least common ancestor of the types given by inameA and inameB.
+     It's what ASM needs to know in order to compute stack map frames, http://asm.ow2.org/doc/developer-guide.html#controlflow */
+  def getCommonSuperClass(inameA: String, inameB: String): String = {
+    val a = reverseJavaName(inameA)
+    val b = reverseJavaName(inameB)
+
+    val lcaSym  = NoSymbol  // TODO
+    val lcaName = lcaSym.javaBinaryName.toString // don't call javaName because that side-effects innerClassBuffer.
+    val oldsym  = reverseJavaName.put(lcaName, lcaSym)
+    assert(oldsym.isEmpty || (oldsym.get == lcaSym), "somehow we're not managing to compute common-super-class for ASM consumption")
+
+    lcaName // no need to cache because ASM does it already.
+  }
+
+  class CClassWriter(flags: Int) extends asm.ClassWriter(flags) {
+    override def getCommonSuperClass(iname1: String, iname2: String): String = {
+      GenJVM.this.getCommonSuperClass(iname1, iname2)
+    }
+  }
+
+  // -----------------------------------------------------------------------------------------
+  // constants
+  // -----------------------------------------------------------------------------------------
+
+  private val classfileVersion: Int = settings.target.value match {
+    case "jvm-1.5" => asm.Opcodes.V1_5
+    case "jvm-1.6" => asm.Opcodes.V1_6
+    case "jvm-1.7" => asm.Opcodes.V1_7
+  }
+
+  private val majorVersion: Int = (classfileVersion & 0xFF)
+
+  private val extraProc: Int = mkFlags(
+    asm.ClassWriter.COMPUTE_MAXS,
+    if(majorVersion >= 50) asm.ClassWriter.COMPUTE_FRAMES else 0
+  )
+
+  val JAVA_LANG_OBJECT = asm.Type.getObjectType("java/lang/Object")
+  val JAVA_LANG_STRING = asm.Type.getObjectType("java/lang/String")
+
   /** basic functionality for class file building */
   abstract class JBuilder(bytecodeWriter: BytecodeWriter) {
 
-    // -----------------------------------------------------------------------------------------
-    // constants
-    // -----------------------------------------------------------------------------------------
-
-    private val classfileVersion: Int = settings.target.value match {
-      case "jvm-1.5" => asm.Opcodes.V1_5
-      case "jvm-1.6" => asm.Opcodes.V1_6
-      case "jvm-1.7" => asm.Opcodes.V1_7
-    }
-
-    private val majorVersion: Int = (classfileVersion & 0xFF)
-
-    private val extraProc: Int = mkFlags(
-      asm.ClassWriter.COMPUTE_MAXS,
-      if(majorVersion >= 50) asm.ClassWriter.COMPUTE_FRAMES else 0
-    )
-
-    val JAVA_LANG_OBJECT   = asm.Type.getObjectType("java/lang/Object")
-    val JAVA_LANG_STRING   = asm.Type.getObjectType("java/lang/String")
     val EMPTY_JTYPE_ARRAY  = Array.empty[asm.Type]
     val EMPTY_STRING_ARRAY = Array.empty[String]
 
@@ -363,7 +392,7 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
      *        <tt>null</tt>.
      */
     def createJClass(access: Int, name: String, signature: String, superName: String, interfaces: Array[String]): asm.ClassWriter = {
-      val cw = new asm.ClassWriter(extraProc)
+      val cw = new CClassWriter(extraProc)
       /*
       val jc =
         if (settings.debug.value) {
@@ -470,10 +499,20 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
       collectInnerClass(sym)
 
       javaNameCache.getOrElseUpdate(sym, {
-        if (sym.isClass || (sym.isModule && !sym.isMethod))
-          sym.javaBinaryName
-        else
+        if (sym.isClass || (sym.isModule && !sym.isMethod)) {
+          val internalName = sym.javaBinaryName
+          val trackedSym =
+            if(sym.isJavaDefined && sym.isModuleClass) sym.linkedClassOfClass
+            else if(sym.isModule) sym.moduleClass
+            else sym // we track only module-classes and plain-classes
+          val oldsym = reverseJavaName.put(internalName.toString(), trackedSym).getOrElse(NoSymbol)
+          assert((oldsym == NoSymbol) || (oldsym == trackedSym),
+                 "how can getCommonSuperclass() do its job if two different class symbols get the same internal name in jvm bytecode.")
+
+          internalName
+        } else {
           sym.javaSimpleName
+        }
       }).toString
     }
 
