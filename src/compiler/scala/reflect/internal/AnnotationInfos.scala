@@ -76,13 +76,30 @@ trait AnnotationInfos extends api.AnnotationInfos { self: SymbolTable =>
    */
   case class ScalaSigBytes(bytes: Array[Byte]) extends ClassfileAnnotArg {
     override def toString = (bytes map { byte => (byte & 0xff).toHexString }).mkString("[ ", " ", " ]")
-    lazy val encodedBytes = ByteCodecs.encode(bytes)
-    def isLong: Boolean = (encodedBytes.length > 65535)
+    lazy val sevenBitsMayBeZero: Array[Byte] = {
+      mapToNextModSevenBits(scala.reflect.internal.pickling.ByteCodecs.encode8to7(bytes))
+    }
+    def isLong: Boolean = {
+      val numZeros = (sevenBitsMayBeZero count { b => b == 0 })
+      (sevenBitsMayBeZero.length + numZeros) > 65535
+    }
     def sigAnnot: Type =
       if (this.isLong)
         definitions.ScalaLongSignatureAnnotation.tpe
       else
         definitions.ScalaSignatureAnnotation.tpe
+
+    private def mapToNextModSevenBits(src: Array[Byte]): Array[Byte] = {
+      var i = 0
+      val srclen = src.length
+      while (i < srclen) {
+        val in = src(i)
+        src(i) = (if (in == 0x7f) 0.toByte else (in + 1).toByte)
+        i += 1
+      }
+      src
+    }
+
   }
 
   /** Represents a nested classfile annotation */

@@ -695,21 +695,6 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
       sig
     }
 
-    def sevenBitsMayBeZero(bytes: Array[Byte]): Array[Byte] = {
-      mapToNextModSevenBits(scala.reflect.internal.pickling.ByteCodecs.encode8to7(bytes))
-    }
-
-    def mapToNextModSevenBits(src: Array[Byte]): Array[Byte] = {
-      var i = 0
-      val srclen = src.length
-      while (i < srclen) {
-        val in = src(i)
-        src(i) = (if (in == 0x7f) 0.toByte else (in + 1).toByte)
-        i += 1
-      }
-      src
-    }
-
     def ubytesToCharArray(bytes: Array[Byte]): Array[Char] = {
       val ca = new Array[Char](bytes.size)
       var idx = 0
@@ -723,9 +708,35 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
       ca
     }
 
-    def strEncode(bytes: Array[Byte]): String = {
-      // why all this? See http://www.scala-lang.org/sid/10 (Storage of pickled Scala signatures in class files)
-      val ca = ubytesToCharArray(sevenBitsMayBeZero(bytes))
+    private def arrEncode(sb: ScalaSigBytes): Array[String] = {
+      var strs: List[String]  = Nil
+      val bSeven: Array[Byte] = sb.sevenBitsMayBeZero
+      // chop into slices of at most 65535 bytes, counting 0x00 as taking two bytes (as per JVMS 4.4.7 The CONSTANT_Utf8_info Structure)
+      var prevOffset = 0
+      var offset     = 0
+      var encLength  = 0
+      while(offset < bSeven.size) {
+        val newEncLength = encLength.toLong + (if(bSeven(offset) == 0) 2 else 1)
+        if(newEncLength > 65535) {
+          val ba     = bSeven.slice(prevOffset, offset)
+          strs     ::= new java.lang.String(ubytesToCharArray(ba))
+          encLength  = 0
+          prevOffset = offset
+        } else {
+          encLength += 1
+          offset    += 1
+        }
+      }
+      if(prevOffset < offset) {
+        assert(offset == bSeven.length)
+        val ba = bSeven.slice(prevOffset, offset)
+        strs ::= new java.lang.String(ubytesToCharArray(ba))
+      }
+      strs.reverse.toArray
+    }
+
+    private def strEncode(sb: ScalaSigBytes): String = {
+      val ca = ubytesToCharArray(sb.sevenBitsMayBeZero)
       new java.lang.String(ca)
       // debug val bvA = new asm.ByteVector; bvA.putUTF8(s)
       // debug val enc: Array[Byte] = scala.reflect.internal.pickling.ByteCodecs.encode(bytes)
@@ -753,38 +764,12 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
             }
           }
 
-        case sb@ScalaSigBytes(bytes) if !sb.isLong =>
+        case sb@ScalaSigBytes(bytes) =>
           // see http://www.scala-lang.org/sid/10 (Storage of pickled Scala signatures in class files)
-          av.visit(name, strEncode(sb.bytes)) // TODO when are all the `encodedBytes` lazy vals GC'ed?
-
-        case sb@ScalaSigBytes(bytes) if sb.isLong =>
-          // see http://www.scala-lang.org/sid/10 (Storage of pickled Scala signatures in class files)
-          // and http://docs.oracle.com/javase/tutorial/i18n/text/string.html (Byte Encodings and Strings)
-          var strs: List[String] = Nil
-          val bSeven: Array[Byte] = sevenBitsMayBeZero(sb.bytes)
-          // chop into slices of at most 65534 bytes, counting 0x00 as taking two bytes (as per JVMS 4.4.7 The CONSTANT_Utf8_info Structure)
-          var prevOffset = 0
-          var offset     = 0
-          var encLength  = 0
-          while(offset < bSeven.size) {
-            val newEncLength = encLength.toLong + (if(bSeven(offset) == 0) 2 else 1)
-            if(newEncLength > 65535) {
-              val ba = bSeven.slice(prevOffset, offset)
-              strs ::= new java.lang.String(ubytesToCharArray(ba))
-              encLength = 0
-              prevOffset = offset
-            } else {
-              encLength += 1
-              offset    += 1
-            }
-          }
-          if(prevOffset < offset) {
-            assert(offset == bSeven.length)
-            val ba = bSeven.slice(prevOffset, offset)
-            strs ::= new java.lang.String(ubytesToCharArray(ba))
-          }
-          val arr = strs.reverse.toArray
-          av.visit(name, arr)
+          // also JVMS Sec. 4.7.16.1 The element_value structure and JVMS Sec. 4.4.7 The CONSTANT_Utf8_info Structure.
+          val assocValue = (if(sb.isLong) arrEncode(sb) else strEncode(sb))
+          av.visit(name, assocValue)
+          // for the lazy val in ScalaSigBytes to be GC'ed, the invoker of emitAnnotations() should hold the ScalaSigBytes in a method-local var that doesn't escape.
 
         case ArrayAnnotArg(args) =>
           val arrAnnotV: asm.AnnotationVisitor = av.visitArray(name)
