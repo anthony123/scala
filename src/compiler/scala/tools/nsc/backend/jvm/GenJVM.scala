@@ -386,6 +386,21 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
       new CustomAttr(name, dest)
     }
 
+    // -----------------------------------------------------------------------------------------
+    // utitilies useful when emitting plain, mirror, and beaninfo classes.
+    // -----------------------------------------------------------------------------------------
+
+    def writeIfNotTooBig(label: String, jclassName: String, jclass: asm.ClassWriter, sym: Symbol) {
+      try {
+        val arr = jclass.toByteArray()
+        bytecodeWriter.writeClass(label, jclassName, arr, sym)
+      } catch {
+        case e: java.lang.RuntimeException if(e.getMessage() == "Class file too large!") =>
+          // TODO check where ASM throws the equivalent of CodeSizeTooBigException
+          log("Skipped class "+jclassName+" because it exceeds JVM limits (it's too big or has methods that are too long).")
+      }
+    }
+
     /** Specialized array conversion to prevent calling
      *  java.lang.reflect.Array.newInstance via TraversableOnce.toArray
      */
@@ -650,11 +665,10 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
       val sig = jsOpt.get
       log(sig) // This seems useful enough in the general case.
 
-
-          def wrap(op: => Unit) =
+          def wrap(op: => Unit) = {
             try   { op; true }
             catch { case _ => false }
-
+          }
 
       if (settings.Xverify.value) {
         // Run the signature parser to catch bogus signatures.
@@ -708,6 +722,7 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
       ca
     }
 
+    // TODO this method isn't exercised during bootstrapping. Open question: is it bug free?
     private def arrEncode(sb: ScalaSigBytes): Array[String] = {
       var strs: List[String]  = Nil
       val bSeven: Array[Byte] = sb.sevenBitsMayBeZero
@@ -1293,7 +1308,7 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
 
       addInnerClasses(clasz.symbol, jclass)
       jclass.visitEnd()
-      bytecodeWriter.writeClass("" + c.symbol.name, thisName, jclass.toByteArray(), c.symbol)
+      writeIfNotTooBig("" + c.symbol.name, thisName, jclass, c.symbol)
 
     }
 
@@ -1464,8 +1479,6 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
 
         jmethod.visitMaxs(0, 0) // just to follow protocol, dummy arguments
       }
-
-      // TODO check the ASM equivalent of CodeSizeTooBigException, report clasz.cunit.error(m.symbol.pos, "Code size exceeds JVM limits: %d".format(e.codeSize))
 
       jmethod.visitEnd()
 
@@ -2773,7 +2786,7 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
 
       addInnerClasses(modsym, mirrorClass)
       mirrorClass.visitEnd()
-      bytecodeWriter.writeClass("" + modsym.name, mirrorName, mirrorClass.toByteArray(), modsym)
+      writeIfNotTooBig("" + modsym.name, mirrorName, mirrorClass, modsym)
     }
 
 
@@ -2904,7 +2917,7 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
 
       beanInfoClass.visitEnd()
 
-      bytecodeWriter.writeClass("BeanInfo ", beanInfoName, beanInfoClass.toByteArray(), clasz.symbol)
+      writeIfNotTooBig("BeanInfo ", beanInfoName, beanInfoClass, clasz.symbol)
     }
 
   } // end of class JBeanInfoBuilder

@@ -84,7 +84,7 @@ trait AnnotationInfos extends api.AnnotationInfos { self: SymbolTable =>
     def fitsInOneString: Boolean = {
       val numZeros = (sevenBitsMayBeZero count { b => b == 0 })
       val res = (sevenBitsMayBeZero.length + numZeros) <= 65535
-      assert(this.isLong == !res, "as things stand, can't just replace `isLong()` calls with `fitsInOneString()`")
+      assert(this.isLong == !res, "As things stand, can't just swap in `fitsInOneString()` for `isLong()`")
       res
     }
     def sigAnnot: Type =
