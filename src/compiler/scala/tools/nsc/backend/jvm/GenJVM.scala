@@ -217,10 +217,8 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
   )
 
   val reverseJavaName = mutable.Map.empty[String, Symbol] ++= List(
-    binarynme.RuntimeNothing.toString() -> NothingClass,
-    binarynme.RuntimeNothing.toString() -> RuntimeNothingClass,
-    binarynme.RuntimeNull.toString()    -> NullClass,
-    binarynme.RuntimeNull.toString()    -> RuntimeNullClass
+    binarynme.RuntimeNothing.toString() -> NothingClass, // neither RuntimeNothingClass nor RuntimeNullClass belong to the co-domain of this map.
+    binarynme.RuntimeNull.toString()    -> NullClass
   )
 
   private def mkFlags(args: Int*) = args.foldLeft(0)(_ | _)
@@ -323,7 +321,11 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
     val a = reverseJavaName(inameA)
     val b = reverseJavaName(inameB)
 
-    val lcaSym  = NoSymbol  // TODO
+    assert(a.isClass)
+    assert(b.isClass)
+    val tp      = global.lub(List(a.tpe, b.tpe))
+    val lcaSym  = tp.typeSymbol
+    assert(lcaSym != NoSymbol)
     val lcaName = lcaSym.javaBinaryName.toString // don't call javaName because that side-effects innerClassBuffer.
     val oldsym  = reverseJavaName.put(lcaName, lcaSym)
     assert(oldsym.isEmpty || (oldsym.get == lcaSym), "somehow we're not managing to compute common-super-class for ASM consumption")
@@ -498,22 +500,28 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
 
       collectInnerClass(sym)
 
-      javaNameCache.getOrElseUpdate(sym, {
-        if (sym.isClass || (sym.isModule && !sym.isMethod)) {
-          val internalName = sym.javaBinaryName
-          val trackedSym =
-            if(sym.isJavaDefined && sym.isModuleClass) sym.linkedClassOfClass
-            else if(sym.isModule) sym.moduleClass
-            else sym // we track only module-classes and plain-classes
-          val oldsym = reverseJavaName.put(internalName.toString(), trackedSym).getOrElse(NoSymbol)
-          assert((oldsym == NoSymbol) || (oldsym == trackedSym),
-                 "how can getCommonSuperclass() do its job if two different class symbols get the same internal name in jvm bytecode.")
+      var hasInternalName = (sym.isClass || (sym.isModule && !sym.isMethod))
+      val cachedJN = javaNameCache.getOrElseUpdate(sym, {
+        if (hasInternalName) { sym.javaBinaryName }
+        else                 { sym.javaSimpleName }
+      })
 
-          internalName
-        } else {
-          sym.javaSimpleName
+      if(hasInternalName) {
+        val internalName = cachedJN.toString()
+        val trackedSym =
+          if(sym.isJavaDefined && sym.isModuleClass) sym.linkedClassOfClass
+          else if(sym.isModule) sym.moduleClass
+          else sym // we track only module-classes and plain-classes
+        reverseJavaName.get(internalName) match {
+          case None         =>
+            reverseJavaName.put(internalName, trackedSym)
+          case Some(oldsym) =>
+            assert(oldsym == trackedSym,
+                   "how can getCommonSuperclass() do its job if different class symbols get the same bytecode-level internal name.")
         }
-      }).toString
+      }
+
+      cachedJN.toString
     }
 
     def descriptor(t: Type):     String = { javaType(t).getDescriptor }
@@ -1918,6 +1926,9 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
                 emitVars: Boolean, // this param name hides the instance-level var
                 isStatic: Boolean) {
 
+
+      newNormal.normalize(m)
+
       // ------------------------------------------------------------------------------------------------------------
       // Part 1 of genCode(): setting up one-to-one correspondence between ASM Labels and BasicBlocks `linearization`
       // ------------------------------------------------------------------------------------------------------------
@@ -2968,6 +2979,85 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
    */
   object newNormal {
 
+    def startsWithJump(b: BasicBlock): Boolean = { assert(b.nonEmpty, "empty block"); b.firstInstruction.isInstanceOf[JUMP] }
+
+    /** Prune from an exception handler those covered blocks which are jump-only. */
+    private def coverWhatCountsOnly(m: IMethod): Boolean = {
+      assert(m.hasCode, "code-less method")
+
+      var wasReduced = false
+      for(h <- m.exh) {
+        val shouldntCover = (h.covered filter startsWithJump)
+        if(shouldntCover.nonEmpty) {
+          wasReduced = true
+          h.covered --= shouldntCover // not removing any block on purpose.
+        }
+      }
+
+      wasReduced
+    }
+
+    /** An exception handler is pruned provided any of the following holds:
+     *   (1) it covers nothing (for example, this may result after removing unreachable blocks)
+     *   (2) each block it covers is of the form: JUMP(_)
+     * Return true iff one or more ExceptionHandlers were removed.
+     *
+     * A caveat: removing an exception handler, for whatever reason, means that its handler code (even if unreachable)
+     * won't be able to cause a class-loading-exception. As a result, behavior can be different.
+     */
+    private def elimNonCoveringExh(m: IMethod): Boolean = {
+      assert(m.hasCode, "code-less method")
+
+        def isRedundant(e: ExceptionHandler): Boolean = {
+          e.covered.isEmpty || (e.covered forall startsWithJump)
+        }
+
+      var wasReduced = false
+      val toPrune = (m.exh.toSet filter isRedundant)
+      if(toPrune.nonEmpty) {
+        wasReduced = true
+        for(h <- toPrune; r <- h.blocks) { m.code.removeBlock(r) }
+        m.exh = (m.exh filterNot toPrune)
+      }
+
+      wasReduced
+    }
+
+    private def isJumpOnly(b: BasicBlock): Option[BasicBlock] = {
+      b.toList match {
+        case JUMP(whereto) :: rest =>
+          assert(rest.isEmpty, "A block contains instructions after JUMP (looks like enterIgnoreMode() was itself ignored.)")
+          Some(whereto)
+        case _ => None
+      }
+    }
+
+    def normalize(m: IMethod) {
+      if(!m.hasCode) { return }
+      var wasReduced = false;
+      do {
+        wasReduced = false
+        // Step 1: prune from an exception handler those covered blocks which are jump-only.
+        wasReduced |= coverWhatCountsOnly(m); icodes.checkValid(m)
+        // Step 2: prune exception handlers covering nothing.
+        wasReduced |= elimNonCoveringExh(m);  icodes.checkValid(m)
+        // Step 3: collapse chains of JUMP-only blocks
+        // wasReduced |= collapseJumpChains(m); icodes.checkValid(m)
+
+        // TODO this would be a good time to remove synthetic local vars seeing no use.
+        // TODO see note in genExceptionHandlers about an ExceptionHandler.covered containing dead blocks (does newNormal solve that?)
+      } while (wasReduced)
+    }
+
+  }
+
+
+}
+
+/*
+
+  object forFutureUse {
+
     private def directSuccStar(b: BasicBlock): Set[BasicBlock] = { directSuccStar(List(b)) }
 
     /** Transitive closure of successors potentially reachable due to normal (non-exceptional) control flow.
@@ -2983,34 +3073,6 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
       }
       result.toSet
     }
-
-    /** An exception handler none of whose covered blocks belongs anymore to IMethod.blocks is pruned.
-     * This method should be called after unreachable blocks have been removed.
-     * Return true iff one more ExceptionHandler were removed.
-     *
-     * A caveat: removing an exception handler, for whatever reason, means that its handler code (even if dead)
-     * won't be able to cause a class-loading-exception. As a result, behavior can be different.
-     */
-    private def elimNonCoveringExh(m: IMethod): Boolean = {
-      var wasReduced = false
-      val toPrune = for(e <- m.exh.toSet; if e.covered.isEmpty) yield e;
-      if(toPrune.nonEmpty) {
-        m.exh = (m.exh filterNot toPrune)
-        wasReduced = true
-      }
-      wasReduced
-    }
-
-    private def isJumpOnly(b: BasicBlock): Option[BasicBlock] = {
-      b.toList match {
-        case JUMP(whereto) :: rest =>
-          assert(rest.isEmpty, "A block contains instructions after JUMP (looks like enterIgnoreMode() was itself ignored.)")
-          Some(whereto)
-        case _ => None
-      }
-    }
-
-    private def startsWithJump(b: BasicBlock): Boolean = { assert(b.nonEmpty, "empty block"); b.firstInstruction.isInstanceOf[JUMP] }
 
     /** Returns:
      *    (a) the endpoint of a (single or multi-hop) chain of JUMPs; and
@@ -3047,6 +3109,18 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
       }
     }
 
+    def endsWithCtrlFlowInstr(b: BasicBlock): Boolean = {
+      b.lastInstruction match {
+        case JUMP(whereto)              => true
+        case CJUMP(succ, fail, _, _)    => true
+        case CZJUMP(succ, fail, _, _)   => true
+        case SWITCH(_, labels)          => true
+        case RETURN(_)                  => true
+        case THROW(_)                   => true
+        case _ => false
+      }
+    }
+
     /** Collapse a chain of "jump-only" blocks such as:
      *      JUMP b1;
      *  b1: JUMP b2;
@@ -3060,38 +3134,12 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
       assert(m.hasCode, "code-less method")
       // TODO handle case where m.startBlock is removed (ie don't forget to set new m.startBlock, similarly for an ExceptionHandler)
       // TODO pick just one of the candidates, rewire only for it.
-      val toPrune =
-        for(b <- m.code.blocksList;
-          whereto <- isJumpOnly(b);
-          if whereto != b // leave empty-infinite-loops in place
-        ) yield {
-          val (falloff, jumpingPred) = (b.predecessors partition { p => !mayJump(p, b) })
-          assert(falloff.size <= 1, "control flow may fall-off from at most one basic block")
-          // TODO re-wire each jumping predecessor to target "whereto" instead (can't target "final destination" directly because that would complicate bookkeeping)
-          b
-        }
-      for(r <- toPrune) { m.code.removeBlock(r) }
-      val wasReduced = toPrune.nonEmpty
+      // TODO re-wire each jumping predecessor to target "whereto" instead
 
-      wasReduced
+      false
     }
-
-    def normalize(m: IMethod) {
-      if(!m.hasCode) { return }
-      var wasReduced = false;
-      do {
-      // Step 1: prune exception handlers covering nothing.
-      wasReduced |= elimNonCoveringExh(m); icodes.checkValid(m)
-      // Step 2: collapse chains of JUMP-only blocks
-      wasReduced |= collapseJumpChains(m); icodes.checkValid(m)
-
-      // TODO this would be a good time to remove synthetic local vars seeing no use.
-      // TODO see note in genExceptionHandlers about an ExceptionHandler.covered containing dead blocks (does newNormal solve that?)
-      } while (wasReduced)
-    }
-
-
 
   }
 
-}
+
+*/
