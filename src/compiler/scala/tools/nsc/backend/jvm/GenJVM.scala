@@ -2991,15 +2991,14 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
      * A caveat: removing an exception handler, for whatever reason, means that its handler code (even if dead)
      * won't be able to cause a class-loading-exception. As a result, behavior can be different.
      */
-    private def elimNonCoveringExh(m: IMethod) {
+    private def elimNonCoveringExh(m: IMethod): Boolean = {
       var wasReduced = false
-      do {
-        val toPrune = for(e <- m.exh.toSet; if e.covered.isEmpty) yield e;
-        if(toPrune.nonEmpty) {
-          m.exh = (m.exh filterNot toPrune)
-          wasReduced = true
-        }
-      } while (wasReduced)
+      val toPrune = for(e <- m.exh.toSet; if e.covered.isEmpty) yield e;
+      if(toPrune.nonEmpty) {
+        m.exh = (m.exh filterNot toPrune)
+        wasReduced = true
+      }
+      wasReduced
     }
 
     private def isJumpOnly(b: BasicBlock): Option[BasicBlock] = {
@@ -3011,25 +3010,31 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
       }
     }
 
-    /** Returns the endpoint of a (single or multi-hop) chain of JUMPs.
+    private def startsWithJump(b: BasicBlock): Boolean = { assert(b.nonEmpty, "empty block"); b.firstInstruction.isInstanceOf[JUMP] }
+
+    /** Returns:
+     *    (a) the endpoint of a (single or multi-hop) chain of JUMPs; and
+     *    (b) all but the last basic blocks in such chain (ie blocks to be removed when collapsing the chain of jumps).
      *  In particular for self-loops, whose endpoint is the method's argument.
      *  Precondition: the BasicBlock given as argument starts with an unconditional JUMP.
      */
-    private def finalDestination(start: BasicBlock): BasicBlock = {
-      assert(start.firstInstruction.isInstanceOf[JUMP], "not the start of a (single or multi-hop) chain of JUMPs.")
+    private def finalDestination(start: BasicBlock): (BasicBlock, List[BasicBlock]) = {
+      assert(startsWithJump(start), "not the start of a (single or multi-hop) chain of JUMPs.")
+      var hops: List[BasicBlock] = Nil
       var prev = start
       var done = false
       do {
         done = isJumpOnly(prev) match {
           case Some(dest) =>
-            if (dest == start) { return start }
+            if (dest == start) { return (start, hops) } // leave infinite-loops in place
+            hops ::= prev
             prev = dest;
             false
           case None => true
         }
       } while(!done)
 
-      prev
+      (prev, hops)
     }
 
     def mayJump(from: BasicBlock, to: BasicBlock): Boolean = {
@@ -3052,8 +3057,9 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
      *  Returns true iff one or more such chains were collapsed.
      */
     private def collapseJumpChains(m: IMethod): Boolean = {
+      assert(m.hasCode, "code-less method")
       // TODO handle case where m.startBlock is removed (ie don't forget to set new m.startBlock, similarly for an ExceptionHandler)
-      // TODO TODO TODO pick just one of the candidates, rewire only for it.
+      // TODO pick just one of the candidates, rewire only for it.
       val toPrune =
         for(b <- m.code.blocksList;
           whereto <- isJumpOnly(b);
@@ -3075,9 +3081,9 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
       var wasReduced = false;
       do {
       // Step 1: prune exception handlers covering nothing.
-      elimNonCoveringExh(m); icodes.checkValid(m)
+      wasReduced |= elimNonCoveringExh(m); icodes.checkValid(m)
       // Step 2: collapse chains of JUMP-only blocks
-      while(collapseJumpChains(m)) {}; icodes.checkValid(m)
+      wasReduced |= collapseJumpChains(m); icodes.checkValid(m)
 
       // TODO this would be a good time to remove synthetic local vars seeing no use.
       // TODO see note in genExceptionHandlers about an ExceptionHandler.covered containing dead blocks (does newNormal solve that?)
