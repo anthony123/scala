@@ -198,7 +198,7 @@ PROPERTIES
   <!-- These are NOT the flags used to run SuperSabbus, but the ones written
        into the script runners created with scala.tools.ant.ScalaTool -->
   <property name="java.flags" value="-Xmx256M -Xms32M"/>
-  <property name="jvm.opts" value=""/>
+  <property name="jvm.opts" value="-XX:-FailOverToOldVerifier"/>
 
   <!-- if ANT_OPTS is already set by the environment, it will be unaltered,
        but if it is unset it will take this default value. -->

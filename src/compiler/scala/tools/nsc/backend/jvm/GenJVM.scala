@@ -315,11 +315,28 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
    */
   class CustomAttr(name: String, b: Array[Byte]) extends asm.Attribute(name, b) { }
 
+  /* Given an internal name (eg "java/lang/Integer") returns the class symbol for it. */
+  def inameToSymbol(iname: String): Symbol = {
+    val name = global.newTypeName(iname)
+    val res0 =
+      if (nme.isModuleName(name)) definitions.getModule(nme.stripModuleSuffix(name))
+      else                        definitions.getClass(name.replace('/', '.')) // TODO fails for inner classes, at least.
+    assert(res0 != NoSymbol)
+    val res = jsymbol(res0)
+    res
+  }
+
+  def jsymbol(sym: Symbol): Symbol = {
+    if(sym.isJavaDefined && sym.isModuleClass) sym.linkedClassOfClass
+    else if(sym.isModule) sym.moduleClass
+    else sym // we track only module-classes and plain-classes
+  }
+
   /* The internal name of the least common ancestor of the types given by inameA and inameB.
      It's what ASM needs to know in order to compute stack map frames, http://asm.ow2.org/doc/developer-guide.html#controlflow */
   def getCommonSuperClass(inameA: String, inameB: String): String = {
-    val a = reverseJavaName(inameA)
-    val b = reverseJavaName(inameB)
+    val a = reverseJavaName.getOrElseUpdate(inameA, inameToSymbol(inameA))
+    val b = reverseJavaName.getOrElseUpdate(inameB, inameToSymbol(inameB))
 
     assert(a.isClass)
     assert(b.isClass)
@@ -508,15 +525,12 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
 
       if(hasInternalName) {
         val internalName = cachedJN.toString()
-        val trackedSym =
-          if(sym.isJavaDefined && sym.isModuleClass) sym.linkedClassOfClass
-          else if(sym.isModule) sym.moduleClass
-          else sym // we track only module-classes and plain-classes
+        val trackedSym = jsymbol(sym)
         reverseJavaName.get(internalName) match {
           case None         =>
             reverseJavaName.put(internalName, trackedSym)
           case Some(oldsym) =>
-            assert(oldsym == trackedSym,
+            assert(List(NothingClass, NullClass).contains(oldsym) || oldsym == trackedSym,
                    "how can getCommonSuperclass() do its job if different class symbols get the same bytecode-level internal name.")
         }
       }
