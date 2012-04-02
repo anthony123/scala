@@ -1177,7 +1177,7 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
      *  @see Predef.classOf
      *  @see genConstant()
      */
-    private val classLiteral = immutable.Map[TypeKind, asm.Type](
+    private val classLiteral = immutable.Map[TypeKind, asm.Type]( // TODO move this to object JPlainBuilder
       UNIT   -> asm.Type.getObjectType("java/lang/Void"),
       BOOL   -> asm.Type.getObjectType("java/lang/Boolean"),
       BYTE   -> asm.Type.getObjectType("java/lang/Byte"),
@@ -1193,7 +1193,7 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
 
     case class MethodNameAndType(mname: String, mdesc: String)
 
-    private val jBoxTo: Map[TypeKind, MethodNameAndType] = {
+    private val jBoxTo: Map[TypeKind, MethodNameAndType] = { // TODO move this to object JPlainBuilder
       Map(
         BOOL   -> MethodNameAndType("boxToBoolean",   "(Z)Ljava/lang/Boolean;"  ) ,
         BYTE   -> MethodNameAndType("boxToByte",      "(B)Ljava/lang/Byte;"     ) ,
@@ -1206,7 +1206,7 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
       )
     }
 
-    private val jUnboxTo: Map[TypeKind, MethodNameAndType] = {
+    private val jUnboxTo: Map[TypeKind, MethodNameAndType] = { // TODO move this to object JPlainBuilder
       Map(
         BOOL   -> MethodNameAndType("unboxToBoolean", "(Ljava/lang/Object;)Z") ,
         BYTE   -> MethodNameAndType("unboxToByte",    "(Ljava/lang/Object;)B") ,
@@ -1623,7 +1623,7 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
     // Emitting bytecode instructions.
     // -----------------------------------------------------------------------------------------
 
-    private def genConstant(mv: asm.MethodVisitor, const: Constant) { // TODO use JCode instead of MethodVisitor?
+    private def genConstant(mv: asm.MethodVisitor, const: Constant) {
       const.tag match {
 
         case BooleanTag => jcode.boolconst(const.booleanValue)
@@ -1675,48 +1675,48 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
       import asm.Opcodes;
 
       def aconst(cst: AnyRef) {
-          if (cst == null) { jmethod.visitInsn(Opcodes.ACONST_NULL) }
-          else             { jmethod.visitLdcInsn(cst) }
+        if (cst == null) { jmethod.visitInsn(Opcodes.ACONST_NULL) }
+        else             { jmethod.visitLdcInsn(cst) }
       }
 
       @inline final def boolconst(b: Boolean) { iconst(if(b) 1 else 0) }
 
       def iconst(cst: Int) {
-          if (cst >= -1 && cst <= 5) {
-              jmethod.visitInsn(Opcodes.ICONST_0 + cst)
-          } else if (cst >= java.lang.Byte.MIN_VALUE && cst <= java.lang.Byte.MAX_VALUE) {
-              jmethod.visitIntInsn(Opcodes.BIPUSH, cst)
-          } else if (cst >= java.lang.Short.MIN_VALUE && cst <= java.lang.Short.MAX_VALUE) {
-              jmethod.visitIntInsn(Opcodes.SIPUSH, cst)
-          } else {
-              jmethod.visitLdcInsn(new Integer(cst))
-          }
+        if (cst >= -1 && cst <= 5) {
+          jmethod.visitInsn(Opcodes.ICONST_0 + cst)
+        } else if (cst >= java.lang.Byte.MIN_VALUE && cst <= java.lang.Byte.MAX_VALUE) {
+          jmethod.visitIntInsn(Opcodes.BIPUSH, cst)
+        } else if (cst >= java.lang.Short.MIN_VALUE && cst <= java.lang.Short.MAX_VALUE) {
+          jmethod.visitIntInsn(Opcodes.SIPUSH, cst)
+        } else {
+          jmethod.visitLdcInsn(new Integer(cst))
+        }
       }
 
       def lconst(cst: Long) {
-          if (cst == 0L || cst == 1L) {
-              jmethod.visitInsn(Opcodes.LCONST_0 + cst.asInstanceOf[Int])
-          } else {
-              jmethod.visitLdcInsn(new java.lang.Long(cst))
-          }
+        if (cst == 0L || cst == 1L) {
+          jmethod.visitInsn(Opcodes.LCONST_0 + cst.asInstanceOf[Int])
+        } else {
+          jmethod.visitLdcInsn(new java.lang.Long(cst))
+        }
       }
 
       def fconst(cst: Float) {
-          val bits: Int = java.lang.Float.floatToIntBits(cst)
-          if (bits == 0L || bits == 0x3f800000 || bits == 0x40000000) { // 0..2
-              jmethod.visitInsn(Opcodes.FCONST_0 + cst.asInstanceOf[Int])
-          } else {
-              jmethod.visitLdcInsn(new java.lang.Float(cst))
-          }
+        val bits: Int = java.lang.Float.floatToIntBits(cst)
+        if (bits == 0L || bits == 0x3f800000 || bits == 0x40000000) { // 0..2
+          jmethod.visitInsn(Opcodes.FCONST_0 + cst.asInstanceOf[Int])
+        } else {
+          jmethod.visitLdcInsn(new java.lang.Float(cst))
+        }
       }
 
       def dconst(cst: Double) {
-          val bits: Long = java.lang.Double.doubleToLongBits(cst)
-          if (bits == 0L || bits == 0x3ff0000000000000L) { // +0.0d and 1.0d
-              jmethod.visitInsn(Opcodes.DCONST_0 + cst.asInstanceOf[Int])
-          } else {
-              jmethod.visitLdcInsn(new java.lang.Double(cst))
-          }
+        val bits: Long = java.lang.Double.doubleToLongBits(cst)
+        if (bits == 0L || bits == 0x3ff0000000000000L) { // +0.0d and 1.0d
+          jmethod.visitInsn(Opcodes.DCONST_0 + cst.asInstanceOf[Int])
+        } else {
+          jmethod.visitLdcInsn(new java.lang.Double(cst))
+        }
       }
 
       def newarray(elem: TypeKind) {
@@ -1798,7 +1798,7 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
           return
         }
 
-        // sort `keys` by increasing key, keeping `branches` in sync. FIXME use quicksort
+        // sort `keys` by increasing key, keeping `branches` in sync. TODO FIXME use quicksort
         var i = 1
         while (i < keys.length) {
           var j = 1
@@ -1829,23 +1829,23 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
         }
 
         if (isDenseEnough) {
-            // use a table in which holes are filled with defaultBranch.
-            val keyRange    = (keyMax - keyMin + 1)
-            val newBranches = new Array[asm.Label](keyRange)
-            var oldPos = 0;
-            var i = 0
-            while(i < keyRange) {
-              val key = keyMin + i;
-              if (keys(oldPos) == key) {
-                newBranches(i) = branches(oldPos)
-                oldPos += 1
-              } else {
-                newBranches(i) = defaultBranch
-              }
-              i += 1
+          // use a table in which holes are filled with defaultBranch.
+          val keyRange    = (keyMax - keyMin + 1)
+          val newBranches = new Array[asm.Label](keyRange)
+          var oldPos = 0;
+          var i = 0
+          while(i < keyRange) {
+            val key = keyMin + i;
+            if (keys(oldPos) == key) {
+              newBranches(i) = branches(oldPos)
+              oldPos += 1
+            } else {
+              newBranches(i) = defaultBranch
             }
-            assert(oldPos == keys.length, "emitSWITCH")
-            jmethod.visitTableSwitchInsn(keyMin, keyMax, defaultBranch, newBranches: _*)
+            i += 1
+          }
+          assert(oldPos == keys.length, "emitSWITCH")
+          jmethod.visitTableSwitchInsn(keyMin, keyMax, defaultBranch, newBranches: _*)
         } else {
           jmethod.visitLookupSwitchInsn(defaultBranch, keys, branches)
         }
@@ -2960,5 +2960,111 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
     }
 
   } // end of class JBeanInfoBuilder
+
+  /** A namespace for utilities to normalize the code of an IMethod, over and beyond what IMethod.normalize() strives for.
+   * In particualr, IMethod.normalize() doesn't collapseJumpChains().
+   *
+   * TODO Eventually, these utilities should be moved to IMethod and reused from normalize() (there's nothing JVM-specific about them).
+   */
+  object newNormal {
+
+    private def directSuccStar(b: BasicBlock): Set[BasicBlock] = { directSuccStar(List(b)) }
+
+    /** Transitive closure of successors potentially reachable due to normal (non-exceptional) control flow.
+       Those BBs in the argument are also included in the result */
+    private def directSuccStar(starters: Traversable[BasicBlock]): Set[BasicBlock] = {
+      val result = mutable.Set.empty[BasicBlock]
+      var toVisit: List[BasicBlock] = starters.toList.distinct
+      while(toVisit.nonEmpty) {
+        val h   = toVisit.head
+        toVisit = toVisit.tail
+        result += h
+        for(p <- h.directSuccessors; if !result(p) && !toVisit.contains(p)) { toVisit = p :: toVisit }
+      }
+      result.toSet
+    }
+
+    /** An exception handler none of whose covered blocks belongs anymore to IMethod.blocks is pruned.
+     * This method should be called after unreachable blocks have been removed.
+     * Return true iff one more ExceptionHandler were removed.
+     *
+     * A caveat: removing an exception handler, for whatever reason, means that its handler code (even if dead)
+     * won't be able to cause a class-loading-exception. As a result, behavior can be different.
+     */
+    private def elimNonCoveringExh(m: IMethod): Boolean = {
+      val toPrune = for(e <- m.exh.toSet; if e.covered.isEmpty) yield e;
+      if(toPrune.nonEmpty) { m.exh = (m.exh filterNot toPrune); true }
+      else { false }
+    }
+
+    private def isJumpOnly(b: BasicBlock): Option[BasicBlock] = {
+      b.toList match {
+        case JUMP(whereto) :: Nil => Some(whereto)
+        case _                    => None
+      }
+    }
+
+    private def finalDestination(b: BasicBlock): BasicBlock = {
+      var prev = b
+      var dest = isJumpOnly(prev).get // thus, no need for assert about this.
+      do {
+        prev = dest
+        dest = isJumpOnly(prev).getOrElse(NoBasicBlock)
+      } while(dest != NoBasicBlock)
+
+      prev
+    }
+
+    def mayJumpTo(from: BasicBlock, to: BasicBlock): Boolean = {
+      from.lastInstruction match {
+        case JUMP(whereto)            => (whereto == to)
+        case CJUMP(succ, fail, _, _)  => (succ == to) || (fail == to)
+        case CZJUMP(succ, fail, _, _) => (succ == to) || (fail == to)
+        case SWITCH(_, labels)        => labels contains to
+        case _                        => false
+      }
+    }
+
+    /** Collapse a chain of "jump-only" blocks such as:
+     *      JUMP b1;
+     *  b1: JUMP b2;
+     *  b2: JUMP ... etc.
+     *
+     *  by re-wiring predecessors to target directly the "final destination".
+     *  Even if covered by an exception handler, a "non-self-loop jump-only block" can always be removed.
+     *  Returns true iff one or more such chains were collapsed.
+     */
+    private def collapseJumpChains(m: IMethod): Boolean = {
+      // TODO TODO TODO pick just one of the candidates, rewire only for it.
+      val toPrune =
+        for(b <- m.code.blocksList;
+          whereto <- isJumpOnly(b);
+          if whereto != b // leave empty-infinite-loops in place
+        ) yield {
+          val (falloff, jumpingPred) = (b.predecessors partition { p => !mayJumpTo(p, b) })
+          assert(falloff.size <= 1, "control flow may fall-off from at most one basic block")
+          // TODO re-wire each jumping predecessor to target "whereto" instead (can't target "final destination" directly because that would complicate bookkeeping)
+          b
+        }
+      for(r <- toPrune) { m.code.removeBlock(r) }
+      val wasReduced = toPrune.nonEmpty
+
+      wasReduced
+    }
+
+    def normalize(m: IMethod) {
+      if(!m.hasCode) { return }
+      // Step 1: prune exception handlers covering nothing.
+      while(elimNonCoveringExh(m)) {}
+      // Step 2: collapse chains of JUMP-only blocks
+      while(collapseJumpChains(m)) {}
+
+      // TODO this would be a good time to remove synthetic local vars seeing no use.
+      // TODO see note in genExceptionHandlers about an ExceptionHandler.covered containing dead blocks (does newNormal solve that?)
+    }
+
+
+
+  }
 
 }
