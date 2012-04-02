@@ -2991,10 +2991,15 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
      * A caveat: removing an exception handler, for whatever reason, means that its handler code (even if dead)
      * won't be able to cause a class-loading-exception. As a result, behavior can be different.
      */
-    private def elimNonCoveringExh(m: IMethod): Boolean = {
-      val toPrune = for(e <- m.exh.toSet; if e.covered.isEmpty) yield e;
-      if(toPrune.nonEmpty) { m.exh = (m.exh filterNot toPrune); true }
-      else { false }
+    private def elimNonCoveringExh(m: IMethod) {
+      var wasReduced = false
+      do {
+        val toPrune = for(e <- m.exh.toSet; if e.covered.isEmpty) yield e;
+        if(toPrune.nonEmpty) {
+          m.exh = (m.exh filterNot toPrune)
+          wasReduced = true
+        }
+      } while (wasReduced)
     }
 
     private def isJumpOnly(b: BasicBlock): Option[BasicBlock] = {
@@ -3047,7 +3052,7 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
      *  Returns true iff one or more such chains were collapsed.
      */
     private def collapseJumpChains(m: IMethod): Boolean = {
-      // TODO handle case where m.startBlock is removed (ie don't forget to set new m.startBlock)
+      // TODO handle case where m.startBlock is removed (ie don't forget to set new m.startBlock, similarly for an ExceptionHandler)
       // TODO TODO TODO pick just one of the candidates, rewire only for it.
       val toPrune =
         for(b <- m.code.blocksList;
@@ -3067,15 +3072,16 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
 
     def normalize(m: IMethod) {
       if(!m.hasCode) { return }
+      var wasReduced = false;
+      do {
       // Step 1: prune exception handlers covering nothing.
-      while(elimNonCoveringExh(m)) {}
-      icodes.checkValid(m)
+      elimNonCoveringExh(m); icodes.checkValid(m)
       // Step 2: collapse chains of JUMP-only blocks
-      while(collapseJumpChains(m)) {}
-      icodes.checkValid(m)
+      while(collapseJumpChains(m)) {}; icodes.checkValid(m)
 
       // TODO this would be a good time to remove synthetic local vars seeing no use.
       // TODO see note in genExceptionHandlers about an ExceptionHandler.covered containing dead blocks (does newNormal solve that?)
+      } while (wasReduced)
     }
 
 
