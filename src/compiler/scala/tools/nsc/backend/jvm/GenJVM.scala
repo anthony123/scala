@@ -2999,23 +2999,35 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
 
     private def isJumpOnly(b: BasicBlock): Option[BasicBlock] = {
       b.toList match {
-        case JUMP(whereto) :: Nil => Some(whereto)
-        case _                    => None
+        case JUMP(whereto) :: rest =>
+          assert(rest.isEmpty, "A block contains instructions after JUMP (looks like enterIgnoreMode() was itself ignored.)")
+          Some(whereto)
+        case _ => None
       }
     }
 
-    private def finalDestination(b: BasicBlock): BasicBlock = {
-      var prev = b
-      var dest = isJumpOnly(prev).get // thus, no need for assert about this.
+    /** Returns the endpoint of a (single or multi-hop) chain of JUMPs.
+     *  In particular for self-loops, whose endpoint is the method's argument.
+     *  Precondition: the BasicBlock given as argument starts with an unconditional JUMP.
+     */
+    private def finalDestination(start: BasicBlock): BasicBlock = {
+      assert(start.firstInstruction.isInstanceOf[JUMP], "not the start of a (single or multi-hop) chain of JUMPs.")
+      var prev = start
+      var done = false
       do {
-        prev = dest
-        dest = isJumpOnly(prev).getOrElse(NoBasicBlock)
-      } while(dest != NoBasicBlock)
+        done = isJumpOnly(prev) match {
+          case Some(dest) =>
+            if (dest == start) { return start }
+            prev = dest;
+            false
+          case None => true
+        }
+      } while(!done)
 
       prev
     }
 
-    def mayJumpTo(from: BasicBlock, to: BasicBlock): Boolean = {
+    def mayJump(from: BasicBlock, to: BasicBlock): Boolean = {
       from.lastInstruction match {
         case JUMP(whereto)            => (whereto == to)
         case CJUMP(succ, fail, _, _)  => (succ == to) || (fail == to)
@@ -3035,13 +3047,14 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
      *  Returns true iff one or more such chains were collapsed.
      */
     private def collapseJumpChains(m: IMethod): Boolean = {
+      // TODO handle case where m.startBlock is removed (ie don't forget to set new m.startBlock)
       // TODO TODO TODO pick just one of the candidates, rewire only for it.
       val toPrune =
         for(b <- m.code.blocksList;
           whereto <- isJumpOnly(b);
           if whereto != b // leave empty-infinite-loops in place
         ) yield {
-          val (falloff, jumpingPred) = (b.predecessors partition { p => !mayJumpTo(p, b) })
+          val (falloff, jumpingPred) = (b.predecessors partition { p => !mayJump(p, b) })
           assert(falloff.size <= 1, "control flow may fall-off from at most one basic block")
           // TODO re-wire each jumping predecessor to target "whereto" instead (can't target "final destination" directly because that would complicate bookkeeping)
           b
@@ -3056,8 +3069,10 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
       if(!m.hasCode) { return }
       // Step 1: prune exception handlers covering nothing.
       while(elimNonCoveringExh(m)) {}
+      icodes.checkValid(m)
       // Step 2: collapse chains of JUMP-only blocks
       while(collapseJumpChains(m)) {}
+      icodes.checkValid(m)
 
       // TODO this would be a good time to remove synthetic local vars seeing no use.
       // TODO see note in genExceptionHandlers about an ExceptionHandler.covered containing dead blocks (does newNormal solve that?)
