@@ -332,22 +332,65 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
     else sym // we track only module-classes and plain-classes
   }
 
+  private def superClasses(s: Symbol): List[Symbol] = {
+    assert(!s.isInterface)
+    s.superClass match {
+      case NoSymbol => List(s)
+      case sc       => s :: superClasses(sc)
+    }
+  }
+
+  private def firstCommonSuffix(as: List[Symbol], bs: List[Symbol]): Symbol = {
+    assert(!(as contains NoSymbol))
+    assert(!(bs contains NoSymbol))
+    var chainA = as
+    var chainB = bs
+    var fcs: Symbol = NoSymbol
+    do {
+      if      (chainB contains chainA.head) fcs = chainA.head
+      else if (chainA contains chainB.head) fcs = chainB.head
+      else {
+        chainA = chainA.tail
+        chainB = chainB.tail
+      }
+    } while(fcs == NoSymbol)
+    fcs
+  }
+
+  private def jvmWiseLUB(a: Symbol, b: Symbol): Symbol = {
+
+    assert(a.isClass)
+    assert(b.isClass)
+
+    val res = Pair(a.isInterface, b.isInterface) match {
+      case (true, true) =>
+        global.lub(List(a.tpe, b.tpe)).typeSymbol // TODO assert == firstCommonSuffix of resp. parents
+      case (true, false) =>
+        if(b isSubClass a) a else ObjectClass
+      case (false, true) =>
+        if(a isSubClass b) b else ObjectClass
+      case _ =>
+        firstCommonSuffix(superClasses(a), superClasses(b))
+    }
+    assert(res != NoSymbol)
+    res
+  }
+
   /* The internal name of the least common ancestor of the types given by inameA and inameB.
      It's what ASM needs to know in order to compute stack map frames, http://asm.ow2.org/doc/developer-guide.html#controlflow */
   def getCommonSuperClass(inameA: String, inameB: String): String = {
     val a = reverseJavaName.getOrElseUpdate(inameA, inameToSymbol(inameA))
     val b = reverseJavaName.getOrElseUpdate(inameB, inameToSymbol(inameB))
 
-    assert(a.isClass)
-    assert(b.isClass)
-    val tp      = global.lub(List(a.tpe, b.tpe))
-    val lcaSym  = tp.typeSymbol
-    assert(lcaSym != NoSymbol)
+    // global.lub(List(a.tpe, b.tpe)).typeSymbol.javaBinaryName.toString()
+    // icodes.lub(icodes.toTypeKind(a.tpe), icodes.toTypeKind(b.tpe)).toType
+    val lcaSym  = jvmWiseLUB(a, b)
     val lcaName = lcaSym.javaBinaryName.toString // don't call javaName because that side-effects innerClassBuffer.
     val oldsym  = reverseJavaName.put(lcaName, lcaSym)
     assert(oldsym.isEmpty || (oldsym.get == lcaSym), "somehow we're not managing to compute common-super-class for ASM consumption")
+    assert(lcaName != "scala/Any")
 
-    lcaName // no need to cache because ASM does it already.
+    lcaName // TODO ASM caches the answer during the lifetime of a ClassWriter. We outlive that. Do some caching.
   }
 
   class CClassWriter(flags: Int) extends asm.ClassWriter(flags) {
