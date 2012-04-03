@@ -176,8 +176,6 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
           beanInfoCodeGen.genBeanInfoClass(c)
         }
 
-        // TODO log("Skipped class %s because it has methods that are too long.".format(c))
-
         sortedClasses = sortedClasses.tail
         classes -= c.symbol // GC opportunity
       }
@@ -357,7 +355,7 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
     fcs
   }
 
-  private def jvmWiseLUB(a: Symbol, b: Symbol): Symbol = {
+  @inline final private def jvmWiseLUB(a: Symbol, b: Symbol): Symbol = {
 
     assert(a.isClass)
     assert(b.isClass)
@@ -1219,6 +1217,53 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
 
   } // end of trait JAndroidBuilder
 
+  /** Map from type kinds to the Java reference types.
+   *  It is used to push class literals onto the operand stack.
+   *  @see Predef.classOf
+   *  @see genConstant()
+   */
+  private val classLiteral = immutable.Map[TypeKind, asm.Type](
+    UNIT   -> asm.Type.getObjectType("java/lang/Void"),
+    BOOL   -> asm.Type.getObjectType("java/lang/Boolean"),
+    BYTE   -> asm.Type.getObjectType("java/lang/Byte"),
+    SHORT  -> asm.Type.getObjectType("java/lang/Short"),
+    CHAR   -> asm.Type.getObjectType("java/lang/Character"),
+    INT    -> asm.Type.getObjectType("java/lang/Integer"),
+    LONG   -> asm.Type.getObjectType("java/lang/Long"),
+    FLOAT  -> asm.Type.getObjectType("java/lang/Float"),
+    DOUBLE -> asm.Type.getObjectType("java/lang/Double")
+  )
+
+  def isNonUnitValueTK(tk: TypeKind): Boolean = { tk.isValueType && tk != UNIT }
+
+  case class MethodNameAndType(mname: String, mdesc: String)
+
+  private val jBoxTo: Map[TypeKind, MethodNameAndType] = {
+    Map(
+      BOOL   -> MethodNameAndType("boxToBoolean",   "(Z)Ljava/lang/Boolean;"  ) ,
+      BYTE   -> MethodNameAndType("boxToByte",      "(B)Ljava/lang/Byte;"     ) ,
+      CHAR   -> MethodNameAndType("boxToCharacter", "(C)Ljava/lang/Character;") ,
+      SHORT  -> MethodNameAndType("boxToShort",     "(S)Ljava/lang/Short;"    ) ,
+      INT    -> MethodNameAndType("boxToInteger",   "(I)Ljava/lang/Integer;"  ) ,
+      LONG   -> MethodNameAndType("boxToLong",      "(J)Ljava/lang/Long;"     ) ,
+      FLOAT  -> MethodNameAndType("boxToFloat",     "(F)Ljava/lang/Float;"    ) ,
+      DOUBLE -> MethodNameAndType("boxToDouble",    "(D)Ljava/lang/Double;"   )
+    )
+  }
+
+  private val jUnboxTo: Map[TypeKind, MethodNameAndType] = {
+    Map(
+      BOOL   -> MethodNameAndType("unboxToBoolean", "(Ljava/lang/Object;)Z") ,
+      BYTE   -> MethodNameAndType("unboxToByte",    "(Ljava/lang/Object;)B") ,
+      CHAR   -> MethodNameAndType("unboxToChar",    "(Ljava/lang/Object;)C") ,
+      SHORT  -> MethodNameAndType("unboxToShort",   "(Ljava/lang/Object;)S") ,
+      INT    -> MethodNameAndType("unboxToInt",     "(Ljava/lang/Object;)I") ,
+      LONG   -> MethodNameAndType("unboxToLong",    "(Ljava/lang/Object;)J") ,
+      FLOAT  -> MethodNameAndType("unboxToFloat",   "(Ljava/lang/Object;)F") ,
+      DOUBLE -> MethodNameAndType("unboxToDouble",  "(Ljava/lang/Object;)D")
+    )
+  }
+
   case class BlockInteval(start: BasicBlock, end: BasicBlock)
 
   /** builder of plain classes */
@@ -1236,53 +1281,6 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
     val mdesc_arrayClone  = "()Ljava/lang/Object;"
 
     val tdesc_long        = asm.Type.LONG_TYPE.getDescriptor // ie. "J"
-
-    /** Map from type kinds to the Java reference types.
-     *  It is used to push class literals onto the operand stack.
-     *  @see Predef.classOf
-     *  @see genConstant()
-     */
-    private val classLiteral = immutable.Map[TypeKind, asm.Type]( // TODO move this to object JPlainBuilder
-      UNIT   -> asm.Type.getObjectType("java/lang/Void"),
-      BOOL   -> asm.Type.getObjectType("java/lang/Boolean"),
-      BYTE   -> asm.Type.getObjectType("java/lang/Byte"),
-      SHORT  -> asm.Type.getObjectType("java/lang/Short"),
-      CHAR   -> asm.Type.getObjectType("java/lang/Character"),
-      INT    -> asm.Type.getObjectType("java/lang/Integer"),
-      LONG   -> asm.Type.getObjectType("java/lang/Long"),
-      FLOAT  -> asm.Type.getObjectType("java/lang/Float"),
-      DOUBLE -> asm.Type.getObjectType("java/lang/Double")
-    )
-
-    def isNonUnitValueTK(tk: TypeKind): Boolean = { tk.isValueType && tk != UNIT }
-
-    case class MethodNameAndType(mname: String, mdesc: String)
-
-    private val jBoxTo: Map[TypeKind, MethodNameAndType] = { // TODO move this to object JPlainBuilder
-      Map(
-        BOOL   -> MethodNameAndType("boxToBoolean",   "(Z)Ljava/lang/Boolean;"  ) ,
-        BYTE   -> MethodNameAndType("boxToByte",      "(B)Ljava/lang/Byte;"     ) ,
-        CHAR   -> MethodNameAndType("boxToCharacter", "(C)Ljava/lang/Character;") ,
-        SHORT  -> MethodNameAndType("boxToShort",     "(S)Ljava/lang/Short;"    ) ,
-        INT    -> MethodNameAndType("boxToInteger",   "(I)Ljava/lang/Integer;"  ) ,
-        LONG   -> MethodNameAndType("boxToLong",      "(J)Ljava/lang/Long;"     ) ,
-        FLOAT  -> MethodNameAndType("boxToFloat",     "(F)Ljava/lang/Float;"    ) ,
-        DOUBLE -> MethodNameAndType("boxToDouble",    "(D)Ljava/lang/Double;"   )
-      )
-    }
-
-    private val jUnboxTo: Map[TypeKind, MethodNameAndType] = { // TODO move this to object JPlainBuilder
-      Map(
-        BOOL   -> MethodNameAndType("unboxToBoolean", "(Ljava/lang/Object;)Z") ,
-        BYTE   -> MethodNameAndType("unboxToByte",    "(Ljava/lang/Object;)B") ,
-        CHAR   -> MethodNameAndType("unboxToChar",    "(Ljava/lang/Object;)C") ,
-        SHORT  -> MethodNameAndType("unboxToShort",   "(Ljava/lang/Object;)S") ,
-        INT    -> MethodNameAndType("unboxToInt",     "(Ljava/lang/Object;)I") ,
-        LONG   -> MethodNameAndType("unboxToLong",    "(Ljava/lang/Object;)J") ,
-        FLOAT  -> MethodNameAndType("unboxToFloat",   "(Ljava/lang/Object;)F") ,
-        DOUBLE -> MethodNameAndType("unboxToDouble",  "(Ljava/lang/Object;)D")
-      )
-    }
 
     def isParcelableClass = isAndroidParcelableClass(clasz.symbol)
 
