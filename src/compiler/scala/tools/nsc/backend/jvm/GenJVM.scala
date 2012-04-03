@@ -313,6 +313,14 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
    */
   class CustomAttr(name: String, b: Array[Byte]) extends asm.Attribute(name, b) { }
 
+  // -----------------------------------------------------------------------------------------
+  // finding the least upper bound in agreement with the bytecode verifier (given two internal names handed by ASM)
+  // Background:
+  //  http://gallium.inria.fr/~xleroy/publi/bytecode-verification-JAR.pdf
+  //  http://comments.gmane.org/gmane.comp.java.vm.languages/2293
+  //  https://issues.scala-lang.org/browse/SI-3872
+  // -----------------------------------------------------------------------------------------
+
   /* Given an internal name (eg "java/lang/Integer") returns the class symbol for it. */
   def inameToSymbol(iname: String): Symbol = {
     val name = global.newTypeName(iname)
