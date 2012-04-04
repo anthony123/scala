@@ -1578,7 +1578,7 @@ LIBRARIES (MSIL, FJBG maybe later)
     <javac
       srcdir="${src.dir}/fjbg"
       destdir="${build-libs.dir}/classes/fjbg"
-      classpath="${build-libs.dir}/classes/fjbg"
+      classpath="${build-libs.dir}/classes/fjbg:${lib.dir}/extra/asm-4.0.jar:${lib.dir}/extra/asm-util-4.0.jar"
       includes="**/*.java"
       debug="true"
       target="1.5" source="1.4">
