@@ -302,17 +302,6 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
     sym.isModuleClass && !sym.isImplClass && !sym.isLifted
   }
 
-  /*
-   * For this to work, add the following to asm.Attribute:
-   *
-   *     protected Attribute(final String type, final byte[] value) {
-   *        this.type = type;
-   *        this.value = value;
-   *    }
-   *
-   */
-  class CustomAttr(name: String, b: Array[Byte]) extends asm.Attribute(name, b) { }
-
   // -----------------------------------------------------------------------------------------
   // finding the least upper bound in agreement with the bytecode verifier (given two internal names handed by ASM)
   // Background:
@@ -477,10 +466,10 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
       cw
     }
 
-    def createJAttribute(name: String, b: Array[Byte], offset: Int, len: Int): CustomAttr = {
+    def createJAttribute(name: String, b: Array[Byte], offset: Int, len: Int): org.objectweb.asm.CustomAttr = {
       val dest = new Array[Byte](len);
       System.arraycopy(b, offset, dest, 0, len);
-      new CustomAttr(name, dest)
+      new org.objectweb.asm.CustomAttr(name, dest)
     }
 
     // -----------------------------------------------------------------------------------------
@@ -784,10 +773,10 @@ abstract class GenJVM extends SubComponent with BytecodeWriters {
         // Run the signature parser to catch bogus signatures.
         val isValidSignature = wrap {
           // Alternative: scala.tools.reflect.SigParser (frontend to sun.reflect.generics.parser.SignatureParser)
-          import asm.util.CheckMethodAdapter
-          if (sym.isMethod)    { CheckMethodAdapter checkMethodSignature sig } // requires asm-util.jar
-          else if (sym.isTerm) { CheckMethodAdapter checkFieldSignature  sig }
-          else                 { CheckMethodAdapter checkClassSignature  sig }
+          import org.objectweb.asm.util.SignatureChecker
+          if (sym.isMethod)    { SignatureChecker checkMethodSignature sig } // requires asm-util.jar
+          else if (sym.isTerm) { SignatureChecker checkFieldSignature  sig }
+          else                 { SignatureChecker checkClassSignature  sig }
         }
 
         if(!isValidSignature) {
