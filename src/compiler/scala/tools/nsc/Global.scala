@@ -28,7 +28,7 @@ import transform._
 
 import backend.icode.{ ICodes, GenICode, ICodeCheckers }
 import backend.{ ScalaPrimitives, Platform, MSILPlatform, JavaPlatform }
-import backend.jvm.GenJVM
+import backend.jvm.{GenJVM, GenASM}
 import backend.opt.{ Inliners, InlineExceptionHandlers, ClosureElimination, DeadCodeElimination }
 import backend.icode.analysis._
 
@@ -603,12 +603,19 @@ class Global(var currentSettings: Settings, var reporter: Reporter) extends Symb
     val runsRightAfter = None
   } with DeadCodeElimination
 
-  // phaseName = "jvm"
+  // phaseName = "jvm", FJBG-based version
   object genJVM extends {
     val global: Global.this.type = Global.this
     val runsAfter = List("dce")
     val runsRightAfter = None
   } with GenJVM
+
+  // phaseName = "jvm", ASM-based version
+  object genASM extends {
+    val global: Global.this.type = Global.this
+    val runsAfter = List("dce")
+    val runsRightAfter = None
+  } with GenASM
 
   // This phase is optional: only added if settings.make option is given.
   // phaseName = "dependencyAnalysis"
