@@ -29,7 +29,7 @@ abstract class GenASM extends SubComponent with BytecodeWriters {
   val phaseName = "jvm"
 
   /** Create a new phase */
-  override def newPhase(p: Phase): Phase = new JvmPhase(p)
+  override def newPhase(p: Phase): Phase = new AsmPhase(p)
 
   private def outputDirectory(sym: Symbol): AbstractFile =
     settings.outputDirs outputDirFor beforeFlatten(sym.sourceFile)
@@ -47,7 +47,7 @@ abstract class GenASM extends SubComponent with BytecodeWriters {
 
   /** JVM code generation phase
    */
-  class JvmPhase(prev: Phase) extends ICodePhase(prev) {
+  class AsmPhase(prev: Phase) extends ICodePhase(prev) {
     def name = phaseName
     override def erasedTypes = true
     def apply(cls: IClass) = sys.error("no implementation")
@@ -138,6 +138,12 @@ abstract class GenASM extends SubComponent with BytecodeWriters {
               new ClassBytecodeWriter with DumpBytecodeWriter { }
           }
           else new ClassBytecodeWriter with JavapBytecodeWriter { }
+
+          // TODO A ScalapBytecodeWriter could take asm.util.Textifier as starting point.
+          //      Three areas where javap ouput is less than ideal (e.g. when comparing versions of the same classfile) are:
+          //        (a) unreadable pickle;
+          //        (b) two constant pools, while having identical contents, are displayed differently due to physical layout.
+          //        (c) stack maps (classfile version 50 and up) are displayed in encoded form by javap, their expansion makes more sense instead.
       }
     }
 
@@ -451,15 +457,6 @@ abstract class GenASM extends SubComponent with BytecodeWriters {
      */
     def createJClass(access: Int, name: String, signature: String, superName: String, interfaces: Array[String]): asm.ClassWriter = {
       val cw = new CClassWriter(extraProc)
-      /*
-      val jc =
-        if (settings.debug.value) {
-          // checks call-sequences on the ClassWriter instance and and performs incomplete byte verification.
-          new asm.util.CheckClassAdapter(cw) // requires asm-util.jar
-        } else {
-          cw
-        }
-      */
       cw.visit(classfileVersion,
                access, name, signature,
                superName, interfaces)
@@ -1000,7 +997,7 @@ abstract class GenASM extends SubComponent with BytecodeWriters {
 
           assert(jname != null, "javaName is broken.") // documentation
           val doAdd = entries.get(jname) match {
-            // TODO is it ok for prevOName to be be null? (Someone should really document the invariants of the InnerClasses bytecode attribute)
+            // TODO is it ok for prevOName to be null? (Someone should really document the invariants of the InnerClasses bytecode attribute)
             case Some(prevOName) =>
               // this occurs e.g. when innerClassBuffer contains both class Thread$State, object Thread$State,
               // i.e. for them it must be the case that oname == java/lang/Thread
@@ -1015,7 +1012,7 @@ abstract class GenASM extends SubComponent with BytecodeWriters {
           }
 
           /*
-           * TODO Add assert for: (JVMS 4.7.6 The InnerClasses attribute)
+           * TODO assert (JVMS 4.7.6 The InnerClasses attribute)
            * If a class file has a version number that is greater than or equal to 51.0, and
            * has an InnerClasses attribute in its attributes table, then for all entries in the
            * classes array of the InnerClasses attribute, the value of the
@@ -2245,7 +2242,7 @@ abstract class GenASM extends SubComponent with BytecodeWriters {
             jmethod.visitLocalVariable(name, descriptor(local.kind), null, start, end, indexOf(local))
           }
         }
-        // TODO assert "There may be no more than one LocalVariableTable attribute per local variable in the Code attribute"
+        // "There may be no more than one LocalVariableTable attribute per local variable in the Code attribute"
       }
 
       // ------------------------------------------------------------------------------------------------------------
