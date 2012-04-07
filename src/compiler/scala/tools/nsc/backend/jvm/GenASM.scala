@@ -19,6 +19,7 @@ import asm.Label
  *  @author  Iulian Dragos (version 1.0, FJBG-based implementation)
  *  @author  Miguel Garcia (version 2.0,  ASM-based implementation)
  *
+ * Documentation at http://lamp.epfl.ch/~magarcia/ScalaCompilerCornerReloaded/2012Q2/GenASM.pdf
  */
 abstract class GenASM extends SubComponent with BytecodeWriters {
   import global._
@@ -206,13 +207,13 @@ abstract class GenASM extends SubComponent with BytecodeWriters {
        * Alternatively, an offline-bytecode verifier could be used (e.g. Maxine brings one as separate tool).
        */
 
-    } // end of JvmPhase.run()
+    } // end of AsmPhase.run()
 
-  } // end of class JvmpPhase
+  } // end of class AsmPhase
 
   var pickledBytes = 0 // statistics
 
-  // Don't put this in per run caches.
+  // Don't put this in per run caches. Contains entries for classes as well as members.
   val javaNameCache = new mutable.WeakHashMap[Symbol, Name]() ++= List(
     NothingClass        -> binarynme.RuntimeNothing,
     RuntimeNothingClass -> binarynme.RuntimeNothing,
@@ -220,6 +221,7 @@ abstract class GenASM extends SubComponent with BytecodeWriters {
     RuntimeNullClass    -> binarynme.RuntimeNull
   )
 
+  // unlike javaNameCache, reverseJavaName contains entries only for class symbols and their internal names.
   val reverseJavaName = mutable.Map.empty[String, Symbol] ++= List(
     binarynme.RuntimeNothing.toString() -> NothingClass, // neither RuntimeNothingClass nor RuntimeNullClass belong to the co-domain of this map.
     binarynme.RuntimeNull.toString()    -> NullClass
