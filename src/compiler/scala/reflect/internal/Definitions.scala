@@ -138,6 +138,12 @@ trait Definitions extends reflect.api.StandardDefinitions {
     // symbols related to packages
     var emptypackagescope: Scope = null //debug
 
+    // TODO - having these as objects means they elude the attempt to
+    // add synchronization in SynchronizedSymbols.  But we should either
+    // flip on object overrides or find some other accomodation, because
+    // lazy vals are unnecessarily expensive relative to objects and it
+    // is very beneficial for a handful of bootstrap symbols to have
+    // first class identities
     sealed trait WellKnownSymbol extends Symbol {
       this initFlags TopLevelCreationFlags
     }
@@ -148,7 +154,7 @@ trait Definitions extends reflect.api.StandardDefinitions {
     }
     // This is the package _root_.  The actual root cannot be referenced at
     // the source level, but _root_ is essentially a function => <root>.
-    final object RootPackage extends ModuleSymbol(NoSymbol, NoPosition, nme.ROOTPKG) with RootSymbol {
+    final object RootPackage extends PackageSymbol(NoSymbol, NoPosition, nme.ROOTPKG) with RootSymbol {
       this setInfo NullaryMethodType(RootClass.tpe)
       RootClass.sourceModule = this
 
@@ -160,7 +166,7 @@ trait Definitions extends reflect.api.StandardDefinitions {
     // although it is probable that some symbols are created as direct children
     // of NoSymbol to ensure they will not be stumbled upon.  (We should designate
     // a better encapsulated place for that.)
-    final object RootClass extends ModuleClassSymbol(NoSymbol, NoPosition, tpnme.ROOT) with RootSymbol {
+    final object RootClass extends PackageClassSymbol(NoSymbol, NoPosition, tpnme.ROOT) with RootSymbol {
       this setInfo rootLoader
 
       override def isRoot            = true
@@ -170,10 +176,10 @@ trait Definitions extends reflect.api.StandardDefinitions {
       override def ownerOfNewSymbols = EmptyPackageClass
     }
     // The empty package, which holds all top level types without given packages.
-    final object EmptyPackage extends ModuleSymbol(RootClass, NoPosition, nme.EMPTY_PACKAGE_NAME) with WellKnownSymbol {
+    final object EmptyPackage extends PackageSymbol(RootClass, NoPosition, nme.EMPTY_PACKAGE_NAME) with WellKnownSymbol {
       override def isEmptyPackage = true
     }
-    final object EmptyPackageClass extends ModuleClassSymbol(RootClass, NoPosition, tpnme.EMPTY_PACKAGE_NAME) with WellKnownSymbol {
+    final object EmptyPackageClass extends PackageClassSymbol(RootClass, NoPosition, tpnme.EMPTY_PACKAGE_NAME) with WellKnownSymbol {
       override def isEffectiveRoot     = true
       override def isEmptyPackageClass = true
     }
@@ -380,10 +386,10 @@ trait Definitions extends reflect.api.StandardDefinitions {
     def isCastSymbol(sym: Symbol)          = sym == Any_asInstanceOf || sym == Object_asInstanceOf
 
     def isJavaVarArgsMethod(m: Symbol)       = m.isMethod && isJavaVarArgs(m.info.params)
-    def isJavaVarArgs(params: List[Symbol])  = params.nonEmpty && isJavaRepeatedParamType(params.last.tpe)
-    def isScalaVarArgs(params: List[Symbol]) = params.nonEmpty && isScalaRepeatedParamType(params.last.tpe)
-    def isVarArgsList(params: List[Symbol])  = params.nonEmpty && isRepeatedParamType(params.last.tpe)
-    def isVarArgTypes(formals: List[Type])   = formals.nonEmpty && isRepeatedParamType(formals.last)
+    def isJavaVarArgs(params: Seq[Symbol])  = params.nonEmpty && isJavaRepeatedParamType(params.last.tpe)
+    def isScalaVarArgs(params: Seq[Symbol]) = params.nonEmpty && isScalaRepeatedParamType(params.last.tpe)
+    def isVarArgsList(params: Seq[Symbol])  = params.nonEmpty && isRepeatedParamType(params.last.tpe)
+    def isVarArgTypes(formals: Seq[Type])   = formals.nonEmpty && isRepeatedParamType(formals.last)
 
     def hasRepeatedParam(tp: Type): Boolean = tp match {
       case MethodType(formals, restpe) => isScalaVarArgs(formals) || hasRepeatedParam(restpe)
@@ -857,7 +863,8 @@ trait Definitions extends reflect.api.StandardDefinitions {
     // boxed classes
     lazy val ObjectRefClass         = getRequiredClass("scala.runtime.ObjectRef")
     lazy val VolatileObjectRefClass = getRequiredClass("scala.runtime.VolatileObjectRef")
-    lazy val BoxesRunTimeClass      = getRequiredModule("scala.runtime.BoxesRunTime")
+    lazy val BoxesRunTimeModule     = getRequiredModule("scala.runtime.BoxesRunTime")
+    lazy val BoxesRunTimeClass      = BoxesRunTimeModule.moduleClass
     lazy val BoxedNumberClass       = getClass(sn.BoxedNumber)
     lazy val BoxedCharacterClass    = getClass(sn.BoxedCharacter)
     lazy val BoxedBooleanClass      = getClass(sn.BoxedBoolean)
@@ -867,6 +874,9 @@ trait Definitions extends reflect.api.StandardDefinitions {
     lazy val BoxedLongClass         = getRequiredClass("java.lang.Long")
     lazy val BoxedFloatClass        = getRequiredClass("java.lang.Float")
     lazy val BoxedDoubleClass       = getRequiredClass("java.lang.Double")
+
+    lazy val Boxes_isNumberOrBool = getDecl(BoxesRunTimeClass, nme.isBoxedNumberOrBoolean)
+    lazy val Boxes_isNumber       = getDecl(BoxesRunTimeClass, nme.isBoxedNumber)
 
     lazy val BoxedUnitClass         = getRequiredClass("scala.runtime.BoxedUnit")
     lazy val BoxedUnitModule        = getRequiredModule("scala.runtime.BoxedUnit")
@@ -984,12 +994,24 @@ trait Definitions extends reflect.api.StandardDefinitions {
       else findNamedMember(segs.tail, root.info member segs.head)
 
     def getMember(owner: Symbol, name: Name): Symbol = {
-      if (owner == NoSymbol) NoSymbol
-      else owner.info.nonPrivateMember(name) match {
-        case NoSymbol => throw new FatalError(owner + " does not have a member " + name)
-        case result   => result
+      getMemberIfDefined(owner, name) orElse {
+        throw new FatalError(owner + " does not have a member " + name)
       }
     }
+    def getMemberIfDefined(owner: Symbol, name: Name): Symbol =
+      owner.info.nonPrivateMember(name)
+
+    /** Using getDecl rather than getMember may avoid issues with
+     *  OverloadedTypes turning up when you don't want them, if you
+     *  know the method in question is uniquely declared in the given owner.
+     */
+    def getDecl(owner: Symbol, name: Name): Symbol = {
+      getDeclIfDefined(owner, name) orElse {
+        throw new FatalError(owner + " does not have a decl " + name)
+      }
+    }
+    def getDeclIfDefined(owner: Symbol, name: Name): Symbol =
+      owner.info.nonPrivateDecl(name)
     
     def packageExists(packageName: String): Boolean =
       getModuleIfDefined(packageName).isPackage

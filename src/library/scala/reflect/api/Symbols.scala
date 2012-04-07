@@ -134,6 +134,10 @@ trait Symbols { self: Universe =>
      */
     def isAbstractType : Boolean
 
+    /** Is this symbol an overloaded method?
+     */
+    def isOverloaded: Boolean
+
     /** The type signature of this symbol.
      *  Note if the symbol is a member of a class, one almost always is interested
      *  in `typeSignatureIn` with a site type instead.
@@ -180,10 +184,15 @@ trait Symbols { self: Universe =>
      */
     def selfType: Type
 
+    /** The overloaded alternatives of this symbol */
+    def alternatives: List[Symbol]
+
+    def resolveOverloaded(pre: Type = NoPrefix, targs: Seq[Type] = List(), actuals: Seq[Type]): Symbol
+
     /** A fresh symbol with given name `name`, position `pos` and flags `flags` that has
      *  the current symbol as its owner.
      */
-    def newNestedSymbol(name: Name, pos: Position, flags: Long): Symbol // needed by LiftCode
+    def newNestedSymbol(name: Name, pos: Position, flags: Long, isClass: Boolean): Symbol // needed by LiftCode
 
     /** Low-level operation to set the symbol's flags
      *  @return the symbol itself

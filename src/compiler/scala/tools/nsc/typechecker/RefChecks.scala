@@ -123,7 +123,7 @@ abstract class RefChecks extends InfoTransform with reflect.internal.transform.R
 
       defaultMethodNames.distinct foreach { name =>
         val methods      = clazz.info.findMember(name, 0L, METHOD, false).alternatives
-        val haveDefaults = methods filter (sym => sym.hasParamWhich(_.hasDefaultFlag) && !nme.isProtectedAccessorName(sym.name))
+        val haveDefaults = methods filter (sym => sym.hasParamWhich(_.hasDefault) && !nme.isProtectedAccessorName(sym.name))
 
         if (haveDefaults.lengthCompare(1) > 0) {
           val owners = haveDefaults map (_.owner)
@@ -381,7 +381,7 @@ abstract class RefChecks extends InfoTransform with reflect.internal.transform.R
             overrideError("cannot be used here - class definitions cannot be overridden");
           } else if (!other.isDeferred && member.isClass) {
             overrideError("cannot be used here - classes can only override abstract types");
-          } else if (other.isFinal) { // (1.2)
+          } else if (other.isEffectivelyFinal) { // (1.2)
             overrideError("cannot override final member");
             // synthetic exclusion needed for (at least) default getters.
           } else if (!other.isDeferred && !member.isAnyOverride && !member.isSynthetic) {
@@ -662,7 +662,7 @@ abstract class RefChecks extends InfoTransform with reflect.internal.transform.R
           }
 
           // Check the remainder for invalid absoverride.
-          for (member <- rest ; if ((member hasFlag ABSOVERRIDE) && member.isIncompleteIn(clazz))) {
+          for (member <- rest ; if (member.isAbstractOverride && member.isIncompleteIn(clazz))) {
             val other = member.superSymbol(clazz)
             val explanation =
               if (other != NoSymbol) " and overrides incomplete superclass member " + infoString(other)
@@ -756,11 +756,10 @@ abstract class RefChecks extends InfoTransform with reflect.internal.transform.R
 
       // 4. Check that every defined member with an `override` modifier overrides some other member.
       for (member <- clazz.info.decls)
-        if ((member hasFlag (OVERRIDE | ABSOVERRIDE)) &&
-            !(clazz.thisType.baseClasses exists (hasMatchingSym(_, member)))) {
+        if (member.isAnyOverride && !(clazz.thisType.baseClasses exists (hasMatchingSym(_, member)))) {
           // for (bc <- clazz.info.baseClasses.tail) Console.println("" + bc + " has " + bc.info.decl(member.name) + ":" + bc.info.decl(member.name).tpe);//DEBUG
           unit.error(member.pos, member.toString() + " overrides nothing");
-          member resetFlag OVERRIDE
+          member resetFlag (OVERRIDE | ABSOVERRIDE)  // Any Override
         }
     }
 

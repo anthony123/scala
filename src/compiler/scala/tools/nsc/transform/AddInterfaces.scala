@@ -43,11 +43,7 @@ abstract class AddInterfaces extends InfoTransform { self: Erasure =>
    */
   private def isInterfaceMember(sym: Symbol) = (
     sym.isType || {
-      // !!! Shouldn't the following code be equivalent to leaving
-      // out the "sym.info" call and starting with "sym.initialize.isMethod" ?
-      // Because, it is not, which I found a little disturbing.  The compiler
-      // fails to bootstrap with an error somewhere.
-      sym.info    // initialize to set lateMETHOD flag if necessary
+      sym.info  // initialize to set lateMETHOD flag if necessary
 
       (     sym.isMethod
         && !sym.isLabel
@@ -70,6 +66,8 @@ abstract class AddInterfaces extends InfoTransform { self: Erasure =>
 
   /** Return the implementation class of a trait; create a new one of one does not yet exist */
   def implClass(iface: Symbol): Symbol = {
+    def implClassFlags = iface.flags & ~(INTERFACE | lateINTERFACE) | IMPLCLASS
+
     iface.info
 
     implClassMap.getOrElse(iface, {
@@ -101,15 +99,17 @@ abstract class AddInterfaces extends InfoTransform { self: Erasure =>
           else log("not unlinking existing " + impl + " as the impl class is not visible on the classpath.")
         }
         if (impl == NoSymbol) {
-          impl = iface.cloneSymbolImpl(iface.owner)
-          impl.name = implName
+          impl = iface.cloneSymbolImpl(iface.owner, implClassFlags) setName implName
           impl.sourceFile = iface.sourceFile
           if (iface.owner.isClass)
             iface.owner.info.decls enter impl
         }
         if (currentRun.compiles(iface)) currentRun.symSource(impl) = iface.sourceFile
         impl setPos iface.pos
-        impl.flags = iface.flags & ~(INTERFACE | lateINTERFACE) | IMPLCLASS
+        if (impl.flags != implClassFlags) {
+          log("!!! Directly setting impl class flags from %s to %s".format(flagsToString(impl.flags), flagsToString(implClassFlags)))
+          impl.flags = implClassFlags
+        }
         impl setInfo new LazyImplClassType(iface)
         implClassMap(iface) = impl
         debuglog(

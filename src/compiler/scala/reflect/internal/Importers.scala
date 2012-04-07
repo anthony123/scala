@@ -63,7 +63,7 @@ trait Importers { self: SymbolTable =>
             }
             myowner.newTypeSkolemSymbol(myname.toTypeName, origin, mypos, myflags)
           case x: from.ModuleClassSymbol =>
-            val mysym = myowner.newModuleClassSymbol(myname.toTypeName, mypos, myflags)
+            val mysym = myowner.newModuleClass(myname.toTypeName, mypos, myflags)
             symMap(x) = mysym
             mysym.sourceModule = importSymbol(x.sourceModule)
             mysym
@@ -72,7 +72,7 @@ trait Importers { self: SymbolTable =>
             symMap(x) = mysym
             if (sym.thisSym != sym) {
               mysym.typeOfThis = importType(sym.typeOfThis)
-              mysym.thisSym.name = importName(sym.thisSym.name)
+              mysym.thisSym setName importName(sym.thisSym.name)
             }
             mysym
           case x: from.TypeSymbol =>
@@ -109,14 +109,18 @@ trait Importers { self: SymbolTable =>
           val owner = sym.owner
           var scope = if (owner.isClass && !owner.isRefinementClass) owner.info else from.NoType
           var existing = scope.decl(name)
-          if (sym.isPackageClass || sym.isModuleClass) existing = existing.moduleClass
+          if (sym.isModuleClass)
+            existing = existing.moduleClass
+
           if (!existing.exists) scope = from.NoType
 
           val myname = importName(name)
           val myowner = importSymbol(owner)
           val myscope = if (scope != from.NoType && !(myowner hasFlag Flags.LOCKED)) myowner.info else NoType
           var myexisting = if (myscope != NoType) myowner.info.decl(myname) else NoSymbol // cannot load myexisting in general case, because it creates cycles for methods
-          if (sym.isPackageClass || sym.isModuleClass) myexisting = importSymbol(sym.sourceModule).moduleClass
+          if (sym.isModuleClass)
+            myexisting = importSymbol(sym.sourceModule).moduleClass
+
           if (!sym.isOverloaded && myexisting.isOverloaded) {
             myexisting =
               if (sym.isMethod) {

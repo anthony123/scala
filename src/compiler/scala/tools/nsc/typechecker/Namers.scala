@@ -529,7 +529,7 @@ trait Namers extends MethodSynthesis {
     def enterCopyMethodOrGetter(tree: Tree, tparams: List[TypeDef]): Symbol = {
       val sym          = tree.symbol
       val lazyType     = completerOf(tree, tparams)
-      def completeCopyFirst = sym.isSynthetic && (!sym.hasDefaultFlag || sym.owner.info.member(nme.copy).isSynthetic)
+      def completeCopyFirst = sym.isSynthetic && (!sym.hasDefault || sym.owner.info.member(nme.copy).isSynthetic)
       def completeCopyMethod(clazz: Symbol) {
         // the 'copy' method of case classes needs a special type completer to make
         // bug0054.scala (and others) work. the copy method has to take exactly the same
@@ -793,10 +793,7 @@ trait Namers extends MethodSynthesis {
       val tpe1 = dropRepeatedParamType(tpe.deconst)
       val tpe2 = tpe1.widen
 
-      // This infers Foo.type instead of "object Foo"
-      // See Infer#adjustTypeArgs for the polymorphic case.
-      if (tpe.typeSymbolDirect.isModuleClass) tpe1
-      else if (sym.isVariable || sym.isMethod && !sym.hasAccessorFlag)
+      if (sym.isVariable || sym.isMethod && !sym.hasAccessorFlag)
         if (tpe2 <:< pt) tpe2 else tpe1
       else if (isHidden(tpe)) tpe2
       // In an attempt to make pattern matches involving method local vals
@@ -834,19 +831,17 @@ trait Namers extends MethodSynthesis {
       if (!hasType)
         tpt defineType NoType
 
-      if (hasType || hasName) {
-        owner.typeOfThis =
-          if (hasType) selfTypeCompleter(tpt)
-          else owner.tpe
-      }
       val sym = (
-        if (hasType) owner.thisSym setPos self.pos
-        else if (hasName) owner.thisSym
-        else owner.newThisSym(self.pos) setInfo owner.tpe
+        if (hasType || hasName) {
+          owner.typeOfThis = if (hasType) selfTypeCompleter(tpt) else owner.tpe
+          val selfSym = owner.thisSym setPos self.pos
+          if (hasName) selfSym setName name else selfSym
+        }
+        else {
+          val symName = if (name != nme.WILDCARD) name else nme.this_
+          owner.newThisSym(symName, owner.pos) setInfo owner.tpe
+        }
       )
-      if (hasName)
-        sym.name = name
-
       self.symbol = context.scope enter sym
     }
 
@@ -1048,7 +1043,7 @@ trait Namers extends MethodSynthesis {
           }
         )
         // #2382: return type of default getters are always @uncheckedVariance
-        if (meth.hasDefaultFlag)
+        if (meth.hasDefault)
           rt.withAnnotation(AnnotationInfo(uncheckedVarianceClass.tpe, List(), List()))
         else rt
       })
@@ -1098,8 +1093,8 @@ trait Namers extends MethodSynthesis {
         for (vparam <- vparams) {
           val sym = vparam.symbol
           // true if the corresponding parameter of the base class has a default argument
-          val baseHasDefault = overrides && baseParams.head.hasDefaultFlag
-          if (sym.hasDefaultFlag) {
+          val baseHasDefault = overrides && baseParams.head.hasDefault
+          if (sym.hasDefault) {
             // generate a default getter for that argument
             val oflag = if (baseHasDefault) OVERRIDE else 0
             val name = nme.defaultGetterName(meth.name, posCounter)
@@ -1365,7 +1360,7 @@ trait Namers extends MethodSynthesis {
       }
     }
     private val logDefinition = new LogTransitions[Symbol](
-      sym => "[define] >> " + sym.defaultFlagString + " " + sym.fullLocationString,
+      sym => "[define] >> " + sym.flagString + " " + sym.fullLocationString,
       sym => "[define] << " + sym
     )
     private def logAndValidate(sym: Symbol)(body: => Unit) {

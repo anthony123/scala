@@ -220,10 +220,6 @@ class Global(var currentSettings: Settings, var reporter: Reporter) extends Symb
        (settings.log.isSetByUser)
     && ((settings.log containsPhase globalPhase) || (settings.log containsPhase phase))
   )
-  def atPhaseStackMessage = atPhaseStack match {
-    case Nil    => ""
-    case ps     => ps.reverseMap("->" + _).mkString("(", " ", ")")
-  }
   // Over 200 closure objects are eliminated by inlining this.
   @inline final def log(msg: => AnyRef) {
     if (shouldLogAtThisPhase)
@@ -1013,7 +1009,7 @@ class Global(var currentSettings: Settings, var reporter: Reporter) extends Symb
       /** Set phase to a newly created syntaxAnalyzer and call definitions.init. */
       val parserPhase: Phase = syntaxAnalyzer.newPhase(NoPhase)
       phase = parserPhase
-      definitions.init
+      definitions.init()
 
       // Flush the cache in the terminal phase: the chain could have been built
       // before without being used. (This happens in the interpreter.)
@@ -1362,6 +1358,9 @@ class Global(var currentSettings: Settings, var reporter: Reporter) extends Symb
         inform(phaseTimings.formatted)
         inform(unitTimingsFormatted)
       }
+
+      if (traceSymbolActivity)
+        units map (_.body) foreach (traceSymbols recordSymbolsInTree _)
 
       // In case no phase was specified for -Xshow-class/object, show it now for sure.
       if (opt.noShow)
