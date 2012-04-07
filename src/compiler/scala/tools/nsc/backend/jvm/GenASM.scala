@@ -2298,7 +2298,7 @@ abstract class GenASM extends SubComponent with BytecodeWriters {
         val jname    = javaName(method)
         val jtype    = javaType(method).getDescriptor()
 
-        def debugMsg(invoke: String) {
+        def dbg(invoke: String) {
           debuglog("%s %s %s.%s:%s".format(invoke, receiver.accessString, jowner, jname, jtype))
         }
 
@@ -2314,14 +2314,14 @@ abstract class GenASM extends SubComponent with BytecodeWriters {
         }
 
         style match {
-          case Static(true)                         => jcode.invokespecial  (jowner, jname, jtype) ; debugMsg("invokespecial")
-          case Static(false)                        => jcode.invokestatic   (jowner, jname, jtype) ; debugMsg("invokestatic")
-          case Dynamic if isInterfaceCall(receiver) => jcode.invokeinterface(jowner, jname, jtype) ; debugMsg("invokinterface")
-          case Dynamic                              => jcode.invokevirtual  (jowner, jname, jtype) ; debugMsg("invokevirtual")
+          case Static(true)                         => dbg("invokespecial");  jcode.invokespecial  (jowner, jname, jtype)
+          case Static(false)                        => dbg("invokestatic");   jcode.invokestatic   (jowner, jname, jtype)
+          case Dynamic if isInterfaceCall(receiver) => dbg("invokinterface"); jcode.invokeinterface(jowner, jname, jtype)
+          case Dynamic                              => dbg("invokevirtual");  jcode.invokevirtual  (jowner, jname, jtype)
           case SuperCall(_)                         =>
+            dbg("invokespecial")
             jcode.invokespecial(jowner, jname, jtype)
             initModule()
-            debugMsg("invokespecial")
         }
       } // end of genCode()'s genCallMethod()
 
