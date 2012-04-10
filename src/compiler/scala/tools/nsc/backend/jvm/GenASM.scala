@@ -12,7 +12,7 @@ import scala.reflect.internal.pickling.{ PickleFormat, PickleBuffer }
 import scala.tools.nsc.symtab._
 import scala.tools.nsc.io.AbstractFile
 
-import org.objectweb.asm
+import scala.tools.asm
 import asm.Label
 
 /**
@@ -466,10 +466,10 @@ abstract class GenASM extends SubComponent with BytecodeWriters {
       cw
     }
 
-    def createJAttribute(name: String, b: Array[Byte], offset: Int, len: Int): org.objectweb.asm.CustomAttr = {
+    def createJAttribute(name: String, b: Array[Byte], offset: Int, len: Int): asm.Attribute = {
       val dest = new Array[Byte](len);
       System.arraycopy(b, offset, dest, 0, len);
-      new org.objectweb.asm.CustomAttr(name, dest)
+      new asm.Attribute(name, dest)
     }
 
     // -----------------------------------------------------------------------------------------
@@ -773,10 +773,10 @@ abstract class GenASM extends SubComponent with BytecodeWriters {
         // Run the signature parser to catch bogus signatures.
         val isValidSignature = wrap {
           // Alternative: scala.tools.reflect.SigParser (frontend to sun.reflect.generics.parser.SignatureParser)
-          import org.objectweb.asm.util.SignatureChecker
-          if (sym.isMethod)    { SignatureChecker checkMethodSignature sig } // requires asm-util.jar
-          else if (sym.isTerm) { SignatureChecker checkFieldSignature  sig }
-          else                 { SignatureChecker checkClassSignature  sig }
+          import scala.tools.asm.util.CheckMethodAdapter
+          if (sym.isMethod)    { CheckMethodAdapter checkMethodSignature sig } // requires asm-util.jar
+          else if (sym.isTerm) { CheckMethodAdapter checkFieldSignature  sig }
+          else                 { CheckMethodAdapter checkClassSignature  sig }
         }
 
         if(!isValidSignature) {
