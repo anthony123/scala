@@ -871,7 +871,7 @@ abstract class GenASM extends SubComponent with BytecodeWriters {
               case StringTag  =>
                 assert(const.value != null, const) // TODO this invariant isn't documented in `case class Constant`
                 av.visit(name, const.stringValue)  // `stringValue` special-cases null, but that execution path isn't exercised for a const with StringTag
-              case ClassTag   => av.visit(name, javaType(const.typeValue))
+              case ClazzTag   => av.visit(name, javaType(const.typeValue))
               case EnumTag =>
                 val edesc  = descriptor(const.tpe) // the class descriptor of the enumeration class.
                 val evalue = const.symbolValue.name.toString // value the actual enumeration value.
@@ -1705,7 +1705,7 @@ abstract class GenASM extends SubComponent with BytecodeWriters {
 
         case NullTag    => mv.visitInsn(asm.Opcodes.ACONST_NULL)
 
-        case ClassTag   =>
+        case ClazzTag   =>
           val kind = toTypeKind(const.typeValue)
           val toPush: asm.Type =
             if (kind.isValueType) classLiteral(kind)
