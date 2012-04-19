@@ -85,10 +85,39 @@ trait Trees { self: Universe =>
     def pos_=(pos: Position): Unit = rawatt = (rawatt withPos pos) // the "withPos" part is crucial to robustness
     def setPos(newpos: Position): this.type = { pos = newpos; this }
 
-    private[this] var rawatt: Attachment = NoPosition
-    def attachment: Attachment = rawatt
-    def attachment_=(att: Attachment): Unit = rawatt = att
-    def setAttachment(att: Attachment): this.type = { rawatt = att; this }
+    // [Eugene] can we make this more type-safe
+    private var rawatt: Attachment = NoPosition
+    def attach(att: Any): Unit =
+      rawatt match {
+        case NontrivialAttachment(pos, payload) =>
+          val index = payload.indexWhere(p => p.getClass == att.getClass)
+          if (index == -1) payload += att
+          else payload(index) = att
+        case _ =>
+          rawatt = NontrivialAttachment(pos, collection.mutable.ListBuffer[Any](att))
+      }
+    def withAttachment(att: Any): this.type = { attach(att); this }
+    def detach(att: Any): Unit =
+      detach(att.getClass)
+    def detach(clazz: java.lang.Class[_]): Unit =
+      rawatt match {
+        case NontrivialAttachment(pos, payload) =>
+          val index = payload.indexWhere(p => p.getClass == clazz)
+          if (index != -1) payload.remove(index)
+        case _ =>
+          // do nothing
+      }
+    def withoutAttachment(att: Any): this.type = { detach(att); this }
+    def attachment[T: ClassTag]: T = attachmentOpt[T] getOrElse { throw new Error("no attachment of type %s".format(classTag[T].erasure)) }
+    def attachmentOpt[T: ClassTag]: Option[T] =
+      rawatt match {
+        case NontrivialAttachment(pos, payload) =>
+          val index = payload.indexWhere(p => p.getClass == classTag[T].erasure)
+          if (index != -1) Some(payload(index).asInstanceOf[T])
+          else None
+        case _ =>
+          None
+      }
 
     private[this] var rawtpe: Type = _
 
@@ -238,7 +267,7 @@ trait Trees { self: Universe =>
       duplicateTree(this).asInstanceOf[this.type]
 
     private[scala] def copyAttrs(tree: Tree): this.type = {
-      attachment = tree.attachment
+      rawatt = tree.rawatt
       tpe = tree.tpe
       if (hasSymbol) symbol = tree.symbol
       this
@@ -294,18 +323,24 @@ trait Trees { self: Universe =>
     override var symbol: Symbol = NoSymbol
   }
 
+  /** A tree with a name - effectively, a DefTree or RefTree.
+   */
+  trait NameTree extends Tree {
+    def name: Name
+  }
+
   /** A tree which references a symbol-carrying entity.
    *  References one, as opposed to defining one; definitions
    *  are in DefTrees.
    */
-  trait RefTree extends SymTree {
+  trait RefTree extends SymTree with NameTree {
     def qualifier: Tree    // empty for Idents
     def name: Name
   }
 
   /** A tree which defines a symbol-carrying entity.
    */
-  abstract class DefTree extends SymTree {
+  abstract class DefTree extends SymTree with NameTree {
     def name: Name
     override def isDef = true
   }
@@ -1519,7 +1554,7 @@ trait Trees { self: Universe =>
     def transformStats(stats: List[Tree], exprOwner: Symbol): List[Tree] =
       stats mapConserve (stat =>
         if (exprOwner != currentOwner && stat.isTerm) atOwner(exprOwner)(transform(stat))
-        else transform(stat)) filter (EmptyTree !=)
+        else transform(stat)) filter (EmptyTree != _)
     def transformModifiers(mods: Modifiers): Modifiers =
       mods.mapAnnotations(transformTrees)
 

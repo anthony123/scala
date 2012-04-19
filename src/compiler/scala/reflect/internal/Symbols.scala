@@ -47,13 +47,13 @@ trait Symbols extends api.Symbols { self: SymbolTable =>
 
   /** Create a new free term.  Its owner is NoSymbol.
    */
-  def newFreeTerm(name: TermName, info: Type, value: => Any, origin: String, newFlags: Long = 0L): FreeTerm =
-    new FreeTerm(name, value, origin) initFlags newFlags setInfo info
+  def newFreeTermSymbol(name: TermName, info: Type, value: => Any, flags: Long = 0L, origin: String): FreeTerm =
+    new FreeTerm(name, value, origin) initFlags flags setInfo info
 
   /** Create a new free type.  Its owner is NoSymbol.
    */
-  def newFreeType(name: TypeName, info: Type, value: => Any, origin: String, newFlags: Long = 0L): FreeType =
-    new FreeType(name, value, origin) initFlags newFlags setInfo info
+  def newFreeTypeSymbol(name: TypeName, info: Type, value: => Any, flags: Long = 0L, origin: String): FreeType =
+    new FreeType(name, value, origin) initFlags flags setInfo info
 
   /** The original owner of a class. Used by the backend to generate
    *  EnclosingMethod attributes.
@@ -64,6 +64,7 @@ trait Symbols extends api.Symbols { self: SymbolTable =>
     this: Symbol =>
 
     def kind: String = kindString
+    def isExistential: Boolean = this.isExistentiallyBound
 
     def newNestedSymbol(name: Name, pos: Position, newFlags: Long, isClass: Boolean): Symbol = name match {
       case n: TermName => newTermSymbol(n, pos, newFlags)
@@ -706,7 +707,10 @@ trait Symbols extends api.Symbols { self: SymbolTable =>
       || isAnonOrRefinementClass              // has uninteresting <anon> or <refinement> prefix
       || nme.isReplWrapperName(name)          // has ugly $iw. prefix (doesn't call isInterpreterWrapper due to nesting)
     )
-    def isFBounded = info.baseTypeSeq exists (_ contains this)
+    def isFBounded = info match {
+      case TypeBounds(_, _) => info.baseTypeSeq exists (_ contains this)
+      case _                => false
+    }
 
     /** Is symbol a monomorphic type?
      *  assumption: if a type starts out as monomorphic, it will not acquire
@@ -714,13 +718,8 @@ trait Symbols extends api.Symbols { self: SymbolTable =>
      */
     final def isMonomorphicType =
       isType && {
-        var is = infos
-        (is eq null) || {
-          while (is.prev ne null) { is = is.prev }
-          is.info.isComplete && !is.info.isHigherKinded // was: is.info.typeParams.isEmpty.
-          // YourKit listed the call to PolyType.typeParams as a hot spot but it is likely an artefact.
-          // The change to isHigherKinded did not reduce the total running time.
-        }
+        val info = originalInfo
+        info.isComplete && !info.isHigherKinded
       }
 
     def isStrictFP          = hasAnnotation(ScalaStrictFPAttr) || (enclClass hasAnnotation ScalaStrictFPAttr)
@@ -850,6 +849,16 @@ trait Symbols extends api.Symbols { self: SymbolTable =>
     final def isStructuralRefinement: Boolean =
       (isClass || isType || isModule) && info.normalize/*.underlying*/.isStructuralRefinement
 
+    /** Is this a term symbol only defined in a refinement (so that it needs
+     *  to be accessed by reflection)?
+     */
+    def isOnlyRefinementMember: Boolean =
+       isTerm && // type members are not affected
+       owner.isRefinementClass && // owner must be a refinement class
+       (owner.info decl name) == this && // symbol must be explicitly declared in the refinement (not synthesized from glb)
+       allOverriddenSymbols.isEmpty && // symbol must not override a symbol in a base class
+       !isConstant // symbol must not be a constant. Question: Can we exclude @inline methods as well?
+
     final def isStructuralRefinementMember = owner.isStructuralRefinement && isPossibleInRefinement && isPublic
     final def isPossibleInRefinement       = !isConstructor && !isOverridingSymbol
 
@@ -887,8 +896,10 @@ trait Symbols extends api.Symbols { self: SymbolTable =>
 
       if (!owner.isLocatable) return false
       if (owner.isTerm) return false
+      if (isLocalDummy) return false
 
       if (isType && isNonClassType) return false
+      if (isRefinementClass) return false
       return true
     }
 
@@ -1110,6 +1121,14 @@ trait Symbols extends api.Symbols { self: SymbolTable =>
 // ------ info and type -------------------------------------------------------------------
 
     private[Symbols] var infos: TypeHistory = null
+    def originalInfo = {
+      if (infos eq null) null
+      else {
+        var is = infos
+        while (is.prev ne null) { is = is.prev }
+        is.info
+      }
+    }
 
     /** Get type. The type of a symbol is:
      *  for a type symbol, the type corresponding to the symbol itself,
@@ -1192,8 +1211,9 @@ trait Symbols extends api.Symbols { self: SymbolTable =>
 
     /** Set new info valid from start of this phase. */
     def updateInfo(info: Type): Symbol = {
-      assert(phaseId(infos.validFrom) <= phase.id)
-      if (phaseId(infos.validFrom) == phase.id) infos = infos.prev
+      val pid = phaseId(infos.validFrom)
+      assert(pid <= phase.id, (pid, phase.id))
+      if (pid == phase.id) infos = infos.prev
       infos = TypeHistory(currentPeriod, info, infos)
       _validTo = if (info.isComplete) currentPeriod else NoPeriod
       this
@@ -1751,7 +1771,8 @@ trait Symbols extends api.Symbols { self: SymbolTable =>
       } else owner.enclosingTopLevelClass
 
     /** Is this symbol defined in the same scope and compilation unit as `that` symbol? */
-    def isCoDefinedWith(that: Symbol) = (
+    def isCoDefinedWith(that: Symbol) = {
+      import language.reflectiveCalls
       (this.rawInfo ne NoType) &&
       (this.effectiveOwner == that.effectiveOwner) && {
         !this.effectiveOwner.isPackageClass ||
@@ -1770,7 +1791,7 @@ trait Symbols extends api.Symbols { self: SymbolTable =>
           false
         }
       }
-    )
+    }
 
     /** The internal representation of classes and objects:
      *
@@ -1874,7 +1895,7 @@ trait Symbols extends api.Symbols { self: SymbolTable =>
       site.nonPrivateMemberAdmitting(name, admit).filter(sym =>
         !sym.isTerm || (site.memberType(this) matches site.memberType(sym)))
 
-    /** The symbol overridden by this symbol in given class `ofclazz`.
+    /** The symbol, in class `ofclazz`, that is overridden by this symbol.
      *
      *  @param ofclazz is a base class of this symbol's owner.
      */
@@ -2954,7 +2975,6 @@ trait Symbols extends api.Symbols { self: SymbolTable =>
     override def isFreeTerm = true
   }
 
-  // [Eugene] the NoSymbol origin works for type parameters. what about existential free types?
   class FreeType(name0: TypeName, value0: => Any, val origin: String) extends TypeSkolem(NoSymbol, NoPosition, name0, NoSymbol) {
     def value = value0
     override def isFreeType = true
@@ -3093,10 +3113,11 @@ trait Symbols extends api.Symbols { self: SymbolTable =>
     if (settings.debug.value) printStackTrace()
   }
 
-  case class InvalidCompanions(sym1: Symbol, sym2: Symbol) extends Throwable(
+  case class InvalidCompanions(sym1: Symbol, sym2: Symbol) extends Throwable({
+    import language.reflectiveCalls
     "Companions '" + sym1 + "' and '" + sym2 + "' must be defined in same file:\n" +
     "  Found in " + sym1.sourceFile.canonicalPath + " and " + sym2.sourceFile.canonicalPath
-  ) {
+  }) {
       override def toString = getMessage
   }
 

@@ -11,6 +11,7 @@ package settings
 import annotation.elidable
 import scala.tools.util.PathResolver.Defaults
 import scala.collection.mutable
+import language.{implicitConversions, existentials}
 
 trait ScalaSettings extends AbsScalaSettings
                        with StandardScalaSettings
@@ -62,6 +63,7 @@ trait ScalaSettings extends AbsScalaSettings
   val classpath     = PathSetting       ("-classpath", "Specify where to find user class files.", defaultClasspath) withAbbreviation "-cp"
   val d             = OutputSetting     (outputDirs, ".")
   val nospecialization = BooleanSetting    ("-no-specialization", "Ignore @specialize annotations.")
+  val language      = MultiStringSetting("-language", "feature", "Enable one or more language features.")
 
   /**
    * -X "Advanced" settings
@@ -106,6 +108,8 @@ trait ScalaSettings extends AbsScalaSettings
   val showPhases    = BooleanSetting    ("-Xshow-phases", "Print a synopsis of compiler phases.")
   val sourceReader  = StringSetting     ("-Xsource-reader", "classname", "Specify a custom method for reading source files.", "")
 
+  val XoldPatmat    = BooleanSetting    ("-Xoldpatmat", "Use the pre-2.10 pattern matcher. Otherwise, the 'virtualizing' pattern matcher is used in 2.10.")
+
   /** Compatibility stubs for options whose value name did
    *  not previously match the option name.
    */
@@ -134,6 +138,7 @@ trait ScalaSettings extends AbsScalaSettings
   val termConflict    = ChoiceSetting     ("-Yresolve-term-conflict", "strategy", "Resolve term conflicts", List("package", "object", "error"), "error")
   val inline          = BooleanSetting    ("-Yinline", "Perform inlining when possible.")
   val inlineHandlers  = BooleanSetting    ("-Yinline-handlers", "Perform exception handler inlining when possible.")
+  val YinlinerWarnings= BooleanSetting    ("-Yinline-warnings", "Emit inlining warnings. (Normally surpressed due to high volume)")  
   val Xlinearizer     = ChoiceSetting     ("-Ylinearizer", "which", "Linearizer to use", List("normal", "dfs", "rpo", "dump"), "rpo")
   val log             = PhasesSetting     ("-Ylog", "Log operations during")
   val Ylogcp          = BooleanSetting    ("-Ylog-classpath", "Output information about what classpath is being applied.")
@@ -173,7 +178,6 @@ trait ScalaSettings extends AbsScalaSettings
   val YmethodInfer    = BooleanSetting    ("-Yinfer-argument-types", "Infer types for arguments of overriden methods.")
   val etaExpandKeepsStar = BooleanSetting ("-Yeta-expand-keeps-star", "Eta-expand varargs methods to T* rather than Seq[T].  This is a temporary option to ease transition.")
   val noSelfCheck     = BooleanSetting    ("-Yno-self-type-checks", "Suppress check for self-type conformance among inherited members.")
-  val YvirtPatmat     = BooleanSetting    ("-Yvirtpatmat", "Translate pattern matches into flatMap/orElse calls. See scala.MatchingStrategy.")
   val YvirtClasses    = false // too embryonic to even expose as a -Y //BooleanSetting    ("-Yvirtual-classes", "Support virtual classes")
 
   val exposeEmptyPackage = BooleanSetting("-Yexpose-empty-package", "Internal only: expose the empty package.").internalOnly()
@@ -203,7 +207,7 @@ trait ScalaSettings extends AbsScalaSettings
   val Xexperimental = BooleanSetting("-Xexperimental", "Enable experimental extensions.") enabling experimentalSettings
 
   // Feature extensions
-  val Xmacros                 = BooleanSetting("-Xmacros", "Enable macros.")
+  val Xmacros                 = BooleanSetting("-Xmacros", "Enable macros.") // [Martin] Can be retired now.
   val XmacroSettings          = MultiStringSetting("-Xmacro-settings", "option", "Custom settings for macros.")
   val XmacroPrimaryClasspath  = PathSetting("-Xmacro-primary-classpath", "Classpath to load macros implementations from, defaults to compilation classpath (aka \"library classpath\".", "")
   val XmacroFallbackClasspath = PathSetting("-Xmacro-fallback-classpath", "Classpath to load macros implementations from if they cannot be loaded from library classpath.", "")

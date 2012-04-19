@@ -38,6 +38,7 @@ abstract class SymbolTable extends api.Universe
                               with TreeBuildUtil
                               with Reporters
                               with CapturedVariables
+                              with StdAttachments
 {
   def rootLoader: LazyType
   def log(msg: => AnyRef): Unit
@@ -266,6 +267,8 @@ abstract class SymbolTable extends api.Universe
   object perRunCaches {
     import java.lang.ref.WeakReference
     import scala.runtime.ScalaRunTime.stringOf
+
+    import language.reflectiveCalls
 
     // We can allow ourselves a structural type, these methods
     // amount to a few calls per run at most.  This does suggest

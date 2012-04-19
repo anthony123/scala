@@ -103,9 +103,7 @@ trait Trees extends api.Trees { self: SymbolTable =>
 
   // --- extension methods --------------------------------------------------------
 
-  implicit def treeOps(tree: Tree): TreeOps = new TreeOps(tree)
-
-  class TreeOps(tree: Tree) {
+  implicit class TreeOps(tree: Tree) {
     def isErroneous = (tree.tpe ne null) && tree.tpe.isErroneous
     def isTyped     = (tree.tpe ne null) && !tree.tpe.isErroneous
 
@@ -146,11 +144,9 @@ trait Trees extends api.Trees { self: SymbolTable =>
      *  less than the whole tree.
      */
     def summaryString: String = tree match {
-      case Select(qual, name) => qual.summaryString + "." + name.decode
-      case Ident(name)        => name.longString
       case Literal(const)     => "Literal(" + const + ")"
-      case t: DefTree         => t.shortClass + " `" + t.name.decode + "`"
-      case t: RefTree         => t.shortClass + " `" + t.name.longString + "`"
+      case Select(qual, name) => qual.summaryString + "." + name.decode
+      case t: NameTree        => t.name.longString
       case t                  =>
         t.shortClass + (
           if (t.symbol != null && t.symbol != NoSymbol) " " + t.symbol

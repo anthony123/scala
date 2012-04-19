@@ -115,7 +115,7 @@ trait Metalevels {
         if (reifyDebug) println("entering inlineable splice: " + splicee)
         val Block(mrDef :: symbolTable, expr) = splicee
         // [Eugene] how to express the fact that a scrutinee is both of some type and matches an extractor?
-        val freedefsToInline = symbolTable collect { case freedef @ FreeTermDef(_, _, binding, _) if binding.symbol.isLocalToReifee => freedef.asInstanceOf[ValDef] }
+        val freedefsToInline = symbolTable collect { case freedef @ FreeTermDef(_, _, binding, _, _) if binding.symbol.isLocalToReifee => freedef.asInstanceOf[ValDef] }
         freedefsToInline foreach (vdef => this.freedefsToInline(vdef.name) = vdef)
         val symbolTable1 = symbolTable diff freedefsToInline
         val tree1 = Select(Block(mrDef :: symbolTable1, expr), flavor)
@@ -134,9 +134,11 @@ trait Metalevels {
       // FreeRef(_, _) check won't work, because metalevels of symbol table and body are different, hence, freerefs in symbol table look different from freerefs in body
       // todo. also perform garbage collection on local symbols
       // so that local symbols used only in type signatures of free vars get removed
+      // todo. same goes for auxiliary symbol defs reified to support tough types
+      // some of them need to be rebuilt, some of them need to be removed, because they're no longer necessary
       case FreeRef(mr, name) if freedefsToInline contains name =>
         if (reifyDebug) println("inlineable free ref: %s in %s".format(name, showRaw(tree)))
-        val freedef @ FreeDef(_, _, binding, _) = freedefsToInline(name)
+        val freedef @ FreeDef(_, _, binding, _, _) = freedefsToInline(name)
         if (reifyDebug) println("related definition: %s".format(showRaw(freedef)))
         val inlined = reify(binding)
         if (reifyDebug) println("verdict: inlined as %s".format(showRaw(inlined)))

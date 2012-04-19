@@ -129,11 +129,11 @@ trait ContextErrors {
             val retyped    = typed (tree.duplicate setType null)
             val foundDecls = retyped.tpe.decls filter (sym => !sym.isConstructor && !sym.isSynthetic)
 
-            if (foundDecls.isEmpty) found
+            if (foundDecls.isEmpty || (found.typeSymbol eq NoSymbol)) found
             else {
               // The members arrive marked private, presumably because there was no
               // expected type and so they're considered members of an anon class.
-              foundDecls foreach (_ resetFlag (PRIVATE | PROTECTED))
+              foundDecls foreach (_.makePublic)
               // TODO: if any of the found parents match up with required parents after normalization,
               // print the error so that they match. The major beneficiary there would be
               // java.lang.Object vs. AnyRef.
@@ -483,7 +483,7 @@ trait ContextErrors {
               val keep = missing take 3 map (_.name)
               ".\nUnspecified value parameter%s %s".format(
                 if (missing.tail.isEmpty) "" else "s",
-                if (missing drop 3 nonEmpty) (keep :+ "...").mkString(", ")
+                if ((missing drop 3).nonEmpty) (keep :+ "...").mkString(", ")
                 else keep.mkString("", ", ", ".")
               )
             }
@@ -503,6 +503,9 @@ trait ContextErrors {
 
       def ApplyWithoutArgsError(tree: Tree, fun: Tree) =
         NormalTypeError(tree, fun.tpe+" does not take parameters")
+
+      def DynamicVarArgUnsupported(tree: Tree, name: String) =
+        issueNormalTypeError(tree, name+ " does not support passing a vararg parameter")
 
       //checkClassType
       def TypeNotAStablePrefixError(tpt: Tree, pre: Type) = {
@@ -644,7 +647,7 @@ trait ContextErrors {
     private def applyErrorMsg(tree: Tree, msg: String, argtpes: List[Type], pt: Type) = {
       def asParams(xs: List[Any]) = xs.mkString("(", ", ", ")")
 
-      def resType   = if (pt isWildcard) "" else " with expected result type " + pt
+      def resType   = if (pt.isWildcard) "" else " with expected result type " + pt
       def allTypes  = (alternatives(tree) flatMap (_.paramTypes)) ++ argtpes :+ pt
       def locals    = alternatives(tree) flatMap (_.typeParams)
 

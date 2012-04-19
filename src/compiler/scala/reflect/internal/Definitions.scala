@@ -120,7 +120,7 @@ trait Definitions extends reflect.api.StandardDefinitions {
       numericWeight contains sym
 
     def isGetClass(sym: Symbol) =
-      (sym.name == nme.getClass_) && (sym.paramss.isEmpty || sym.paramss.head.isEmpty)
+      (sym.name == nme.getClass_) && flattensToEmpty(sym.paramss)
 
     lazy val UnitClass    = valueCache(tpnme.Unit)
     lazy val ByteClass    = valueCache(tpnme.Byte)
@@ -292,7 +292,7 @@ trait Definitions extends reflect.api.StandardDefinitions {
 
     sealed abstract class BottomClassSymbol(name: TypeName, parent: Symbol) extends ClassSymbol(ScalaPackageClass, NoPosition, name) {
       locally {
-        this initFlags ABSTRACT | TRAIT | FINAL
+        this initFlags ABSTRACT | FINAL
         this setInfoAndEnter ClassInfoType(List(parent.tpe), newScope, this)
       }
       final override def isBottomClass = true
@@ -400,6 +400,8 @@ trait Definitions extends reflect.api.StandardDefinitions {
     lazy val EqualsPatternClass     = specialPolyClass(tpnme.EQUALS_PATTERN_NAME, 0L)(_ => AnyClass.tpe)
     lazy val JavaRepeatedParamClass = specialPolyClass(tpnme.JAVA_REPEATED_PARAM_CLASS_NAME, COVARIANT)(tparam => arrayType(tparam.tpe))
     lazy val RepeatedParamClass     = specialPolyClass(tpnme.REPEATED_PARAM_CLASS_NAME, COVARIANT)(tparam => seqType(tparam.tpe))
+  
+    lazy val MarkerCPSTypes = getClassIfDefined("scala.util.continuations.cpsParam")
 
     def isByNameParamType(tp: Type)        = tp.typeSymbol == ByNameParamClass
     def isScalaRepeatedParamType(tp: Type) = tp.typeSymbol == RepeatedParamClass
@@ -653,6 +655,11 @@ trait Definitions extends reflect.api.StandardDefinitions {
         arity <= MaxFunctionArity && sym == FunctionClass(arity)
       case _ =>
         false
+    }
+
+    def isPartialFunctionType(tp: Type): Boolean = {
+      val sym = tp.typeSymbol
+      (sym eq PartialFunctionClass) || (sym eq AbstractPartialFunctionClass)
     }
 
     def isSeqType(tp: Type) = elementType(SeqClass, tp.normalize) != NoType
@@ -924,6 +931,18 @@ trait Definitions extends reflect.api.StandardDefinitions {
     lazy val ClassTargetClass           = getMetaAnnotation("companionClass")
     lazy val ObjectTargetClass          = getMetaAnnotation("companionObject")
     lazy val MethodTargetClass          = getMetaAnnotation("companionMethod")    // TODO: module, moduleClass? package, packageObject?
+    lazy val LanguageFeatureAnnot       = getMetaAnnotation("languageFeature")
+
+    // Language features
+    lazy val languageFeatureModule      = getRequiredModule("scala.languageFeature")
+    lazy val experimentalModule         = getMember(languageFeatureModule, newTermName("experimental"))
+    lazy val MacrosFeature              = getLanguageFeature("macros", experimentalModule)
+    lazy val DynamicsFeature            = getLanguageFeature("dynamics")
+    lazy val PostfixOpsFeature          = getLanguageFeature("postfixOps")
+    lazy val ReflectiveCallsFeature     = getLanguageFeature("reflectiveCalls")
+    lazy val ImplicitConversionsFeature = getLanguageFeature("implicitConversions")
+    lazy val HigherKindsFeature         = getLanguageFeature("higherKinds")
+    lazy val ExistentialsFeature        = getLanguageFeature("existentials")
 
     private def getMetaAnnotation(name: String) = getRequiredClass("scala.annotation.meta." + name)
     def isMetaAnnotation(sym: Symbol): Boolean = metaAnnotations(sym) || (
@@ -975,6 +994,9 @@ trait Definitions extends reflect.api.StandardDefinitions {
       try getModule(fullname.toTermName)
       catch { case _: MissingRequirementError => NoSymbol }
 
+    def getLanguageFeature(name: String, owner: Symbol = languageFeatureModule) =
+      getMember(owner, newTypeName(name))
+
     def termMember(owner: Symbol, name: String): Symbol = owner.info.member(newTermName(name))
     def typeMember(owner: Symbol, name: String): Symbol = owner.info.member(newTypeName(name))
 
@@ -994,8 +1016,14 @@ trait Definitions extends reflect.api.StandardDefinitions {
 
     def getMember(owner: Symbol, name: Name): Symbol = {
       getMemberIfDefined(owner, name) orElse {
+        if (phase.flatClasses && name.isTypeName && !owner.isPackageObjectOrClass) {
+          val pkg = owner.owner
+          val flatname = nme.flattenedName(owner.name, name)
+          getMember(pkg, flatname)
+        } else {
         throw new FatalError(owner + " does not have a member " + name)
       }
+    }
     }
     def getMemberIfDefined(owner: Symbol, name: Name): Symbol =
       owner.info.nonPrivateMember(name)
@@ -1011,7 +1039,7 @@ trait Definitions extends reflect.api.StandardDefinitions {
     }
     def getDeclIfDefined(owner: Symbol, name: Name): Symbol =
       owner.info.nonPrivateDecl(name)
-    
+
     def packageExists(packageName: String): Boolean =
       getModuleIfDefined(packageName).isPackage
 

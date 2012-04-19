@@ -83,7 +83,7 @@ trait Infer {
     def apply(tp: Type): Type = tp match {
       case WildcardType | BoundedWildcardType(_) | NoType =>
         throw new NoInstance("undetermined type")
-      case tv @ TypeVar(origin, constr) =>
+      case tv @ TypeVar(origin, constr) if !tv.untouchable =>
         if (constr.inst == NoType) {
           throw new DeferredNoInstance(() =>
             "no unique instantiation of type variable " + origin + " could be found")
@@ -446,7 +446,7 @@ trait Infer {
       type Result = collection.mutable.LinkedHashMap[Symbol, Option[Type]]
 
       def unapply(m: Result): Some[(List[Symbol], List[Type])] = Some(toLists(
-        m collect {case (p, Some(a)) => (p, a)} unzip  ))
+        (m collect {case (p, Some(a)) => (p, a)}).unzip  ))
 
       object Undets {
         def unapply(m: Result): Some[(List[Symbol], List[Type], List[Symbol])] = Some(toLists{
@@ -766,7 +766,7 @@ trait Infer {
         isAsSpecific(res, ftpe2)
       case mt: MethodType if mt.isImplicit =>
         isAsSpecific(ftpe1.resultType, ftpe2)
-      case MethodType(params, _) if params nonEmpty =>
+      case MethodType(params, _) if params.nonEmpty =>
         var argtpes = params map (_.tpe)
         if (isVarArgsList(params) && isVarArgsList(ftpe2.params))
           argtpes = argtpes map (argtpe =>
@@ -776,7 +776,7 @@ trait Infer {
         isAsSpecific(PolyType(tparams, res), ftpe2)
       case PolyType(tparams, mt: MethodType) if mt.isImplicit =>
         isAsSpecific(PolyType(tparams, mt.resultType), ftpe2)
-      case PolyType(_, MethodType(params, _)) if params nonEmpty =>
+      case PolyType(_, MethodType(params, _)) if params.nonEmpty =>
         isApplicable(List(), ftpe2, params map (_.tpe), WildcardType)
       // case NullaryMethodType(res) =>
       //   isAsSpecific(res, ftpe2)
@@ -1187,6 +1187,50 @@ trait Infer {
           debuglog("inconsistent: "+tparam+" "+lo+" "+hi)
         }
       }
+    }
+
+    /** Does `tp` contain any types that cannot be checked at run-time (i.e., after erasure, will isInstanceOf[erased(tp)] imply conceptualIsInstanceOf[tp]?)
+     * we should find a way to ask erasure: hey, is `tp` going to make it through you with all of its isInstanceOf resolving powers intact?
+     * TODO: at the very least, reduce duplication wrt checkCheckable
+     */
+    def containsUnchecked(tp: Type): Boolean = {
+      def check(tp: Type, bound: List[Symbol]): Boolean = {
+        def isSurroundingTypeParam(sym: Symbol) = {
+          val e = context.scope.lookupEntry(sym.name)
+            (    (e ne null)
+              && (e.sym == sym )
+              && !e.sym.isTypeParameterOrSkolem
+              && (e.owner == context.scope)
+            )
+        }
+        def isLocalBinding(sym: Symbol) = (
+          sym.isAbstractType && (
+               (bound contains sym)
+            || (sym.name == tpnme.WILDCARD)
+            || isSurroundingTypeParam(sym)
+          )
+        )
+        tp.normalize match {
+          case SingleType(pre, _) =>
+            check(pre, bound)
+          case TypeRef(_, ArrayClass, arg :: _) =>
+            check(arg, bound)
+          case tp @ TypeRef(pre, sym, args) =>
+            (  (sym.isAbstractType && !isLocalBinding(sym))
+            || (args exists (x => !isLocalBinding(x.typeSymbol)))
+            || check(pre, bound)
+            )
+          // case RefinedType(_, decls) if decls.nonEmpty =>
+          //   patternWarning(tp, "refinement ")
+          case RefinedType(parents, _) =>
+            parents exists (p => check(p, bound))
+          case ExistentialType(quantified, tp1) =>
+            check(tp1, bound ::: quantified)
+          case _ =>
+            false
+        }
+      }
+      check(tp, Nil)
     }
 
     def checkCheckable(tree: Tree, tp: Type, kind: String) {

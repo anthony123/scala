@@ -9,12 +9,13 @@ package internal
 import scala.collection.immutable
 import NameTransformer.MODULE_SUFFIX_STRING
 import annotation.switch
+import language.implicitConversions
 
 trait StdNames extends NameManglers { self: SymbolTable =>
 
   def encode(str: String): TermName = newTermNameCached(NameTransformer.encode(str))
 
-  implicit def lowerTermNames(n: TermName): String = "" + n
+  implicit def lowerTermNames(n: TermName): String = n.toString
 
   // implicit def stringToTermName(s: String): TermName = newTermName(s)
 
@@ -56,6 +57,7 @@ trait StdNames extends NameManglers { self: SymbolTable =>
     final val RETURNkw: TermName    = kw("return")
     final val SEALEDkw: TermName    = kw("sealed")
     final val SUPERkw: TermName     = kw("super")
+    final val THENkw: TermName      = kw("then")
     final val THISkw: TermName      = kw("this")
     final val THROWkw: TermName     = kw("throw")
     final val TRAITkw: TermName     = kw("trait")
@@ -204,6 +206,7 @@ trait StdNames extends NameManglers { self: SymbolTable =>
     val MIRROR_FREE_PREFIX: NameType        = "free$"
     val MIRROR_FREE_THIS_SUFFIX: NameType   = "$this"
     val MIRROR_FREE_VALUE_SUFFIX: NameType  = "$value"
+    val MIRROR_SYMDEF_PREFIX: NameType      = "symdef$"
     val MIXIN_CONSTRUCTOR: NameType         = "$init$"
     val MODULE_INSTANCE_FIELD: NameType     = NameTransformer.MODULE_INSTANCE_NAME  // "MODULE$"
     val OUTER: NameType                     = "$outer"
@@ -288,11 +291,14 @@ trait StdNames extends NameManglers { self: SymbolTable =>
     val AnnotationInfo: NameType       = "AnnotationInfo"
     val Any: NameType                  = "Any"
     val AnyVal: NameType               = "AnyVal"
+    val AppliedTypeTree: NameType      = "AppliedTypeTree"
     val Apply: NameType                = "Apply"
     val ArrayAnnotArg: NameType        = "ArrayAnnotArg"
+    val Constant: NameType             = "Constant"
     val ConstantType: NameType         = "ConstantType"
     val EmptyPackage: NameType         = "EmptyPackage"
     val EmptyPackageClass: NameType    = "EmptyPackageClass"
+    val ExistentialTypeTree: NameType  = "ExistentialTypeTree"
     val Expr: NameType                 = "Expr"
     val Ident: NameType                = "Ident"
     val Import: NameType               = "Import"
@@ -323,6 +329,7 @@ trait StdNames extends NameManglers { self: SymbolTable =>
     val append: NameType               = "append"
     val apply: NameType                = "apply"
     val applyDynamic: NameType         = "applyDynamic"
+    val applyDynamicNamed: NameType    = "applyDynamicNamed"
     val applyOrElse: NameType          = "applyOrElse"
     val args : NameType                = "args"
     val argv : NameType                = "argv"
@@ -400,13 +407,15 @@ trait StdNames extends NameManglers { self: SymbolTable =>
     val name: NameType                 = "name"
     val ne: NameType                   = "ne"
     val newArray: NameType             = "newArray"
+    val newFreeExistential: NameType   = "newFreeExistential"
     val newFreeTerm: NameType          = "newFreeTerm"
     val newFreeType: NameType          = "newFreeType"
     val newNestedSymbol: NameType      = "newNestedSymbol"
     val newScopeWith: NameType         = "newScopeWith"
+    val next: NameType                 = "next"
     val nmeNewTermName: NameType       = "newTermName"
     val nmeNewTypeName: NameType       = "newTypeName"
-    val next: NameType                 = "next"
+    val normalize: NameType            = "normalize"
     val notifyAll_ : NameType          = "notifyAll"
     val notify_ : NameType             = "notify"
     val null_ : NameType               = "null"
@@ -424,6 +433,7 @@ trait StdNames extends NameManglers { self: SymbolTable =>
     val runtime: NameType              = "runtime"
     val sameElements: NameType         = "sameElements"
     val scala_ : NameType              = "scala"
+    val selectDynamic: NameType        = "selectDynamic"
     val selectOverloadedMethod: NameType = "selectOverloadedMethod"
     val selectTerm: NameType           = "selectTerm"
     val selectType: NameType           = "selectType"
@@ -453,12 +463,14 @@ trait StdNames extends NameManglers { self: SymbolTable =>
     val unapplySeq: NameType           = "unapplySeq"
     val unbox: NameType                = "unbox"
     val update: NameType               = "update"
+    val updateDynamic: NameType        = "updateDynamic"
     val value: NameType                = "value"
     val valueOf : NameType             = "valueOf"
     val values : NameType              = "values"
     val view_ : NameType               = "view"
     val wait_ : NameType               = "wait"
     val withFilter: NameType           = "withFilter"
+    val wrap: NameType                 = "wrap"
     val zip: NameType                  = "zip"
 
     val synthSwitch: NameType          = "$synthSwitch"

@@ -19,6 +19,7 @@ import JObjectType.{ JAVA_LANG_STRING, JAVA_LANG_OBJECT }
 import java.util.jar.{ JarEntry, JarOutputStream }
 import scala.tools.nsc.io.AbstractFile
 import java.io.{ByteArrayOutputStream, DataOutputStream, OutputStream}
+import language.postfixOps
 
 /** This class ...
  *

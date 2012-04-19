@@ -532,6 +532,21 @@ abstract class TreeInfo {
     }
   }
 
+  def isApplyDynamicName(name: Name) = (name == nme.updateDynamic) || (name == nme.selectDynamic) || (name == nme.applyDynamic) || (name == nme.applyDynamicNamed)
+
+  class DynamicApplicationExtractor(nameTest: Name => Boolean) {
+    def unapply(tree: Tree) = tree match {
+      case Apply(TypeApply(Select(qual, oper), _), List(Literal(Constant(name)))) if nameTest(oper) => Some((qual, name))
+      case Apply(Select(qual, oper), List(Literal(Constant(name)))) if nameTest(oper) => Some((qual, name))
+      case Apply(Ident(oper), List(Literal(Constant(name)))) if nameTest(oper) => Some((EmptyTree, name))
+      case _ => None
+    }
+  }
+  object DynamicUpdate extends DynamicApplicationExtractor(_ == nme.updateDynamic)
+  object DynamicApplication extends DynamicApplicationExtractor(isApplyDynamicName)
+  object DynamicApplicationNamed extends DynamicApplicationExtractor(_ == nme.applyDynamicNamed)
+
+
   // domain-specific extractors for reification
 
   import definitions._
@@ -575,7 +590,7 @@ abstract class TreeInfo {
   }
 
   object Reified {
-    def unapply(tree: Tree): Option[(Tree, List[ValDef], Tree)] = tree match {
+    def unapply(tree: Tree): Option[(Tree, List[Tree], Tree)] = tree match {
       case ReifiedTree(reifee, symbolTable, reified, _) =>
         Some(reifee, symbolTable, reified)
       case ReifiedType(reifee, symbolTable, reified) =>
@@ -586,16 +601,16 @@ abstract class TreeInfo {
   }
 
   object ReifiedTree {
-    def unapply(tree: Tree): Option[(Tree, List[ValDef], Tree, Tree)] = tree match {
+    def unapply(tree: Tree): Option[(Tree, List[Tree], Tree, Tree)] = tree match {
       case reifee @ Block((mrDef @ ValDef(_, _, _, _)) :: symbolTable, Apply(Apply(_, List(tree)), List(Apply(_, List(tpe))))) if mrDef.name == nme.MIRROR_SHORT =>
-        Some(reifee, symbolTable map (_.asInstanceOf[ValDef]), tree, tpe)
+        Some(reifee, symbolTable, tree, tpe)
       case _ =>
         None
     }
   }
 
   object InlineableTreeSplice {
-    def unapply(tree: Tree): Option[(Tree, List[ValDef], Tree, Tree, Symbol)] = tree match {
+    def unapply(tree: Tree): Option[(Tree, List[Tree], Tree, Tree, Symbol)] = tree match {
       case select @ Select(ReifiedTree(splicee, symbolTable, tree, tpe), _) if select.symbol == ExprEval || select.symbol == ExprValue =>
         Some(splicee, symbolTable, tree, tpe, select.symbol)
       case _ =>
@@ -604,7 +619,7 @@ abstract class TreeInfo {
   }
 
   object InlinedTreeSplice {
-    def unapply(tree: Tree): Option[(Tree, List[ValDef], Tree, Tree)] = tree match {
+    def unapply(tree: Tree): Option[(Tree, List[Tree], Tree, Tree)] = tree match {
       case Select(ReifiedTree(splicee, symbolTable, tree, tpe), name) if name == ExprTree.name =>
         Some(splicee, symbolTable, tree, tpe)
       case _ =>
@@ -613,16 +628,16 @@ abstract class TreeInfo {
   }
 
   object ReifiedType {
-    def unapply(tree: Tree): Option[(Tree, List[ValDef], Tree)] = tree match {
-      case reifee @ Block((mrDef @ ValDef(_, _, _, _)) :: symbolTable, Apply(_, List(tpe))) if mrDef.name == nme.MIRROR_SHORT =>
-        Some(reifee, symbolTable map (_.asInstanceOf[ValDef]), tpe)
+    def unapply(tree: Tree): Option[(Tree, List[Tree], Tree)] = tree match {
+      case reifee @ Block((mrDef @ ValDef(_, _, _, _)) :: symbolTable, Apply(_, tpe :: _)) if mrDef.name == nme.MIRROR_SHORT =>
+        Some(reifee, symbolTable, tpe)
       case _ =>
         None
     }
   }
 
   object InlinedTypeSplice {
-    def unapply(tree: Tree): Option[(Tree, List[ValDef], Tree)] = tree match {
+    def unapply(tree: Tree): Option[(Tree, List[Tree], Tree)] = tree match {
       case Select(ReifiedType(splicee, symbolTable, tpe), name) if name == TypeTagTpe.name =>
         Some(splicee, symbolTable, tpe)
       case _ =>
@@ -631,11 +646,11 @@ abstract class TreeInfo {
   }
 
   object FreeDef {
-    def unapply(tree: Tree): Option[(Tree, TermName, Tree, String)] = tree match {
-      case FreeTermDef(mrRef, name, binding, origin) =>
-        Some(mrRef, name, binding, origin)
-      case FreeTypeDef(mrRef, name, binding, origin) =>
-        Some(mrRef, name, binding, origin)
+    def unapply(tree: Tree): Option[(Tree, TermName, Tree, Long, String)] = tree match {
+      case FreeTermDef(mrRef, name, binding, flags, origin) =>
+        Some(mrRef, name, binding, flags, origin)
+      case FreeTypeDef(mrRef, name, binding, flags, origin) =>
+        Some(mrRef, name, binding, flags, origin)
       case _ =>
         None
     }
@@ -644,28 +659,29 @@ abstract class TreeInfo {
   object FreeTermDef {
     lazy val newFreeTermMethod = getMember(getRequiredClass("scala.reflect.api.TreeBuildUtil"), nme.newFreeTerm)
 
-    def unapply(tree: Tree): Option[(Tree, TermName, Tree, String)] = tree match {
-      case ValDef(_, name, _, Apply(Select(mrRef @ Ident(_), newFreeTerm), List(_, _, binding, Literal(Constant(origin: String)))))
+    def unapply(tree: Tree): Option[(Tree, TermName, Tree, Long, String)] = tree match {
+      case ValDef(_, name, _, Apply(Select(mrRef @ Ident(_), newFreeTerm), List(_, _, binding, Literal(Constant(flags: Long)), Literal(Constant(origin: String)))))
       if mrRef.name == nme.MIRROR_SHORT && newFreeTerm == newFreeTermMethod.name =>
-        Some(mrRef, name, binding, origin)
+        Some(mrRef, name, binding, flags, origin)
       case _ =>
         None
     }
   }
 
   object FreeTypeDef {
-    lazy val newFreeTypeMethod = getMember(getRequiredClass("scala.reflect.api.TreeBuildUtil"), nme.newFreeType)
+    lazy val newFreeExistentialMethod = getMember(getRequiredClass("scala.reflect.api.TreeBuildUtil"), nme.newFreeType)
+    lazy val newFreeTypeMethod = getMember(getRequiredClass("scala.reflect.api.TreeBuildUtil"), nme.newFreeExistential)
 
-    def unapply(tree: Tree): Option[(Tree, TermName, Tree, String)] = tree match {
-      case ValDef(_, name, _, Apply(Select(mrRef1 @ Ident(_), newFreeType), List(_, _, value, Literal(Constant(origin: String)))))
-      if mrRef1.name == nme.MIRROR_SHORT && newFreeType == newFreeTypeMethod.name =>
+    def unapply(tree: Tree): Option[(Tree, TermName, Tree, Long, String)] = tree match {
+      case ValDef(_, name, _, Apply(Select(mrRef1 @ Ident(_), newFreeType), List(_, _, value, Literal(Constant(flags: Long)), Literal(Constant(origin: String)))))
+      if mrRef1.name == nme.MIRROR_SHORT && (newFreeType == newFreeTypeMethod.name || newFreeType == newFreeExistentialMethod.name) =>
         value match {
           case Apply(TypeApply(Select(Select(mrRef2 @ Ident(_), typeTag), apply), List(binding)), List(Literal(Constant(null))))
           if mrRef2.name == nme.MIRROR_SHORT && typeTag == nme.TypeTag && apply == nme.apply =>
-            Some(mrRef1, name, binding, origin)
+            Some(mrRef1, name, binding, flags, origin)
           case Apply(TypeApply(Select(mrRef2 @ Ident(_), typeTag), List(binding)), List(Literal(Constant(null))))
           if mrRef2.name == nme.MIRROR_SHORT && typeTag == nme.TypeTag =>
-            Some(mrRef1, name, binding, origin)
+            Some(mrRef1, name, binding, flags, origin)
           case _ =>
             throw new Error("unsupported free type def: " + showRaw(tree))
         }

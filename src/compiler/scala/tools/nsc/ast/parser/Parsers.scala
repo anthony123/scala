@@ -70,6 +70,9 @@ trait ParsersCommon extends ScannersCommon {
 
     @inline final def inBracesOrNil[T](body: => List[T]): List[T] = inBracesOrError(body, Nil)
     @inline final def inBracesOrUnit[T](body: => Tree): Tree = inBracesOrError(body, Literal(Constant()))
+    @inline final def dropAnyBraces[T](body: => T): T =
+      if (in.token == LBRACE) inBraces(body)
+      else body
 
     @inline final def inBrackets[T](body: => T): T = {
       accept(LBRACKET)
@@ -314,7 +317,7 @@ self =>
      *  by compilationUnit().
      */
     def scriptBody(): Tree = {
-      val stmts = templateStatSeq(false)._2
+      val stmts = templateStats()
       accept(EOF)
 
       def mainModuleName = newTermName(settings.script.value)
@@ -1106,7 +1109,7 @@ self =>
      *  }}}
      *  @note  The returned tree does not yet have a position
      */
-    def literal(isNegated: Boolean = false): Tree = {
+    def literal(isNegated: Boolean = false, inPattern: Boolean = false): Tree = {
       def finish(value: Any): Tree = {
         val t = Literal(Constant(value))
         in.nextToken()
@@ -1115,7 +1118,7 @@ self =>
       if (in.token == SYMBOLLIT)
         Apply(scalaDot(nme.Symbol), List(finish(in.strVal)))
       else if (in.token == INTERPOLATIONID)
-        interpolatedString()
+        interpolatedString(inPattern)
       else finish(in.token match {
         case CHARLIT   => in.charVal
         case INTLIT    => in.intVal(isNegated).toInt
@@ -1141,7 +1144,7 @@ self =>
       }
     }
 
-    private def interpolatedString(): Tree = atPos(in.offset) {
+    private def interpolatedString(inPattern: Boolean = false): Tree = atPos(in.offset) {
       val start = in.offset
       val interpolator = in.name
 
@@ -1151,8 +1154,11 @@ self =>
       while (in.token == STRINGPART) {
         partsBuf += literal()
         exprBuf += {
-          if (in.token == IDENTIFIER) atPos(in.offset)(Ident(ident()))
-          else expr()
+          if (inPattern) dropAnyBraces(pattern())
+          else {
+            if (in.token == IDENTIFIER) atPos(in.offset)(Ident(ident()))
+            else expr()
+          }
         }
       }
       if (in.token == STRINGLIT) partsBuf += literal()
@@ -1456,11 +1462,12 @@ self =>
             return reduceStack(true, base, top, 0, true)
           top = next
         } else {
+          // postfix expression
           val topinfo = opstack.head
           opstack = opstack.tail
           val od = stripParens(reduceStack(true, base, topinfo.operand, 0, true))
           return atPos(od.pos.startOrPoint, topinfo.offset) {
-            Select(od, topinfo.operator.encode)
+            new PostfixSelect(od, topinfo.operator.encode)
           }
         }
       }
@@ -1772,21 +1779,7 @@ self =>
        */
       def pattern2(): Tree = {
         val nameOffset = in.offset
-        def warnIfMacro(tree: Tree): Unit = {
-          def check(name: Name): Unit = if (name.toString == nme.MACROkw.toString)
-            warning(nameOffset, "in future versions of Scala \"macro\" will be a keyword. consider using a different name.")
-          tree match {
-            case _: BackQuotedIdent =>
-              ;
-            case Ident(name) =>
-              check(name)
-            case _ =>
-              ;
-          }
-        }
-
         val p = pattern3()
-        warnIfMacro(p)
 
         if (in.token != AT) p
         else p match {
@@ -1850,7 +1843,7 @@ self =>
               case INTLIT | LONGLIT | FLOATLIT | DOUBLELIT =>
                 t match {
                   case Ident(nme.MINUS) =>
-                    return atPos(start) { literal(isNegated = true) }
+                    return atPos(start) { literal(isNegated = true, inPattern = true) }
                   case _ =>
                 }
               case _ =>
@@ -1868,7 +1861,7 @@ self =>
             atPos(start, start) { Ident(nme.WILDCARD) }
           case CHARLIT | INTLIT | LONGLIT | FLOATLIT | DOUBLELIT |
                STRINGLIT | INTERPOLATIONID | SYMBOLLIT | TRUE | FALSE | NULL =>
-            atPos(start) { literal() }
+            atPos(start) { literal(inPattern = true) }
           case LPAREN =>
             atPos(start)(makeParens(noSeq.patterns()))
           case XMLSTART =>
@@ -2462,8 +2455,6 @@ self =>
         val nameOffset = in.offset
         val isBackquoted = in.token == BACKQUOTED_IDENT
         val name = ident()
-        if (name.toString == nme.MACROkw.toString && !isBackquoted)
-          warning(nameOffset, "in future versions of Scala \"macro\" will be a keyword. consider using a different name.")
         funDefRest(start, nameOffset, mods, name)
       }
     }
@@ -2479,7 +2470,7 @@ self =>
         val vparamss = paramClauses(name, contextBoundBuf.toList, false)
         newLineOptWhenFollowedBy(LBRACE)
         var restype = fromWithinReturnType(typedOpt())
-         val rhs =
+        val rhs =
           if (isStatSep || in.token == RBRACE) {
             if (restype.isEmpty) restype = scalaUnitConstr
             newmods |= Flags.DEFERRED
@@ -2488,10 +2479,15 @@ self =>
             restype = scalaUnitConstr
             blockExpr()
           } else {
-            accept(EQUALS)
-            if (settings.Xmacros.value && in.token == MACRO) {
-              in.nextToken()
-              newmods |= Flags.MACRO
+            if (in.token == EQUALS) {
+              in.nextTokenAllow(nme.MACROkw)
+              if (settings.Xmacros.value && in.token == MACRO || // [Martin] Xmacros can be retired now
+                  in.token == IDENTIFIER && in.name == nme.MACROkw) {
+                in.nextToken()
+                newmods |= Flags.MACRO
+              }
+            } else {
+              accept(EQUALS)
             }
             expr()
           }
@@ -2554,8 +2550,6 @@ self =>
         val nameOffset = in.offset
         val isBackquoted = in.token == BACKQUOTED_IDENT
         val name = identForType()
-        if (name.toString == nme.MACROkw.toString && !isBackquoted)
-          warning(nameOffset, "in future versions of Scala \"macro\" will be a keyword. consider using a different name.")
         // @M! a type alias as well as an abstract type may declare type parameters
         val tparams = typeParamClauseOpt(name, null)
         in.token match {
@@ -2615,15 +2609,12 @@ self =>
       val nameOffset = in.offset
       val isBackquoted = in.token == BACKQUOTED_IDENT
       val name = identForType()
-      if (name.toString == nme.MACROkw.toString && !isBackquoted)
-        warning(nameOffset, "in future versions of Scala \"macro\" will be a keyword. consider using a different name.")
-
       atPos(start, if (name == tpnme.ERROR) start else nameOffset) {
         savingClassContextBounds {
           val contextBoundBuf = new ListBuffer[Tree]
           val tparams = typeParamClauseOpt(name, contextBoundBuf)
           classContextBounds = contextBoundBuf.toList
-          val tstart = in.offset :: classContextBounds.map(_.pos.startOrPoint) min;
+          val tstart = (in.offset :: classContextBounds.map(_.pos.startOrPoint)).min
           if (!classContextBounds.isEmpty && mods.isTrait) {
             syntaxError("traits cannot have type parameters with context bounds `: ...' nor view bounds `<% ...'", false)
             classContextBounds = List()
@@ -2659,8 +2650,6 @@ self =>
       val nameOffset = in.offset
       val isBackquoted = in.token == BACKQUOTED_IDENT
       val name = ident()
-      if (name.toString == nme.MACROkw.toString && !isBackquoted)
-        warning(nameOffset, "in future versions of Scala \"macro\" will be a keyword. consider using a different name.")
       val tstart = in.offset
       atPos(start, if (name == nme.ERROR) start else nameOffset) {
         val mods1 = if (in.token == SUBTYPE) mods | Flags.DEFERRED else mods
@@ -2839,24 +2828,7 @@ self =>
      */
     def packaging(start: Int): Tree = {
       val nameOffset = in.offset
-      def warnIfMacro(tree: Tree): Unit = {
-        def check(name: Name): Unit = if (name.toString == nme.MACROkw.toString)
-          warning(nameOffset, "in future versions of Scala \"macro\" will be a keyword. consider using a different name.")
-        tree match {
-          case _: BackQuotedIdent =>
-            ;
-          case Ident(name) =>
-            check(name)
-          case Select(qual, name) =>
-            warnIfMacro(qual)
-            check(name)
-          case _ =>
-            ;
-        }
-      }
-
       val pkg = pkgQualId()
-      warnIfMacro(pkg)
       val stats = inBracesOrNil(topStatSeq())
       makePackaging(start, pkg, stats)
     }
@@ -2895,6 +2867,13 @@ self =>
         acceptStatSepOpt()
       }
       stats.toList
+    }
+
+    /** Informal - for the repl and other direct parser accessors.
+     */
+    def templateStats(): List[Tree] = templateStatSeq(false)._2 match {
+      case Nil    => List(EmptyTree)
+      case stats  => stats
     }
 
     /** {{{
@@ -3059,27 +3038,8 @@ self =>
             }
           } else {
             val nameOffset = in.offset
-            def warnIfMacro(tree: Tree): Unit = {
-              def check(name: Name): Unit = if (name.toString == nme.MACROkw.toString)
-                warning(nameOffset, "in future versions of Scala \"macro\" will be a keyword. consider using a different name.")
-              tree match {
-                // [Eugene] pkgQualId never returns BackQuotedIdents
-                // this means that we'll get spurious warnings even if we wrap macro package name in backquotes
-                case _: BackQuotedIdent =>
-                  ;
-                case Ident(name) =>
-                  check(name)
-                case Select(qual, name) =>
-                  warnIfMacro(qual)
-                  check(name)
-                case _ =>
-                  ;
-              }
-            }
-
             in.flushDoc
             val pkg = pkgQualId()
-            warnIfMacro(pkg)
 
             if (in.token == EOF) {
               ts += makePackaging(start, pkg, List())

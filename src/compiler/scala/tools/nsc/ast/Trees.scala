@@ -58,6 +58,8 @@ trait Trees extends reflect.internal.Trees { self: Global =>
   case class InjectDerivedValue(arg: Tree)
        extends SymTree
 
+  class PostfixSelect(qual: Tree, name: Name) extends Select(qual, name)
+
   /** emitted by typer, eliminated by refchecks */
   case class TypeTreeWithDeferredRefCheck()(val check: () => TypeTree) extends TypTree
 
@@ -84,13 +86,12 @@ trait Trees extends reflect.internal.Trees { self: Global =>
     /* Add constructor to template */
 
     // create parameters for <init> as synthetic trees.
-    var vparamss1 =
-      vparamss map (vps => vps.map { vd =>
-        atPos(vd.pos.focus) {
-          ValDef(
-            Modifiers(vd.mods.flags & (IMPLICIT | DEFAULTPARAM | BYNAMEPARAM) | PARAM | PARAMACCESSOR) withAnnotations vd.mods.annotations,
-            vd.name, vd.tpt.duplicate, vd.rhs.duplicate)
-        }})
+    var vparamss1 = mmap(vparamss) { vd =>
+      atPos(vd.pos.focus) {
+        val mods = Modifiers(vd.mods.flags & (IMPLICIT | DEFAULTPARAM | BYNAMEPARAM) | PARAM | PARAMACCESSOR)
+        ValDef(mods withAnnotations vd.mods.annotations, vd.name, vd.tpt.duplicate, vd.rhs.duplicate)
+      }
+    }
     val (edefs, rest) = body span treeInfo.isEarlyDef
     val (evdefs, etdefs) = edefs partition treeInfo.isEarlyValDef
     val gvdefs = evdefs map {
@@ -141,11 +142,18 @@ trait Trees extends reflect.internal.Trees { self: Global =>
    *  @param body       the template statements without primary constructor
    *                    and value parameter fields.
    */
-  def ClassDef(sym: Symbol, constrMods: Modifiers, vparamss: List[List[ValDef]], argss: List[List[Tree]], body: List[Tree], superPos: Position): ClassDef =
+  def ClassDef(sym: Symbol, constrMods: Modifiers, vparamss: List[List[ValDef]], argss: List[List[Tree]], body: List[Tree], superPos: Position): ClassDef = {
+    // "if they have symbols they should be owned by `sym`"
+    assert(
+      mforall(vparamss)(p => (p.symbol eq NoSymbol) || (p.symbol.owner == sym)),
+      ((mmap(vparamss)(_.symbol), sym))
+    )
+
     ClassDef(sym,
       Template(sym.info.parents map TypeTree,
                if (sym.thisSym == sym || phase.erasedTypes) emptyValDef else ValDef(sym.thisSym),
                constrMods, vparamss, argss, body, superPos))
+  }
 
  // --- subcomponents --------------------------------------------------
 
@@ -253,6 +261,7 @@ trait Trees extends reflect.internal.Trees { self: Global =>
 
   def resetAllAttrs[A <: Tree](x: A, leaveAlone: Tree => Boolean = null): A = new ResetAttrs(false, leaveAlone).transform(x)
   def resetLocalAttrs[A <: Tree](x: A, leaveAlone: Tree => Boolean = null): A = new ResetAttrs(true, leaveAlone).transform(x)
+  def resetLocalAttrsKeepLabels[A<:Tree](x: A, leaveAlone: Tree => Boolean = null): A = new ResetAttrs(true, leaveAlone, true).transform(x)
 
   /** A transformer which resets symbol and tpe fields of all nodes in a given tree,
    *  with special treatment of:
@@ -263,7 +272,7 @@ trait Trees extends reflect.internal.Trees { self: Global =>
    *
    *  (bq:) This transformer has mutable state and should be discarded after use
    */
-  private class ResetAttrs(localOnly: Boolean, leaveAlone: Tree => Boolean = null) {
+  private class ResetAttrs(localOnly: Boolean, leaveAlone: Tree => Boolean = null, keepLabels: Boolean = false) {
     val debug = settings.debug.value
     val trace = scala.tools.nsc.util.trace when debug
 
@@ -326,18 +335,18 @@ trait Trees extends reflect.internal.Trees { self: Global =>
               case EmptyTree =>
                 tree
               case _ =>
-                if (tree.hasSymbol && (!localOnly || (locals contains tree.symbol)))
+                if (tree.hasSymbol && (!localOnly || (locals contains tree.symbol)) && !(keepLabels && tree.symbol.isLabel))
                   tree.symbol = NoSymbol
                 tree.tpe = null
                 tree
             }
           }
-        }
+      }
     }
 
     def transform[T <: Tree](x: T): T = {
       if (localOnly)
-        new MarkLocals().traverse(x)
+      new MarkLocals().traverse(x)
 
       if (localOnly && debug) {
         assert(locals.size == orderedLocals.size)
