@@ -278,9 +278,8 @@ abstract class Inliners extends SubComponent {
       }
 
       /**
-          Decides whether it's feasible and desirable to inline the body of the method given by `concreteMethod`
-          at the program point given by `i` (a callsite). The boolean result indicates whether inlining was performed.
-
+       *  Decides whether it's feasible and desirable to inline the body of the method given by `concreteMethod`
+       *  at the program point given by `i` (a callsite). The boolean result indicates whether inlining was performed.
        */
       def analyzeInc(i: CALL_METHOD, bb: BasicBlock, receiver: Symbol, stackLength: Int, concreteMethod: Symbol): Boolean = {
         var inlined = false

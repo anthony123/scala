@@ -3071,8 +3071,11 @@ abstract class GenASM extends SubComponent with BytecodeWriters {
     private def elimNonCoveringExh(m: IMethod): Boolean = {
       assert(m.hasCode, "code-less method")
 
-        def isRedundant(e: ExceptionHandler): Boolean = {
-          e.covered.isEmpty || (e.covered forall startsWithJump)
+        def isRedundant(eh: ExceptionHandler): Boolean = {
+          (eh.cls != NoSymbol) && ( // TODO `eh.isFinallyBlock` more readable than `eh.cls != NoSymbol`
+                eh.covered.isEmpty
+            || (eh.covered forall startsWithJump)
+          )
         }
 
       var wasReduced = false
@@ -3095,14 +3098,150 @@ abstract class GenASM extends SubComponent with BytecodeWriters {
       }
     }
 
+    private def directSuccStar(b: BasicBlock): List[BasicBlock] = { directSuccStar(List(b)) }
+
+    /** Transitive closure of successors potentially reachable due to normal (non-exceptional) control flow.
+       Those BBs in the argument are also included in the result */
+    private def directSuccStar(starters: Traversable[BasicBlock]): List[BasicBlock] = {
+      val result = new mutable.ListBuffer[BasicBlock]
+      var toVisit: List[BasicBlock] = starters.toList.distinct
+      while(toVisit.nonEmpty) {
+        val h   = toVisit.head
+        toVisit = toVisit.tail
+        result += h
+        for(p <- h.directSuccessors; if !result.contains(p) && !toVisit.contains(p)) { toVisit = p :: toVisit }
+      }
+      result.toList
+    }
+
+    /** Returns:
+     *  for single-block self-loops, the pair (start, Nil)
+     *  for other cycles,            the pair (backedge-target, basic-blocks-in-the-cycle-except-backedge-target)
+     *  otherwise a pair consisting of:
+     *    (a) the endpoint of a (single or multi-hop) chain of JUMPs
+     *        (such endpoint does not start with a JUMP and therefore is not part of the chain); and
+     *    (b) the chain (ie blocks to be removed when collapsing the chain of jumps).
+     *  Precondition: the BasicBlock given as argument starts with an unconditional JUMP.
+     */
+    private def finalDestination(start: BasicBlock): (BasicBlock, List[BasicBlock]) = {
+      assert(startsWithJump(start), "not the start of a (single or multi-hop) chain of JUMPs.")
+      var hops: List[BasicBlock] = Nil
+      var prev = start
+      var done = false
+      do {
+        done = isJumpOnly(prev) match {
+          case Some(dest) =>
+            if (dest == start) { return (start, hops) } // leave infinite-loops in place
+            hops ::= prev
+            if (hops.contains(dest)) {
+              // leave infinite-loops in place
+              return (dest, hops filterNot (dest eq))
+            }
+            prev = dest;
+            false
+          case None => true
+        }
+      } while(!done)
+
+      (prev, hops)
+    }
+
+    /** Starting at each of the entry points (m.startBlock, the start block of each exception handler)
+     *  rephrase those control-flow instructions targeting a jump-only block (which jumps to a final destination D) to target D.
+     *  The blocks thus skipped over aren't removed from IMethod.blocks.
+     *  Returns true if any replacement was made, false otherwise. */
+    private def collapseJumpOnlyBlocks(m: IMethod): Boolean = {
+      assert(m.hasCode, "code-less method")
+
+          /* "start" is relative in a cycle, but we call this helper with the "first" entry-point we found. */
+          def realTarget(jumpStart: BasicBlock): Map[BasicBlock, BasicBlock] = {
+            assert(startsWithJump(jumpStart), "not part of a jump-chain")
+            val Pair(dest, redundants) = finalDestination(jumpStart)
+            (for(skipOver <- redundants) yield Pair(skipOver, dest)).toMap
+          }
+
+          def rephraseGotos(detour: Map[BasicBlock, BasicBlock]) {
+            for(Pair(oldTarget, newTarget) <- detour.iterator) {
+              if(m.startBlock == oldTarget) {
+                m.code.startBlock = newTarget
+              }
+              for(eh <- m.exh; if eh.startBlock == oldTarget) {
+                eh.setStartBlock(newTarget)
+              }
+              for(b <- m.blocks; if !detour.isDefinedAt(b)) {
+                val idxLast = (b.size - 1)
+                b.lastInstruction match {
+                  case JUMP(whereto) =>
+                    if (whereto == oldTarget) {
+                      b.replaceInstruction(idxLast, JUMP(newTarget))
+                    }
+                  case CJUMP(succ, fail, cond, kind) =>
+                    if ((succ == oldTarget) || (fail == oldTarget)) {
+                      b.replaceInstruction(idxLast, CJUMP(detour.getOrElse(succ, succ),
+                                                          detour.getOrElse(fail, fail),
+                                                          cond, kind))
+                    }
+                  case CZJUMP(succ, fail, cond, kind) =>
+                    if ((succ == oldTarget) || (fail == oldTarget)) {
+                      b.replaceInstruction(idxLast, CZJUMP(detour.getOrElse(succ, succ),
+                                                           detour.getOrElse(fail, fail),
+                                                           cond, kind))
+                    }
+                  case SWITCH(tags, labels) =>
+                    if(labels exists (detour.isDefinedAt(_))) {
+                      val newLabels = (labels map { lab => detour.getOrElse(lab, lab) })
+                      b.replaceInstruction(idxLast, SWITCH(tags, newLabels))
+                    }
+                  case _ => ()
+                }
+              }
+            }
+          }
+
+          /* remove from all containers that may contain a reference to */
+          def elide(redu: BasicBlock) {
+            assert(m.startBlock != redu, "startBlock should have been re-wired by now")
+            m.code.removeBlock(redu);
+          }
+
+      var wasReduced = false
+      val entryPoints: List[BasicBlock] = m.startBlock :: (m.exh map (_.startBlock));
+
+      var elided     = mutable.Set.empty[BasicBlock] // debug
+      var newTargets = mutable.Set.empty[BasicBlock] // debug
+
+      for (ep <- entryPoints) {
+        var reachable = directSuccStar(ep) // this list may contain blocks belonging to jump-chains that we'll skip over
+        while(reachable.nonEmpty) {
+          val h = reachable.head
+          reachable = reachable.tail
+          if(startsWithJump(h)) {
+            val detour = realTarget(h)
+            if(detour.nonEmpty) {
+              wasReduced = true
+              reachable = (reachable filterNot (detour.keySet.contains(_)))
+              rephraseGotos(detour)
+              detour.keySet foreach elide
+              elided     ++= detour.keySet
+              newTargets ++= detour.values
+            }
+          }
+        }
+      }
+      assert(newTargets.intersect(elided).isEmpty, "contradiction: we just elided the final destionation of a jump-chain")
+
+      wasReduced
+    }
+
     def normalize(m: IMethod) {
       if(!m.hasCode) { return }
+      collapseJumpOnlyBlocks(m)
       var wasReduced = false;
       do {
         wasReduced = false
-        // Step 1: prune from an exception handler those covered blocks which are jump-only.
-        wasReduced |= coverWhatCountsOnly(m); icodes.checkValid(m)
-        // Step 2: prune exception handlers covering nothing.
+        // Prune from an exception handler those covered blocks which are jump-only.
+        wasReduced |= coverWhatCountsOnly(m); icodes.checkValid(m) // TODO should be unnecessary now that collapseJumpOnlyBlocks(m) is in place
+        // Prune exception handlers covering nothing.
         wasReduced |= elimNonCoveringExh(m);  icodes.checkValid(m)
         // Step 3: collapse chains of JUMP-only blocks
         // wasReduced |= collapseJumpChains(m); icodes.checkValid(m)
@@ -3120,47 +3259,6 @@ abstract class GenASM extends SubComponent with BytecodeWriters {
 /*
 
   object forFutureUse {
-
-    private def directSuccStar(b: BasicBlock): Set[BasicBlock] = { directSuccStar(List(b)) }
-
-    /** Transitive closure of successors potentially reachable due to normal (non-exceptional) control flow.
-       Those BBs in the argument are also included in the result */
-    private def directSuccStar(starters: Traversable[BasicBlock]): Set[BasicBlock] = {
-      val result = mutable.Set.empty[BasicBlock]
-      var toVisit: List[BasicBlock] = starters.toList.distinct
-      while(toVisit.nonEmpty) {
-        val h   = toVisit.head
-        toVisit = toVisit.tail
-        result += h
-        for(p <- h.directSuccessors; if !result(p) && !toVisit.contains(p)) { toVisit = p :: toVisit }
-      }
-      result.toSet
-    }
-
-    /** Returns:
-     *    (a) the endpoint of a (single or multi-hop) chain of JUMPs; and
-     *    (b) all but the last basic blocks in such chain (ie blocks to be removed when collapsing the chain of jumps).
-     *  In particular for self-loops, whose endpoint is the method's argument.
-     *  Precondition: the BasicBlock given as argument starts with an unconditional JUMP.
-     */
-    private def finalDestination(start: BasicBlock): (BasicBlock, List[BasicBlock]) = {
-      assert(startsWithJump(start), "not the start of a (single or multi-hop) chain of JUMPs.")
-      var hops: List[BasicBlock] = Nil
-      var prev = start
-      var done = false
-      do {
-        done = isJumpOnly(prev) match {
-          case Some(dest) =>
-            if (dest == start) { return (start, hops) } // leave infinite-loops in place
-            hops ::= prev
-            prev = dest;
-            false
-          case None => true
-        }
-      } while(!done)
-
-      (prev, hops)
-    }
 
     def mayJump(from: BasicBlock, to: BasicBlock): Boolean = {
       from.lastInstruction match {
