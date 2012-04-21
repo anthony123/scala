@@ -1990,17 +1990,6 @@ abstract class GenASM extends SubComponent with BytecodeWriters {
 
       var isModuleInitialized = false
 
-      /* TODO test/files/run/private-inline.scala after -optimize is chock full of
-       * BasicBlocks containing just JUMP(whereTo), where no exception handler straddles them.
-       * They should be collapsed by IMethod.normalize() but aren't.
-       * That was fine in FJBG times when by the time the exception table was emitted,
-       * it already contained "anchored" labels (ie instruction offsets were known)
-       * and thus ranges with identical (start, end) (i.e, identical after GenJVM omitted the JUMPs in question)
-       * could be weeded out to avoid "java.lang.ClassFormatError: Illegal exception table range"
-       * Now that visitTryCatchBlock() must be called before Labels are resolved,
-       * it would be great to have gotten rid of the BasicBlocks described above (to recap, consisting of just a JUMP).
-       */
-
       val labels: collection.Map[BasicBlock, asm.Label] = mutable.HashMap(linearization map (_ -> new asm.Label()) : _*)
 
       val onePastLast = new asm.Label // token for the mythical instruction past the last instruction in the method being emitted
@@ -2095,7 +2084,7 @@ abstract class GenASM extends SubComponent with BytecodeWriters {
            */
           for (e <- this.method.exh) {
             val ignore: Set[BasicBlock] = (e.covered filterNot { b => linearization contains b } )
-            // TODO someday assert(ignore.isEmpty, ignore)
+            // TODO someday assert(ignore.isEmpty, "an ExceptionHandler.covered contains blocks not in the linearization (dead-code?)")
             if(ignore.nonEmpty) {
               e.covered  = e.covered filterNot ignore
             }
@@ -3082,7 +3071,7 @@ abstract class GenASM extends SubComponent with BytecodeWriters {
       val toPrune = (m.exh.toSet filter isRedundant)
       if(toPrune.nonEmpty) {
         wasReduced = true
-        for(h <- toPrune; r <- h.blocks) { m.code.removeBlock(r) }
+        for(h <- toPrune; r <- h.blocks) { m.code.removeBlock(r) } // TODO m.code.removeExh(h)
         m.exh = (m.exh filterNot toPrune)
       }
 
@@ -3148,8 +3137,20 @@ abstract class GenASM extends SubComponent with BytecodeWriters {
 
     /** Starting at each of the entry points (m.startBlock, the start block of each exception handler)
      *  rephrase those control-flow instructions targeting a jump-only block (which jumps to a final destination D) to target D.
-     *  The blocks thus skipped over aren't removed from IMethod.blocks.
-     *  Returns true if any replacement was made, false otherwise. */
+     *  The blocks thus skipped are also removed from IMethod.blocks.
+     *  Returns true if any replacement was made, false otherwise.
+     *
+     *  Rationale for this normalization:
+     *    test/files/run/private-inline.scala after -optimize is chock full of
+     *    BasicBlocks containing just JUMP(whereTo), where no exception handler straddles them.
+     *    They should be collapsed by IMethod.normalize() but aren't.
+     *    That was fine in FJBG times when by the time the exception table was emitted,
+     *    it already contained "anchored" labels (ie instruction offsets were known)
+     *    and thus ranges with identical (start, end) (i.e, identical after GenJVM omitted the JUMPs in question)
+     *    could be weeded out to avoid "java.lang.ClassFormatError: Illegal exception table range"
+     *    Now that visitTryCatchBlock() must be called before Labels are resolved,
+     *    this method gets rid of the BasicBlocks described above (to recap, consisting of just a JUMP).
+     */
     private def collapseJumpOnlyBlocks(m: IMethod): Boolean = {
       assert(m.hasCode, "code-less method")
 
@@ -3243,11 +3244,9 @@ abstract class GenASM extends SubComponent with BytecodeWriters {
         wasReduced |= coverWhatCountsOnly(m); icodes.checkValid(m) // TODO should be unnecessary now that collapseJumpOnlyBlocks(m) is in place
         // Prune exception handlers covering nothing.
         wasReduced |= elimNonCoveringExh(m);  icodes.checkValid(m)
-        // Step 3: collapse chains of JUMP-only blocks
-        // wasReduced |= collapseJumpChains(m); icodes.checkValid(m)
 
         // TODO this would be a good time to remove synthetic local vars seeing no use.
-        // TODO see note in genExceptionHandlers about an ExceptionHandler.covered containing dead blocks (does newNormal solve that?)
+        // TODO see note in genExceptionHandlers about an ExceptionHandler.covered containing dead blocks (newNormal should solve that, better yet, why do those blocks end up there?)
       } while (wasReduced)
     }
 
