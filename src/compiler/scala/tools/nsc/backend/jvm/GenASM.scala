@@ -1190,6 +1190,7 @@ abstract class GenASM extends SubComponent with BytecodeWriters {
 
       val moduleName = javaName(clasz.symbol)+"$"
 
+      // GETSTATIC `moduleName`.MODULE$ : `moduleName`;
       clinit.visitFieldInsn(
         asm.Opcodes.GETSTATIC,
         moduleName,
@@ -1197,6 +1198,7 @@ abstract class GenASM extends SubComponent with BytecodeWriters {
         asm.Type.getObjectType(moduleName).getDescriptor
       )
 
+      // INVOKEVIRTUAL `moduleName`.CREATOR() : android.os.Parcelable$Creator;
       clinit.visitMethodInsn(
         asm.Opcodes.INVOKEVIRTUAL,
         moduleName,
@@ -1204,6 +1206,7 @@ abstract class GenASM extends SubComponent with BytecodeWriters {
         asm.Type.getMethodDescriptor(creatorType, Array.empty[asm.Type]: _*)
       )
 
+      // PUTSTATIC `thisName`.CREATOR;
       clinit.visitFieldInsn(
         asm.Opcodes.PUTSTATIC,
         thisName,
@@ -3135,10 +3138,22 @@ abstract class GenASM extends SubComponent with BytecodeWriters {
       (prev, hops)
     }
 
-    /** Starting at each of the entry points (m.startBlock, the start block of each exception handler)
-     *  rephrase those control-flow instructions targeting a jump-only block (which jumps to a final destination D) to target D.
-     *  The blocks thus skipped are also removed from IMethod.blocks.
+    /**
+     * Collapse a chain of "jump-only" blocks such as:
+     *
+     *      JUMP b1;
+     *  b1: JUMP b2;
+     *  b2: JUMP ... etc.
+     *
+     *  by re-wiring predecessors to target directly the "final destination".
+     *  Even if covered by an exception handler, a "non-self-loop jump-only block" can always be removed.
+
      *  Returns true if any replacement was made, false otherwise.
+     *
+     *  In more detail:
+     *    Starting at each of the entry points (m.startBlock, the start block of each exception handler)
+     *    rephrase those control-flow instructions targeting a jump-only block (which jumps to a final destination D) to target D.
+     *    The blocks thus skipped are also removed from IMethod.blocks.
      *
      *  Rationale for this normalization:
      *    test/files/run/private-inline.scala after -optimize is chock full of
@@ -3245,62 +3260,12 @@ abstract class GenASM extends SubComponent with BytecodeWriters {
         // Prune exception handlers covering nothing.
         wasReduced |= elimNonCoveringExh(m);  icodes.checkValid(m)
 
-        // TODO this would be a good time to remove synthetic local vars seeing no use.
-        // TODO see note in genExceptionHandlers about an ExceptionHandler.covered containing dead blocks (newNormal should solve that, better yet, why do those blocks end up there?)
+        // TODO see note in genExceptionHandlers about an ExceptionHandler.covered containing dead blocks (newNormal should remove them, but, where do those blocks come from?)
       } while (wasReduced)
+
+      // TODO this would be a good time to remove synthetic local vars seeing no use, don't forget to call computeLocalVarsIndex() afterwards.
     }
 
   }
-
 
 }
-
-/*
-
-  object forFutureUse {
-
-    def mayJump(from: BasicBlock, to: BasicBlock): Boolean = {
-      from.lastInstruction match {
-        case JUMP(whereto)            => (whereto == to)
-        case CJUMP(succ, fail, _, _)  => (succ == to) || (fail == to)
-        case CZJUMP(succ, fail, _, _) => (succ == to) || (fail == to)
-        case SWITCH(_, labels)        => labels contains to
-        case _                        => false
-      }
-    }
-
-    def endsWithCtrlFlowInstr(b: BasicBlock): Boolean = {
-      b.lastInstruction match {
-        case JUMP(whereto)              => true
-        case CJUMP(succ, fail, _, _)    => true
-        case CZJUMP(succ, fail, _, _)   => true
-        case SWITCH(_, labels)          => true
-        case RETURN(_)                  => true
-        case THROW(_)                   => true
-        case _ => false
-      }
-    }
-
-    /** Collapse a chain of "jump-only" blocks such as:
-     *      JUMP b1;
-     *  b1: JUMP b2;
-     *  b2: JUMP ... etc.
-     *
-     *  by re-wiring predecessors to target directly the "final destination".
-     *  Even if covered by an exception handler, a "non-self-loop jump-only block" can always be removed.
-     *  Returns true iff one or more such chains were collapsed.
-     */
-    private def collapseJumpChains(m: IMethod): Boolean = {
-      assert(m.hasCode, "code-less method")
-      // TODO handle case where m.startBlock is removed (ie don't forget to set new m.startBlock, similarly for an ExceptionHandler)
-      // TODO pick just one of the candidates, rewire only for it.
-      // TODO re-wire each jumping predecessor to target "whereto" instead
-
-      false
-    }
-
-  }
-
-
-*/
-
