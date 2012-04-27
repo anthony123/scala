@@ -1282,15 +1282,6 @@ BOOTSTRAPPING BUILD (STRAP)
       destdir="${build-strap.dir}/classes/library"
       compilerpathref="pack.classpath"
       params="${scalac.args.quick}"
-      srcdir="${src.dir}/dbc"
-      jvmargs="${scalacfork.jvmargs}">
-      <include name="**/*.scala"/>
-      <compilationpath refid="strap.compilation.path"/>
-    </scalacfork>
-    <scalacfork
-      destdir="${build-strap.dir}/classes/library"
-      compilerpathref="pack.classpath"
-      params="${scalac.args.quick}"
       srcdir="${src.dir}/swing"
       jvmargs="${scalacfork.jvmargs}">
       <include name="**/*.scala"/>
@@ -2393,3 +2384,4 @@ MISCELLANEOUS
     <vizant antfile="${ant.file}" outfile="${ant.project.name}.dot"/>
   </target>
 </project>
+
