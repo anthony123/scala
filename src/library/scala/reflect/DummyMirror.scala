@@ -5,9 +5,10 @@ import scala.reflect.api.Attachment
 import scala.reflect.api.Modifier
 import scala.reflect.api.Universe
 
+// todo. make Dummy objects not equal to themselves
 class DummyMirror(cl: ClassLoader) extends api.Mirror {
   // Members declared in scala.reflect.api.AnnotationInfos
-  implicit def classfileAnnotArgManifest: scala.reflect.ClassManifest[ClassfileAnnotArg] = notSupported()
+  implicit def classfileAnnotArgTag: scala.reflect.ClassTag[ClassfileAnnotArg] = notSupported()
   type AnnotationInfo = DummyAnnotationInfo.type
   object DummyAnnotationInfo
   val AnnotationInfo: AnnotationInfoExtractor = DummyAnnotationInfoExtractor
@@ -161,8 +162,8 @@ class DummyMirror(cl: ClassLoader) extends api.Mirror {
   def wrappingPos(trees: List[Tree]): Position = notSupported()
   def wrappingPos(default: Position,trees: List[Tree]): Position = notSupported()
 
-  // Members declared in scala.reflect.api.Reporters
-  def mkConsoleReporter(minSeverity: Int): Reporter = notSupported()
+  // Members declared in scala.reflect.api.FrontEnds
+  def mkConsoleFrontEnd(minSeverity: Int): FrontEnd = notSupported()
 
   // Members declared in scala.reflect.api.Scopes
   type Scope = DummyScope.type
@@ -192,70 +193,70 @@ class DummyMirror(cl: ClassLoader) extends api.Mirror {
   val UnitTpe: Type = DummyType
   val definitions: AbsDefinitions = DummyDefinitions
   object DummyDefinitions extends AbsDefinitions {
-    def AnyClass: Symbol = DummySymbol
-    def AnyRefClass: Symbol = DummySymbol
-    def AnyValClass: Symbol = DummySymbol
-    def ArrayClass: Symbol = DummySymbol
-    def ArrayModule: Symbol = DummySymbol
-    def ArrayModule_overloadedApply: Symbol = DummySymbol
-    def Array_apply: Symbol = DummySymbol
-    def Array_clone: Symbol = DummySymbol
-    def Array_length: Symbol = DummySymbol
-    def Array_update: Symbol = DummySymbol
-    def BooleanClass: Symbol = DummySymbol
-    def ByNameParamClass: Symbol = DummySymbol
-    def ByteClass: Symbol = DummySymbol
-    def CharClass: Symbol = DummySymbol
-    def ClassClass: Symbol = DummySymbol
-    def ClassTagClass: Symbol = DummySymbol
-    def ClassTagModule: Symbol = DummySymbol
-    def ConcreteTypeTagClass: Symbol = DummySymbol
-    def ConcreteTypeTagModule: Symbol = DummySymbol
-    def ConsClass: Symbol = DummySymbol
-    def DoubleClass: Symbol = DummySymbol
-    def EmptyPackage: Symbol = DummySymbol
-    def EmptyPackageClass: Symbol = DummySymbol
-    def FloatClass: Symbol = DummySymbol
+    def ByNameParamClass = DummySymbol
+    def JavaRepeatedParamClass = DummySymbol
+    def RepeatedParamClass = DummySymbol
+    def AnyClass = DummyClassSymbol
+    def AnyRefClass = DummyTypeSymbol
+    def AnyValClass = DummyClassSymbol
+    def ArrayClass = DummyClassSymbol
+    def ArrayModule = DummySymbol
+    def ArrayModule_overloadedApply = DummySymbol
+    def Array_apply = DummySymbol
+    def Array_clone = DummySymbol
+    def Array_length = DummySymbol
+    def Array_update = DummySymbol
+    def BooleanClass = DummyClassSymbol
+    def ByteClass = DummyClassSymbol
+    def CharClass = DummyClassSymbol
+    def ClassClass = DummyClassSymbol
+    def ClassTagClass = DummyClassSymbol
+    def ClassTagModule = DummySymbol
+    def ConcreteTypeTagClass = DummyClassSymbol
+    def ConcreteTypeTagModule = DummySymbol
+    def ConsClass = DummySymbol
+    def DoubleClass = DummyClassSymbol
+    def EmptyPackage = DummyPackageSymbol
+    def EmptyPackageClass = DummySymbol
+    def FloatClass = DummyClassSymbol
     def FunctionClass: Array[Symbol] = Array()
-    def IntClass: Symbol = DummySymbol
-    def IterableClass: Symbol = DummySymbol
-    def IteratorClass: Symbol = DummySymbol
-    def IteratorModule: Symbol = DummySymbol
-    def Iterator_apply: Symbol = DummySymbol
-    def JavaLangPackage: Symbol = DummySymbol
-    def JavaLangPackageClass: Symbol = DummySymbol
-    def JavaRepeatedParamClass: Symbol = DummySymbol
-    def ListClass: Symbol = DummySymbol
-    def ListModule: Symbol = DummySymbol
-    def List_apply: Symbol = DummySymbol
-    def LongClass: Symbol = DummySymbol
-    def NilModule: Symbol = DummySymbol
-    def NoneModule: Symbol = DummySymbol
-    def NothingClass: Symbol = DummySymbol
-    def NullClass: Symbol = DummySymbol
-    def ObjectClass: Symbol = DummySymbol
-    def OptionClass: Symbol = DummySymbol
-    def PredefModule: Symbol = DummySymbol
+    def IntClass = DummyClassSymbol
+    def IterableClass = DummySymbol
+    def IteratorClass = DummySymbol
+    def IteratorModule = DummySymbol
+    def Iterator_apply = DummySymbol
+    def JavaLangPackage = DummyPackageSymbol
+    def JavaLangPackageClass = DummySymbol
+    def ListClass = DummyClassSymbol
+    def ListModule = DummyModuleSymbol
+    def List_apply = DummySymbol
+    def LongClass = DummyClassSymbol
+    def NilModule = DummySymbol
+    def NoneModule = DummySymbol
+    def NothingClass = DummyClassSymbol
+    def NullClass = DummyClassSymbol
+    def ObjectClass = DummyClassSymbol
+    def OptionClass = DummySymbol
+    def PredefModule = DummyModuleSymbol
     def ProductClass: Array[Symbol] = Array()
-    def RepeatedParamClass: Symbol = DummySymbol
-    def RootClass: Symbol = DummySymbol
-    def RootPackage: Symbol = DummySymbol
-    def ScalaPackage: Symbol = DummySymbol
-    def ScalaPackageClass: Symbol = DummySymbol
-    def ScalaPrimitiveValueClasses: List[Symbol] = List()
-    def SeqClass: Symbol = DummySymbol
-    def SeqModule: Symbol = DummySymbol
-    def ShortClass: Symbol = DummySymbol
-    def SomeClass: Symbol = DummySymbol
-    def SomeModule: Symbol = DummySymbol
-    def StringBuilderClass: Symbol = DummySymbol
-    def StringClass: Symbol = DummySymbol
-    def SymbolClass: Symbol = DummySymbol
-    def TraversableClass: Symbol = DummySymbol
+    def RootClass = DummyClassSymbol
+    def RootPackage = DummyPackageSymbol
+    def ScalaPackage = DummyPackageSymbol
+    def ScalaPackageClass = DummySymbol
+    def ScalaPrimitiveValueClasses = Nil
+    def SeqClass = DummySymbol
+    def SeqModule = DummySymbol
+    def ShortClass = DummyClassSymbol
+    def SomeClass = DummySymbol
+    def SomeModule = DummySymbol
+    def StringBuilderClass = DummySymbol
+    def StringClass = DummyClassSymbol
+    def SymbolClass = DummySymbol
+    def TraversableClass = DummySymbol
     def TupleClass: Array[Symbol] = Array()
-    def TypeTagClass: Symbol = DummySymbol
-    def TypeTagModule: Symbol = DummySymbol
-    def UnitClass: Symbol = DummySymbol
+    def TypeTagClass = DummyClassSymbol
+    def TypeTagModule = DummySymbol
+    def UnitClass = DummyClassSymbol
     def isNumericValueClass(sym: Symbol): Boolean = notSupported()
     def isPrimitiveValueClass(sym: Symbol): Boolean = notSupported()
     def vmClassType(arg: Type): Type = DummyType
@@ -382,10 +383,6 @@ class DummyMirror(cl: ClassLoader) extends api.Mirror {
     def setterToGetter(name: TermName): TermName = notSupported()
     def defaultGetterName(name: Name, pos: Int): TermName = notSupported()
     def defaultGetterToMethod(name: Name): TermName = notSupported()
-    def dropSingletonName(name: Name): TypeName = notSupported()
-    def singletonName(name: Name): TypeName = notSupported()
-    def implClassName(name: Name): TypeName = notSupported()
-    def interfaceName(implname: Name): TypeName = notSupported()
     def localDummyName(clazz: Symbol): TermName = notSupported()
     def superName(name: Name): TermName = notSupported()
   }
@@ -411,12 +408,30 @@ class DummyMirror(cl: ClassLoader) extends api.Mirror {
     val LOCAL_CHILD: TypeName = DummyName
     val REPEATED_PARAM_CLASS_NAME: TypeName = DummyName
     val WILDCARD_STAR: TypeName = DummyName
+
+    def dropSingletonName(name: Name): TypeName = notSupported()
+    def singletonName(name: Name): TypeName = notSupported()
+    def implClassName(name: Name): TypeName = notSupported()
+    def interfaceName(implname: Name): TypeName = notSupported()
   }
 
   // Members declared in scala.reflect.api.Symbols
-  type Symbol = DummySymbol.type
-  val NoSymbol: Symbol = DummySymbol
-  object DummySymbol extends AbsSymbol {
+  val NoSymbol = DummySymbol
+  type Symbol = DummySymbolApi
+  object DummySymbol extends DummySymbolApi
+  type TypeSymbol = DummyTypeSymbolApi
+  object DummyTypeSymbol extends DummyTypeSymbolApi
+  type TermSymbol = DummyTermSymbolApi
+  object DummyTermSymbol extends DummyTermSymbolApi
+  type MethodSymbol = DummyMethodSymbolApi
+  object DummyMethodSymbol extends DummyMethodSymbolApi
+  type ModuleSymbol = DummyModuleSymbolApi
+  object DummyModuleSymbol extends DummyModuleSymbolApi
+  type PackageSymbol = DummyPackageSymbolApi
+  object DummyPackageSymbol extends DummyPackageSymbolApi
+  type ClassSymbol = DummyClassSymbolApi
+  object DummyClassSymbol extends DummyClassSymbolApi
+  trait DummySymbolApi extends AbsSymbol {
     this: Symbol =>
 
     def pos: Position = notSupported()
@@ -429,6 +444,8 @@ class DummyMirror(cl: ClassLoader) extends api.Mirror {
     def fullName: String = notSupported()
     def id: Int = notSupported()
     def orElse[T](alt: => Symbol): Symbol = notSupported()
+    def filter(cond: Symbol => Boolean): Symbol = notSupported()
+    def suchThat(cond: Symbol => Boolean): Symbol = notSupported()
     def privateWithin: Symbol = notSupported()
     def companionSymbol: Symbol = notSupported()
     def moduleClass: Symbol = notSupported()
@@ -469,33 +486,52 @@ class DummyMirror(cl: ClassLoader) extends api.Mirror {
     def setAnnotations(annots: AnnotationInfo*): this.type = notSupported()
     def kind: String = notSupported()
   }
+  trait DummyTypeSymbolApi extends DummySymbolApi with TypeSymbolApi {
+    this: TypeSymbol =>
+  }
+  trait DummyTermSymbolApi extends DummySymbolApi with TermSymbolApi {
+    this: TermSymbol =>
+  }
+  trait DummyMethodSymbolApi extends DummyTermSymbolApi with MethodSymbolApi {
+    this: MethodSymbol =>
+  }
+  trait DummyModuleSymbolApi extends DummyTermSymbolApi with ModuleSymbolApi {
+    this: ModuleSymbol =>
+  }
+  trait DummyPackageSymbolApi extends DummyModuleSymbolApi with PackageSymbolApi {
+    this: PackageSymbol =>
+  }
+  trait DummyClassSymbolApi extends DummyTypeSymbolApi with ClassSymbolApi {
+    this: ClassSymbol =>
+  }
 
   // Members declared in scala.reflect.api.ToolBoxes
-  def mkToolBox(reporter: Reporter,options: String): AbsToolBox = notSupported()
+  def mkToolBox(frontEnd: FrontEnd, options: String): AbsToolBox = notSupported()
 
   // Members declared in scala.reflect.api.TreeBuildUtil
   // type TreeGen = DummyTreeGen.type // [Eugene] cannot compile if uncomment this
   val gen: TreeGen{val global: DummyMirror.this.type} = DummyTreeGen.asInstanceOf[TreeGen{val global: DummyMirror.this.type}]
   def modifiersFromInternalFlags(flags: Long,privateWithin: Name,annotations: List[Tree]): Modifiers = DummyModifiers
-  def newFreeExistential(name: String,info: Type,value: => Any,flags: Long,origin: String): Symbol = DummySymbol
-  def newFreeTerm(name: String,info: Type,value: => Any,flags: Long,origin: String): Symbol = DummySymbol
-  def newFreeType(name: String,info: Type,value: => Any,flags: Long,origin: String): Symbol = DummySymbol
-  def selectOverloadedMethod(owner: Symbol,name: String,index: Int): Symbol = DummySymbol
-  def selectOverloadedMethodIfDefined(owner: Symbol,name: String,index: Int): Symbol = DummySymbol
-  def selectTerm(owner: Symbol,name: String): Symbol = DummySymbol
-  def selectTermIfDefined(owner: Symbol,name: String): Symbol = DummySymbol
-  def selectType(owner: Symbol,name: String): Symbol = DummySymbol
-  def selectTypeIfDefined(owner: Symbol,name: String): Symbol = DummySymbol
-  def staticClass(fullName: String): Symbol = DummySymbol
-  def staticClassIfDefined(fullName: String): Symbol = DummySymbol
-  def staticModule(fullName: String): Symbol = DummySymbol
-  def staticModuleIfDefined(fullName: String): Symbol = DummySymbol
+  def newFreeExistential(name: String,info: Type,value: => Any,flags: Long,origin: String) = DummySymbol
+  def newFreeTerm(name: String,info: Type,value: => Any,flags: Long,origin: String) = DummySymbol
+  def newFreeType(name: String,info: Type,value: => Any,flags: Long,origin: String) = DummySymbol
+  def selectOverloadedMethod(owner: Symbol,name: String,index: Int) = DummySymbol
+  def selectOverloadedMethodIfDefined(owner: Symbol,name: String,index: Int) = DummySymbol
+  def selectTerm(owner: Symbol,name: String) = DummySymbol
+  def selectTermIfDefined(owner: Symbol,name: String) = DummySymbol
+  def selectType(owner: Symbol,name: String) = DummySymbol
+  def selectTypeIfDefined(owner: Symbol,name: String) = DummySymbol
+  def staticClass(fullName: String) = DummySymbol
+  def staticClassIfDefined(fullName: String) = DummySymbol
+  def staticModule(fullName: String) = DummySymbol
+  def staticModuleIfDefined(fullName: String) = DummySymbol
   def thisModuleType(fullName: String): Type = DummyType
   object DummyTreeGen extends AbsTreeGen {
     val global: Universe = DummyMirror.this
     type TreeGenTree = global.Tree
     type TreeGenType = global.Type
     type TreeGenSymbol = global.Symbol
+    type TreeGenName = global.Name
     def mkAttributedQualifier(tpe: TreeGenType): TreeGenTree = notSupported()
     def mkAttributedQualifier(tpe: TreeGenType, termSym: TreeGenSymbol): TreeGenTree = notSupported()
     def mkAttributedRef(pre: TreeGenType, sym: TreeGenSymbol): TreeGenTree = notSupported()
@@ -503,6 +539,14 @@ class DummyMirror(cl: ClassLoader) extends api.Mirror {
     def mkAttributedThis(sym: TreeGenSymbol): TreeGenTree = notSupported()
     def mkAttributedIdent(sym: TreeGenSymbol): TreeGenTree = notSupported()
     def mkAttributedSelect(qual: TreeGenTree, sym: TreeGenSymbol): TreeGenTree = notSupported()
+    def mkMethodCall(target: TreeGenTree,targs: List[TreeGenType],args: List[TreeGenTree]): TreeGenTree = notSupported()
+    def mkMethodCall(receiver: TreeGenTree,method: TreeGenSymbol,targs: List[TreeGenType],args: List[TreeGenTree]): TreeGenTree = notSupported()
+    def mkMethodCall(receiver: TreeGenSymbol,methodName: TreeGenName,args: List[TreeGenTree]): TreeGenTree = notSupported()
+    def mkMethodCall(target: TreeGenTree,args: List[TreeGenTree]): TreeGenTree = notSupported()
+    def mkMethodCall(method: TreeGenSymbol,args: List[TreeGenTree]): TreeGenTree = notSupported()
+    def mkMethodCall(method: TreeGenSymbol,targs: List[TreeGenType],args: List[TreeGenTree]): TreeGenTree = notSupported()
+    def mkMethodCall(receiver: TreeGenSymbol,methodName: TreeGenName,targs: List[TreeGenType],args: List[TreeGenTree]): TreeGenTree = notSupported()
+    def mkNullaryCall(method: TreeGenSymbol,targs: List[TreeGenType]): TreeGenTree = notSupported()
   }
 
   // Members declared in scala.reflect.api.TreePrinters

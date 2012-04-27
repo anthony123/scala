@@ -11,7 +11,7 @@ import compat.Platform.currentTime
 import scala.tools.util.{ Profiling, PathResolver }
 import scala.collection.{ mutable, immutable }
 import io.{ SourceReader, AbstractFile, Path }
-import reporters.{ Reporter => NscReporter, ConsoleReporter }
+import reporters.{ Reporter, ConsoleReporter }
 import util.{ NoPosition, Exceptional, ClassPath, SourceFile, NoSourceFile, Statistics, StatisticsInfo, BatchSourceFile, ScriptSourceFile, ShowPickled, ScalaClassLoader, returning }
 import scala.reflect.internal.pickling.{ PickleBuffer, PickleFormat }
 import settings.{ AestheticSettings }
@@ -31,17 +31,17 @@ import backend.icode.analysis._
 import language.postfixOps
 import reflect.internal.StdAttachments
 
-class Global(var currentSettings: Settings, var reporter: NscReporter) extends SymbolTable
-                                                                          with ClassLoaders
-                                                                          with ToolBoxes
-                                                                          with CompilationUnits
-                                                                          with Plugins
-                                                                          with PhaseAssembly
-                                                                          with Trees
-                                                                          with FreeVars
-                                                                          with TreePrinters
-                                                                          with DocComments
-                                                                          with Positions {
+class Global(var currentSettings: Settings, var reporter: Reporter) extends SymbolTable
+                                                                       with ClassLoaders
+                                                                       with ToolBoxes
+                                                                       with CompilationUnits
+                                                                       with Plugins
+                                                                       with PhaseAssembly
+                                                                       with Trees
+                                                                       with FreeVars
+                                                                       with TreePrinters
+                                                                       with DocComments
+                                                                       with Positions {
 
   override def settings = currentSettings
 
@@ -49,7 +49,7 @@ class Global(var currentSettings: Settings, var reporter: NscReporter) extends S
 
   // alternate constructors ------------------------------------------
 
-  def this(reporter: NscReporter) =
+  def this(reporter: Reporter) =
     this(new Settings(err => reporter.error(null, err)), reporter)
 
   def this(settings: Settings) =
@@ -1538,7 +1538,7 @@ class Global(var currentSettings: Settings, var reporter: NscReporter) extends S
   /** We resolve the class/object ambiguity by passing a type/term name.
    */
   def showDef(fullName: Name, declsOnly: Boolean, ph: Phase) = {
-    val boringOwners = Set(definitions.AnyClass, definitions.AnyRefClass, definitions.ObjectClass)
+    val boringOwners = Set[Symbol](definitions.AnyClass, definitions.AnyRefClass, definitions.ObjectClass)
     def phased[T](body: => T): T = afterPhase(ph)(body)
     def boringMember(sym: Symbol) = boringOwners(sym.owner)
     def symString(sym: Symbol) = if (sym.isTerm) sym.defString else sym.toString
@@ -1621,7 +1621,7 @@ object Global {
    *  This allows the use of a custom Global subclass with the software which
    *  wraps Globals, such as scalac, fsc, and the repl.
    */
-  def fromSettings(settings: Settings, reporter: NscReporter): Global = {
+  def fromSettings(settings: Settings, reporter: Reporter): Global = {
     // !!! The classpath isn't known until the Global is created, which is too
     // late, so we have to duplicate it here.  Classpath is too tightly coupled,
     // it is a construct external to the compiler and should be treated as such.
@@ -1629,7 +1629,7 @@ object Global {
     val loader       = ScalaClassLoader.fromURLs(new PathResolver(settings).result.asURLs, parentLoader)
     val name         = settings.globalClass.value
     val clazz        = Class.forName(name, true, loader)
-    val cons         = clazz.getConstructor(classOf[Settings], classOf[NscReporter])
+    val cons         = clazz.getConstructor(classOf[Settings], classOf[Reporter])
 
     cons.newInstance(settings, reporter).asInstanceOf[Global]
   }
@@ -1637,7 +1637,7 @@ object Global {
   /** A global instantiated this way honors -Yglobal-class setting, and
    *  falls back on calling the Global constructor directly.
    */
-  def apply(settings: Settings, reporter: NscReporter): Global = {
+  def apply(settings: Settings, reporter: Reporter): Global = {
     val g = (
       if (settings.globalClass.isDefault) null
       else try fromSettings(settings, reporter) catch { case x =>

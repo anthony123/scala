@@ -602,7 +602,7 @@ abstract class TreeInfo {
 
   object ReifiedTree {
     def unapply(tree: Tree): Option[(Tree, List[Tree], Tree, Tree)] = tree match {
-      case reifee @ Block((mrDef @ ValDef(_, _, _, _)) :: symbolTable, Apply(Apply(_, List(tree)), List(Apply(_, List(tpe))))) if mrDef.name == nme.MIRROR_SHORT =>
+      case reifee @ Block((mrDef @ ValDef(_, _, _, _)) :: symbolTable, Apply(Apply(_, List(tree)), List(Apply(_, tpe :: _)))) if mrDef.name == nme.MIRROR_SHORT =>
         Some(reifee, symbolTable, tree, tpe)
       case _ =>
         None
@@ -676,14 +676,14 @@ abstract class TreeInfo {
       case ValDef(_, name, _, Apply(Select(mrRef1 @ Ident(_), newFreeType), List(_, _, value, Literal(Constant(flags: Long)), Literal(Constant(origin: String)))))
       if mrRef1.name == nme.MIRROR_SHORT && (newFreeType == newFreeTypeMethod.name || newFreeType == newFreeExistentialMethod.name) =>
         value match {
-          case Apply(TypeApply(Select(Select(mrRef2 @ Ident(_), typeTag), apply), List(binding)), List(Literal(Constant(null))))
+          case Apply(TypeApply(Select(Select(mrRef2 @ Ident(_), typeTag), apply), List(binding)), List(Literal(Constant(null)), _))
           if mrRef2.name == nme.MIRROR_SHORT && typeTag == nme.TypeTag && apply == nme.apply =>
             Some(mrRef1, name, binding, flags, origin)
-          case Apply(TypeApply(Select(mrRef2 @ Ident(_), typeTag), List(binding)), List(Literal(Constant(null))))
+          case Apply(TypeApply(Select(mrRef2 @ Ident(_), typeTag), List(binding)), List(Literal(Constant(null)), _))
           if mrRef2.name == nme.MIRROR_SHORT && typeTag == nme.TypeTag =>
             Some(mrRef1, name, binding, flags, origin)
           case _ =>
-            throw new Error("unsupported free type def: " + showRaw(tree))
+            throw new Error("unsupported free type def: %s%n%s".format(value, showRaw(value)))
         }
       case _ =>
         None

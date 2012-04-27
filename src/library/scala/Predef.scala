@@ -100,39 +100,36 @@ object Predef extends LowPriorityImplicits {
   // def AnyRef = scala.AnyRef
 
   // Manifest types, companions, and incantations for summoning
-  @deprecated("Use `@scala.reflect.ClassTag` instead", "2.10.0")
   type ClassManifest[T] = scala.reflect.ClassManifest[T]
-  @deprecated("OptManifest is no longer supported and using it may lead to incorrect results, use `@scala.reflect.TypeTag` instead", "2.10.0")
   type OptManifest[T]   = scala.reflect.OptManifest[T]
-  @deprecated("Use `@scala.reflect.ConcreteTypeTag` instead", "2.10.0")
   type Manifest[T]      = scala.reflect.Manifest[T]
-  @deprecated("Use `@scala.reflect.ClassTag` instead", "2.10.0")
   val ClassManifest     = scala.reflect.ClassManifest
-  // [Paul to Eugene] No lazy vals in Predef.  Too expensive.  Have to work harder on breaking initialization dependencies.
-  @deprecated("Use `@scala.reflect.ConcreteTypeTag` instead", "2.10.0")
-  lazy val Manifest     = scala.reflect.Manifest // needs to be lazy, because requires scala.reflect.mirror instance
-  @deprecated("NoManifest is no longer supported and using it may lead to incorrect results, use `@scala.reflect.TypeTag` instead", "2.10.0")
-  lazy val NoManifest   = scala.reflect.NoManifest // needs to be lazy, because requires scala.reflect.mirror instance
+  val Manifest          = scala.reflect.Manifest
+  val NoManifest        = scala.reflect.NoManifest
 
   def manifest[T](implicit m: Manifest[T])           = m
   def classManifest[T](implicit m: ClassManifest[T]) = m
   def optManifest[T](implicit m: OptManifest[T])     = m
 
   // Tag types and companions, and incantations for summoning
-  type ClassTag[T]         = scala.reflect.ClassTag[T]
-  type TypeTag[T]          = scala.reflect.TypeTag[T]
-  type ConcreteTypeTag[T]  = scala.reflect.ConcreteTypeTag[T]
-  val ClassTag             = scala.reflect.ClassTag // doesn't need to be lazy, because it's not a path-dependent type
+  type ArrayTag[T]           = scala.reflect.ArrayTag[T]
+  type ErasureTag[T]         = scala.reflect.ErasureTag[T]
+  type ClassTag[T]           = scala.reflect.ClassTag[T]
+  type TypeTag[T]            = scala.reflect.TypeTag[T]
+  type ConcreteTypeTag[T]    = scala.reflect.ConcreteTypeTag[T]
+  val ClassTag               = scala.reflect.ClassTag // doesn't need to be lazy, because it's not a path-dependent type
   // [Paul to Eugene] No lazy vals in Predef.  Too expensive.  Have to work harder on breaking initialization dependencies.
-  lazy val TypeTag         = scala.reflect.TypeTag // needs to be lazy, because requires scala.reflect.mirror instance
-  lazy val ConcreteTypeTag = scala.reflect.ConcreteTypeTag
+  lazy val TypeTag           = scala.reflect.TypeTag // needs to be lazy, because requires scala.reflect.mirror instance
+  lazy val ConcreteTypeTag   = scala.reflect.ConcreteTypeTag
 
   // [Eugene to Martin] it's really tedious to type "implicitly[...]" all the time, so I'm reintroducing these shortcuts
-  def classTag[T](implicit ctag: ClassTag[T])                = ctag
-  def tag[T](implicit ttag: TypeTag[T])                      = ttag
-  def typeTag[T](implicit ttag: TypeTag[T])                  = ttag
-  def concreteTag[T](implicit cttag: ConcreteTypeTag[T])     = cttag
-  def concreteTypeTag[T](implicit cttag: ConcreteTypeTag[T]) = cttag
+  def arrayTag[T](implicit atag: ArrayTag[T])                      = atag
+  def erasureTag[T](implicit etag: ErasureTag[T])                  = etag
+  def classTag[T](implicit ctag: ClassTag[T])                      = ctag
+  def tag[T](implicit ttag: TypeTag[T])                            = ttag
+  def typeTag[T](implicit ttag: TypeTag[T])                        = ttag
+  def concreteTag[T](implicit cttag: ConcreteTypeTag[T])           = cttag
+  def concreteTypeTag[T](implicit cttag: ConcreteTypeTag[T])       = cttag
 
   // Minor variations on identity functions
   def identity[A](x: A): A         = x    // @see `conforms` for the implicit version
@@ -311,11 +308,11 @@ object Predef extends LowPriorityImplicits {
   // views --------------------------------------------------------------
 
   implicit def exceptionWrapper(exc: Throwable) = new runtime.RichException(exc)
+  implicit def function1ToRichFunction1[T, R](f: T => R): runtime.RichFunction1[T, R] = new runtime.RichFunction1(f)
+  implicit def function2ToRichFunction2[T1, T2, R](f: (T1, T2) => R): runtime.RichFunction2[T1, T2, R] =
+    new runtime.RichFunction2(f)
 
-  implicit def zipped2ToTraversable[El1, El2](zz: Tuple2[_, _]#Zipped[_, El1, _, El2]): Traversable[(El1, El2)] =
-    new collection.AbstractTraversable[(El1, El2)] {
-      def foreach[U](f: ((El1, El2)) => U): Unit = zz foreach Function.untupled(f)
-    }
+  implicit def tuple2ToZipped[T1, T2](zz: (T1, T2)) = new runtime.Tuple2ZippedOps(zz)
 
   implicit def zipped3ToTraversable[El1, El2, El3](zz: Tuple3[_, _, _]#Zipped[_, El1, _, El2, _, El3]): Traversable[(El1, El2, El3)] =
     new collection.AbstractTraversable[(El1, El2, El3)] {

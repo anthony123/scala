@@ -46,7 +46,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
     val outer     = newTermName("<outer>")
     val runOrElse = newTermName("runOrElse")
     val zero      = newTermName("zero")
-    val _match    = newTermName("__match") // don't call it __match, since that will trigger virtual pattern matching...
+    val _match    = newTermName("__match") // don't call the val __match, since that will trigger virtual pattern matching...
 
     def counted(str: String, i: Int) = newTermName(str+i)
   }
@@ -136,7 +136,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
       // (that would require more sophistication when generating trees,
       //  and the only place that emits Matches after typers is for exception handling anyway)
       if(phase.id >= currentRun.uncurryPhase.id) debugwarn("running translateMatch at "+ phase +" on "+ scrut +" match "+ cases)
-
+      // println("translating "+ cases.mkString("{", "\n", "}"))
       val scrutSym  = freshSym(scrut.pos, pureType(scrutType)) setFlag SYNTH_CASE
       // pt = Any* occurs when compiling test/files/pos/annotDepMethType.scala  with -Xexperimental
       combineCases(scrut, scrutSym, cases map translateCase(scrutSym, pt), pt, matchOwner, matchFailGenOverride)
@@ -260,10 +260,11 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
           * @arg patBinder  symbol used to refer to the result of the previous pattern's extractor (will later be replaced by the outer tree with the correct tree to refer to that patterns result)
         */
         def unapply(tree: Tree): Option[(Symbol, Type)] = tree match {
-          case Bound(subpatBinder, typed@Typed(expr, tpt)) if typed.tpe ne null => Some((subpatBinder, typed.tpe))
-          case Bind(_, typed@Typed(expr, tpt))             if typed.tpe ne null => Some((patBinder, typed.tpe))
-          case Typed(expr, tpt)                            if tree.tpe ne null  => Some((patBinder, tree.tpe))
-          case _                                           => None
+          // the Ident subpattern can be ignored, subpatBinder or patBinder tell us all we need to know about it
+          case Bound(subpatBinder, typed@Typed(Ident(_), tpt)) if typed.tpe ne null => Some((subpatBinder, typed.tpe))
+          case Bind(_, typed@Typed(Ident(_), tpt))             if typed.tpe ne null => Some((patBinder, typed.tpe))
+          case Typed(Ident(_), tpt)                            if tree.tpe ne null  => Some((patBinder, tree.tpe))
+          case _  => None
         }
       }
 
@@ -828,6 +829,7 @@ class Foo(x: Other) { x._1 } // no error in this order
     private def typeTest(binderToTest: Symbol, expectedTp: Type, disableOuterCheck: Boolean = false, dynamic: Boolean = false): Tree = { import CODE._
       // def coreTest =
       if (disableOuterCheck) codegen._isInstanceOf(binderToTest, expectedTp) else maybeWithOuterCheck(binderToTest, expectedTp)(codegen._isInstanceOf(binderToTest, expectedTp))
+      // [Eugene to Adriaan] use `resolveErasureTag` instead of `findManifest`. please, provide a meaningful position
       // if (opt.experimental && containsUnchecked(expectedTp)) {
       //   if (dynamic) {
       //     val expectedTpTagTree = findManifest(expectedTp, true)
@@ -985,6 +987,7 @@ class Foo(x: Other) { x._1 } // no error in this order
       fixerUpper(owner, scrut.pos){
         val ptDefined    = if (isFullyDefined(pt)) pt else NoType
         def matchFailGen = (matchFailGenOverride orElse Some(CODE.MATCHERROR(_: Tree)))
+        // println("combining cases: "+ (casesNoSubstOnly.map(_.mkString(" >> ")).mkString("{", "\n", "}")))
 
         emitSwitch(scrut, scrutSym, casesNoSubstOnly, pt, matchFailGenOverride).getOrElse{
           if (casesNoSubstOnly nonEmpty) {
@@ -1064,7 +1067,7 @@ class Foo(x: Other) { x._1 } // no error in this order
 
     // assert(owner ne null); assert(owner ne NoSymbol)
     def freshSym(pos: Position, tp: Type = NoType, prefix: String = "x") =
-      NoSymbol.newTermSymbol(freshName(prefix), pos) setInfo /*repackExistential*/(tp)
+      NoSymbol.newTermSymbol(freshName(prefix), pos) setInfo tp
 
     // codegen relevant to the structure of the translation (how extractors are combined)
     trait AbsCodegen {
@@ -1138,7 +1141,7 @@ class Foo(x: Other) { x._1 } // no error in this order
     val matchStrategy: Tree
 
     def inMatchMonad(tp: Type): Type = appliedType(oneSig, List(tp)).finalResultType
-    def pureType(tp: Type): Type     = appliedType(oneSig, List(tp)).paramTypes.head
+    def pureType(tp: Type): Type     = appliedType(oneSig, List(tp)).paramTypes.headOption getOrElse NoType // fail gracefully (otherwise we get crashes)
     protected def matchMonadSym      = oneSig.finalResultType.typeSymbol
 
     import CODE._

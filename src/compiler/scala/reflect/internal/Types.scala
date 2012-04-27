@@ -264,7 +264,23 @@ trait Types extends api.Types { self: SymbolTable =>
     def nonPrivateDeclaration(name: Name): Symbol = nonPrivateDecl(name)
     def declarations = decls
     def typeArguments = typeArgs
-    def erasure = transformedType(this)
+    def erasure = this match {
+      case ConstantType(value) => widen.erasure // [Eugene to Martin] constant types are unaffected by erasure. weird.
+      case _ =>
+        var result = transformedType(this)
+        result = result.normalize match { // necessary to deal with erasures of HK types, typeConstructor won't work
+          case PolyType(undets, underlying) => existentialAbstraction(undets, underlying) // we don't want undets in the result
+          case _ => result
+        }
+        // [Eugene] erasure screws up all ThisTypes for modules into PackageTypeRefs
+        // we need to unscrew them, or certain typechecks will fail mysteriously
+        // http://groups.google.com/group/scala-internals/browse_thread/thread/6d3277ae21b6d581
+        result = result.map(tpe => tpe match {
+          case tpe: PackageTypeRef => ThisType(tpe.sym)
+          case _ => tpe
+        })
+        result
+    }
     def substituteTypes(from: List[Symbol], to: List[Type]): Type = subst(from, to)
 
     // [Eugene] to be discussed and refactored
@@ -1342,7 +1358,8 @@ trait Types extends api.Types { self: SymbolTable =>
     if (period != currentPeriod) {
       tpe.underlyingPeriod = currentPeriod
       if (!isValid(period)) {
-        tpe.underlyingCache = tpe.pre.memberType(tpe.sym).resultType;
+        // [Eugene to Paul] needs review
+        tpe.underlyingCache = if (tpe.sym == NoSymbol) ThisType(RootClass) else tpe.pre.memberType(tpe.sym).resultType;
         assert(tpe.underlyingCache ne tpe, tpe)
       }
     }
@@ -1492,7 +1509,8 @@ trait Types extends api.Types { self: SymbolTable =>
               case tv: TypeVar => tvs += tv
               case _ =>
             }
-          val varToParamMap: Map[Type, Symbol] = tvs map (tv => tv -> tv.origin.typeSymbol.cloneSymbol) toMap
+          val varToParamMap: Map[Type, Symbol] =
+            mapFrom[TypeVar, Type, Symbol](tvs.toList)(_.origin.typeSymbol.cloneSymbol)
           val paramToVarMap = varToParamMap map (_.swap)
           val varToParam = new TypeMap {
             def apply(tp: Type) = varToParamMap get tp match {
@@ -2310,7 +2328,7 @@ trait Types extends api.Types { self: SymbolTable =>
       else if (sym.isPackageClass || sym.isPackageObjectOrClass)
         sym.skipPackageObject.fullName + "."
       else if (isStable && nme.isSingletonName(sym.name))
-        nme.dropSingletonName(sym.name) + "."
+        tpnme.dropSingletonName(sym.name) + "."
       else
         super.prefixString
     )
@@ -3456,7 +3474,7 @@ trait Types extends api.Types { self: SymbolTable =>
       case TypeRef(pre, sym, _) if sameLength(sym.typeParams, args) =>
         val eparams  = typeParamsToExistentials(sym)
         val bounds   = args map (TypeBounds upper _)
-        (eparams, bounds).zipped foreach (_ setInfo _)
+        foreach2(eparams, bounds)(_ setInfo _)
 
         newExistentialType(eparams, typeRef(pre, sym, eparams map (_.tpe)))
       case _ =>
@@ -3638,7 +3656,7 @@ trait Types extends api.Types { self: SymbolTable =>
           else owner.newValueParameter(name.toTermName)
         paramStack = newParams :: paramStack
         try {
-          (newParams, ptypes).zipped foreach ((p, t) => p setInfo this(t))
+          foreach2(newParams, ptypes)((p, t) => p setInfo this(t))
           val restpe1 = this(restpe)
           if (isType) PolyType(newParams, restpe1)
           else MethodType(newParams, restpe1)

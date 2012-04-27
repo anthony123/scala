@@ -13,7 +13,6 @@ import scala.sys.BooleanProp
 import io.VirtualDirectory
 import scala.tools.nsc.io.AbstractFile
 import reporters._
-import reporters.{Reporter => NscReporter}
 import symtab.Flags
 import scala.reflect.internal.Names
 import scala.tools.util.PathResolver
@@ -197,8 +196,9 @@ class IMain(initialSettings: Settings, protected val out: JPrintWriter) extends 
 
   import global._
   import definitions.{
-    ScalaPackage, JavaLangPackage, PredefModule, RootClass,
-    getClassIfDefined, getModuleIfDefined, getRequiredModule, getRequiredClass
+    ScalaPackage, JavaLangPackage, RootClass,
+    getClassIfDefined, getModuleIfDefined, getRequiredModule, getRequiredClass,
+    termMember, typeMember
   }
 
   private implicit def privateTreeOps(t: Tree): List[Tree] = {
@@ -282,7 +282,7 @@ class IMain(initialSettings: Settings, protected val out: JPrintWriter) extends 
   protected def createLineManager(classLoader: ClassLoader): Line.Manager = new Line.Manager(classLoader)
 
   /** Instantiate a compiler.  Overridable. */
-  protected def newCompiler(settings: Settings, reporter: NscReporter): ReplGlobal = {
+  protected def newCompiler(settings: Settings, reporter: Reporter): ReplGlobal = {
     settings.outputDirs setSingleOutput virtualDirectory
     settings.exposeEmptyPackage.value = true
     new Global(settings, reporter) with ReplGlobal
@@ -351,7 +351,7 @@ class IMain(initialSettings: Settings, protected val out: JPrintWriter) extends 
     classLoader.setAsContext()
 
     // this is risky, but it's our only possibility to make default reflexive mirror to work with REPL
-    // so far we have only used the default mirror to create a few manifests for the compiler
+    // so far we have only used the default mirror to create a few tags for the compiler
     // so it shouldn't be in conflict with our classloader, especially since it respects its parent
     scala.reflect.mirror.classLoader = classLoader
   }
@@ -369,7 +369,7 @@ class IMain(initialSettings: Settings, protected val out: JPrintWriter) extends 
   def flatName(id: String)    = optFlatName(id) getOrElse id
   def optFlatName(id: String) = requestForIdent(id) map (_ fullFlatName id)
 
-  def allDefinedNames = definedNameMap.keys.toList sortBy (_.toString)
+  def allDefinedNames = definedNameMap.keys.toList.sorted
   def pathToType(id: String): String = pathToName(newTypeName(id))
   def pathToTerm(id: String): String = pathToName(newTermName(id))
   def pathToName(name: Name): String = {
@@ -667,7 +667,7 @@ class IMain(initialSettings: Settings, protected val out: JPrintWriter) extends 
     result
   }
   def directBind(p: NamedParam): IR.Result                       = directBind(p.name, p.tpe, p.value)
-  def directBind[T: Manifest](name: String, value: T): IR.Result = directBind((name, value))
+  def directBind[T: ClassTag](name: String, value: T): IR.Result = directBind((name, value))
 
   def rebind(p: NamedParam): IR.Result = {
     val name     = p.name
@@ -683,12 +683,12 @@ class IMain(initialSettings: Settings, protected val out: JPrintWriter) extends 
     if (ids.isEmpty) IR.Success
     else interpret("import " + ids.mkString(", "))
 
-  def quietBind(p: NamedParam): IR.Result                  = beQuietDuring(bind(p))
-  def bind(p: NamedParam): IR.Result                       = bind(p.name, p.tpe, p.value)
-  def bind[T: Manifest](name: String, value: T): IR.Result = bind((name, value))
-  def bindSyntheticValue(x: Any): IR.Result                = bindValue(freshInternalVarName(), x)
-  def bindValue(x: Any): IR.Result                         = bindValue(freshUserVarName(), x)
-  def bindValue(name: String, x: Any): IR.Result           = bind(name, TypeStrings.fromValue(x), x)
+  def quietBind(p: NamedParam): IR.Result                 = beQuietDuring(bind(p))
+  def bind(p: NamedParam): IR.Result                      = bind(p.name, p.tpe, p.value)
+  def bind[T: TypeTag](name: String, value: T): IR.Result = bind((name, value))
+  def bindSyntheticValue(x: Any): IR.Result               = bindValue(freshInternalVarName(), x)
+  def bindValue(x: Any): IR.Result                        = bindValue(freshUserVarName(), x)
+  def bindValue(name: String, x: Any): IR.Result          = bind(name, TypeStrings.fromValue(x), x)
 
   /** Reset this interpreter, forgetting all user-specified requests. */
   def reset() {
@@ -807,9 +807,9 @@ class IMain(initialSettings: Settings, protected val out: JPrintWriter) extends 
       */
     def resolvePathToSymbol(accessPath: String): Symbol = {
       val readRoot  = getRequiredModule(readPath)   // the outermost wrapper
-      (accessPath split '.').foldLeft(readRoot) { (sym, name) =>
-        if (name == "") sym else
-        afterTyper(sym.info member newTermName(name))
+      (accessPath split '.').foldLeft(readRoot: Symbol) {
+        case (sym, "")    => sym
+        case (sym, name)  => afterTyper(termMember(sym, name))
       }
     }
     /** We get a bunch of repeated warnings for reasons I haven't
@@ -1007,9 +1007,8 @@ class IMain(initialSettings: Settings, protected val out: JPrintWriter) extends 
     def lookupTypeOf(name: Name) = typeOf.getOrElse(name, typeOf(global.encode(name.toString)))
     def simpleNameOfType(name: TypeName) = (compilerTypeOf get name) map (_.typeSymbol.simpleName)
 
-    private def typeMap[T](f: Type => T): Map[Name, T] = {
-      termNames ++ typeNames map (x => x -> f(cleanMemberDecl(resultSymbol, x))) toMap
-    }
+    private def typeMap[T](f: Type => T) =
+      mapFrom[Name, Name, T](termNames ++ typeNames)(x => f(cleanMemberDecl(resultSymbol, x)))
 
     /** Types of variables defined by this request. */
     lazy val compilerTypeOf = typeMap[Type](x => x) withDefaultValue NoType
@@ -1024,8 +1023,7 @@ class IMain(initialSettings: Settings, protected val out: JPrintWriter) extends 
       typeNames.map(x => x -> compilerTypeOf(x).typeSymbol)
     ).toMap[Name, Symbol] withDefaultValue NoSymbol
 
-    lazy val typesOfDefinedTerms: Map[Name, Type] =
-      termNames map (x => x -> applyToResultMember(x, _.tpe)) toMap
+    lazy val typesOfDefinedTerms = mapFrom[Name, Name, Type](termNames)(x => applyToResultMember(x, _.tpe))
 
     /** load and run the code using reflection */
     def loadAndRun: (String, Boolean) = {
@@ -1185,9 +1183,10 @@ class IMain(initialSettings: Settings, protected val out: JPrintWriter) extends 
     val termname = newTypeName(name)
     findName(termname) orElse getModuleIfDefined(termname)
   }
-  def types[T: ClassManifest] : Symbol = types(classManifest[T].erasure.getName)
-  def terms[T: ClassManifest] : Symbol = terms(classManifest[T].erasure.getName)
-  def apply[T: ClassManifest] : Symbol = apply(classManifest[T].erasure.getName)
+  // [Eugene to Paul] possibly you could make use of TypeTags here
+  def types[T: ClassTag] : Symbol = types(classTag[T].erasure.getName)
+  def terms[T: ClassTag] : Symbol = terms(classTag[T].erasure.getName)
+  def apply[T: ClassTag] : Symbol = apply(classTag[T].erasure.getName)
 
   def classSymbols  = allDefSymbols collect { case x: ClassSymbol => x }
   def methodSymbols = allDefSymbols collect { case x: MethodSymbol => x }
