@@ -318,12 +318,29 @@ abstract class GenASM extends SubComponent with BytecodeWriters {
   //  https://issues.scala-lang.org/browse/SI-3872
   // -----------------------------------------------------------------------------------------
 
-  /* Given an internal name (eg "java/lang/Integer") returns the class symbol for it. */
+  /**
+   * Given an internal name (eg "java/lang/Integer") returns the class symbol for it.
+   *
+   * Better not to need this method (an example where control flow arrives here is welcome).
+   * This method is invoked only upon both (1) and (2) below happening:
+   *   (1) providing an asm.ClassWriter with an internal name by other means than javaName()
+   *   (2) forgetting to track the corresponding class-symbol in reverseJavaName.
+   *
+   * (The first item is already unlikely because we rely on javaName()
+   *  to do the bookkeeping for entries that should go in innerClassBuffer.)
+   *
+   * (We could do completely without this method at the expense of computing stack-map-frames ourselves and
+   *  invoking visitFrame(), but that would require another pass over all instructions.)
+   *
+   * Right now I can't think of any invocation of visitSomething() on MethodVisitor
+   * where we hand an internal name not backed by a reverseJavaName.
+   * However, I'm leaving this note just in case any such oversight is discovered.
+   */
   def inameToSymbol(iname: String): Symbol = {
     val name = global.newTypeName(iname)
     val res0 =
       if (nme.isModuleName(name)) definitions.getModule(nme.stripModuleSuffix(name))
-      else                        definitions.getClass(name.replace('/', '.')) // TODO fails for inner classes, at least.
+      else                        definitions.getClassByName(name.replace('/', '.')) // TODO fails for inner classes (but this hasn't been tested).
     assert(res0 != NoSymbol)
     val res = jsymbol(res0)
     res
