@@ -165,7 +165,7 @@ self =>
 
   /** The implementation class of the set returned by `keySet`.
    */
-  protected class DefaultKeySet extends AbstractSet[A] with Set[A] {
+  protected class DefaultKeySet extends AbstractSet[A] with Set[A] with Serializable {
     def contains(key : A) = self.contains(key)
     def iterator = keysIterator
     def + (elem: A): Set[A] = (Set[A]() ++ this + elem).asInstanceOf[Set[A]] // !!! concrete overrides abstract problem
@@ -200,7 +200,7 @@ self =>
 
   /** The implementation class of the iterable returned by `values`.
    */
-  protected class DefaultValuesIterable extends AbstractIterable[B] with Iterable[B] {
+  protected class DefaultValuesIterable extends AbstractIterable[B] with Iterable[B] with Serializable {
     def iterator = valuesIterator
     override def size = self.size
     override def foreach[C](f: B => C) = self.valuesIterator foreach f
@@ -296,9 +296,6 @@ self =>
    */
   def ++[B1 >: B](xs: GenTraversableOnce[(A, B1)]): Map[A, B1] =
     ((repr: Map[A, B1]) /: xs.seq) (_ + _)
-
-  @bridge
-  def ++[B1 >: B](xs: TraversableOnce[(A, B1)]): Map[A, B1] = ++(xs: GenTraversableOnce[(A, B1)])
 
   /** Returns a new map with all key/value pairs for which the predicate
    *  `p` returns `true`.

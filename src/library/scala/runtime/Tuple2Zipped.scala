@@ -8,25 +8,28 @@
 
 package scala.runtime
 
-import scala.collection.{ TraversableLike => TLike, IterableLike => ILike }
+import scala.collection.{ TraversableLike, IterableLike }
 import scala.collection.generic.{ CanBuildFrom => CBF }
 
- /** Wraps a tuple in a `Zipped`, which supports 2-ary generalisations of `map`, `flatMap`, `filter`, etc.
-  * Note that there must be an implicit value to convert this tuple's types into a [[scala.collection.TraversableLike]]
-  * or [[scala.collection.IterableLike]].
-  * {{{
-  * scala> val tuple = (List(1,2,3),List('a','b','c'))
-  * tuple: (List[Int], List[Char]) = (List(1, 2, 3),List(a, b, c))
-  *
-  * scala> tuple.zipped map { (x,y) => x + ":" + y }
-  * res6: List[java.lang.String] = List(1:a, 2:b, 3:c)
-  * }}}
-  *
-  * @see Zipped
-  * Note: will not terminate for infinite-sized collections.
-  */
-@inline private[scala] final class Tuple2Zipped[+Repr1, +El1, +Repr2, +El2](coll1: TLike[El1, Repr1], coll2: ILike[El2, Repr2]) {
-  // coll2: ILike for filter
+/** This interface is intended as a minimal interface, not complicated
+ *  by the requirement to resolve type constructors, for implicit search (which only
+ *  needs to find an implicit conversion to Traversable for our purposes.)
+ */
+trait ZippedTraversable2[+El1, +El2] {
+  def foreach[U](f: (El1, El2) => U): Unit
+}
+object ZippedTraversable2 {
+  implicit def zippedTraversable2ToTraversable[El1, El2](zz: ZippedTraversable2[El1, El2]): Traversable[(El1, El2)] = {
+    new collection.AbstractTraversable[(El1, El2)] {
+      def foreach[U](f: ((El1, El2)) => U): Unit = zz foreach Function.untupled(f)
+    }
+  }
+}
+
+class Tuple2Zipped[El1, Repr1, El2, Repr2](
+  coll1: TraversableLike[El1, Repr1],
+  coll2: IterableLike[El2, Repr2]
+) extends ZippedTraversable2[El1, El2] {
   def map[B, To](f: (El1, El2) => B)(implicit cbf: CBF[Repr1, B, To]): To = {
     val b = cbf(coll1.repr)
     b.sizeHint(coll1)
@@ -103,7 +106,25 @@ import scala.collection.generic.{ CanBuildFrom => CBF }
   }
 }
 
-@inline private[scala] final class Tuple2ZippedOps[T1, T2](zz: (T1, T2)) {
-  def zipped[Repr1, El1, Repr2, El2](implicit w1: T1 => TLike[El1, Repr1], w2: T2 => ILike[El2, Repr2]) =
-    new Tuple2Zipped[Repr1, El1, Repr2, El2](w1(zz._1), w2(zz._2))
+object Tuple2Zipped {
+  class Ops[T1, T2](x: (T1, T2)) {
+    def invert[El1, CC1[X] <: TraversableOnce[X], El2, CC2[X] <: TraversableOnce[X], That]
+      (implicit w1: T1 <:< CC1[El1],
+                w2: T2 <:< CC2[El2],
+                bf: collection.generic.CanBuildFrom[CC1[_], (El1, El2), That]
+      ): That = {
+        val buf = bf(x._1)
+        val it1 = x._1.toIterator
+        val it2 = x._2.toIterator
+        while (it1.hasNext && it2.hasNext)
+          buf += ((it1.next, it2.next))
+        
+        buf.result
+      }
+
+    def zipped[El1, Repr1, El2, Repr2]
+      (implicit w1: T1 => TraversableLike[El1, Repr1],
+                w2: T2 => IterableLike[El2, Repr2]
+      ): Tuple2Zipped[El1, Repr1, El2, Repr2] = new Tuple2Zipped(x._1, x._2)
+  }
 }
