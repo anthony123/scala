@@ -170,7 +170,7 @@ PROPERTIES
   <property file="${basedir}/build.number"/>
 
   <!-- Additional command line arguments for scalac. They are added to all build targets -->
-  <property name="scalac.args" value="-Xmacros"/>
+  <property name="scalac.args" value=""/>
   <property name="javac.args" value=""/>
 
   <!-- Sets location of pre-compiled libraries -->
@@ -333,6 +333,7 @@ INITIALISATION
   <target name="init.version.done" depends="init.version.release, init.version.snapshot"/>
 
   <target name="init" depends="init.jars, init.maven.jars, init.version.done">
+    <property name="scalac.args.always" value="-Xmacros" />
   <!-- scalac.args.optimise is selectively overridden in certain antcall tasks. -->
     <property name="scalac.args.optimise" value=""/>
   <!-- scalac.args.quickonly are added to quick.* targets but not others (particularly, locker.)
@@ -340,7 +341,7 @@ INITIALISATION
        Note: These are also used by strap since they may affect JVM target or other and we'd like
        to be able to test binary stability of features. -->
     <property name="scalac.args.quickonly" value=""/>
-    <property name="scalac.args.all" value="${scalac.args} ${scalac.args.optimise}"/>
+    <property name="scalac.args.all" value="${scalac.args.always} ${scalac.args} ${scalac.args.optimise}"/>
     <property name="scalac.args.quick" value="${scalac.args.all} ${scalac.args.quickonly}"/>
     <!-- Setting-up Ant contrib tasks -->
     <taskdef resource="net/sf/antcontrib/antlib.xml" classpath="${lib.dir}/ant/ant-contrib.jar"/>
