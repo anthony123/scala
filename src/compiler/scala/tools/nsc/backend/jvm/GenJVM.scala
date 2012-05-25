@@ -149,13 +149,7 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
           new DirectToJarfileWriter(f.file)
 
         case _                               =>
-          if (settings.Ygenjavap.isDefault) {
-            if(settings.Ydumpclasses.isDefault)
-              new ClassBytecodeWriter { }
-            else
-              new ClassBytecodeWriter with DumpBytecodeWriter { }
-          }
-          else new ClassBytecodeWriter with JavapBytecodeWriter { }
+          new ClassBytecodeWriter with JavapBytecodeWriter { } // assumes settings.Ygenjavap.value
       }
 
       val codeGenerator = new BytecodeGenerator(bytecodeWriter)

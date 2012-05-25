@@ -61,7 +61,7 @@ trait BytecodeWriters {
   }
 
   trait JavapBytecodeWriter extends BytecodeWriter {
-    val baseDir = Directory(settings.Ygenjavap.value).createDirectory()
+    val baseDir = Directory(settings.outputDirs.getSingleOutput.get.path).createDirectory() // used to be Directory(settings.Ygenjavap.value).createDirectory
 
     def emitJavap(bytes: Array[Byte], javapFile: io.File) {
       val pw    = javapFile.printWriter()
@@ -69,7 +69,7 @@ trait BytecodeWriters {
         override def findBytes(path: String): Array[Byte] = bytes
       }
 
-      try javap(Seq("-verbose", "dummy")) foreach (_.show())
+      try javap(Seq("-verbose", "-c", "-private", "dummy")) foreach (_.show())
       finally pw.close()
     }
     abstract override def writeClass(label: String, jclassName: String, jclassBytes: Array[Byte], sym: Symbol) {
@@ -81,6 +81,11 @@ trait BytecodeWriters {
 
       javapFile.parent.createDirectory()
       emitJavap(bytes, javapFile)
+
+      import scala.tools.asm;
+      val asmFile = segments.foldLeft(baseDir: Path)(_ / _) changeExtension "asm" toFile;
+      val cr = new asm.ClassReader(jclassBytes)
+      cr.accept(new asm.util.TraceClassVisitor(new java.io.PrintWriter(asmFile.outputStream())), 0) // was new PrintWriter(System.out)
     }
   }
 
