@@ -2523,7 +2523,7 @@ trait Typers extends Modes with Adaptations with Taggings {
 
     def typedImport(imp : Import) : Import = (transformed remove imp) match {
       case Some(imp1: Import) => imp1
-      case None => log("unhandled import: "+imp+" in "+unit); imp
+      case _                  => log("unhandled import: "+imp+" in "+unit); imp
     }
     private def isWarnablePureExpression(tree: Tree) = tree match {
       case EmptyTree | Literal(Constant(())) => false
@@ -2549,9 +2549,11 @@ trait Typers extends Modes with Adaptations with Taggings {
         else
           stat match {
             case imp @ Import(_, _) =>
-              context = context.makeNewImport(imp)
               imp.symbol.initialize
-              typedImport(imp)
+              if (!imp.symbol.isError) {
+                context = context.makeNewImport(imp)
+                typedImport(imp)
+              } else EmptyTree
             case _ =>
               if (localTarget && !includesTargetPos(stat)) {
                 // skip typechecking of statements in a sequence where some other statement includes
@@ -4177,7 +4179,8 @@ trait Typers extends Modes with Adaptations with Taggings {
                 nme.update,
                 Apply(Select(mkCall(nme.apply), prefix) setPos fun.pos, args) setPos tree.pos
               )
-           }
+            case _ => EmptyTree
+          }
         }
 
         val tree1 = qual match {
@@ -4419,10 +4422,6 @@ trait Typers extends Modes with Adaptations with Taggings {
 
           var cx = startingIdentContext
           while (defSym == NoSymbol && cx != NoContext && (cx.scope ne null)) { // cx.scope eq null arises during FixInvalidSyms in Duplicators
-            // !!! Shouldn't the argument to compileSourceFor be cx, not context?
-            // I can't tell because those methods do nothing in the standard compiler,
-            // presumably they are overridden in the IDE.
-            currentRun.compileSourceFor(context.asInstanceOf[analyzer.Context], name)
             pre = cx.enclClass.prefix
             defEntry = cx.scope.lookupEntry(name)
             if ((defEntry ne null) && qualifies(defEntry.sym)) {
