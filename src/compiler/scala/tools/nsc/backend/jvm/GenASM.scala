@@ -427,10 +427,11 @@ abstract class GenASM extends SubComponent with BytecodeWriters {
   }
 
   private val majorVersion: Int = (classfileVersion & 0xFF)
+  private val emitStackMapFrame = (majorVersion >= 50)
 
   private val extraProc: Int = mkFlags(
     asm.ClassWriter.COMPUTE_MAXS,
-    if(majorVersion >= 50) asm.ClassWriter.COMPUTE_FRAMES else 0
+    if(emitStackMapFrame) asm.ClassWriter.COMPUTE_FRAMES else 0
   )
 
   val JAVA_LANG_OBJECT = asm.Type.getObjectType("java/lang/Object")
@@ -574,14 +575,14 @@ abstract class GenASM extends SubComponent with BytecodeWriters {
         else                 { sym.javaSimpleName }
       })
 
-      if(hasInternalName) {
+      if(emitStackMapFrame && hasInternalName) {
         val internalName = cachedJN.toString()
         val trackedSym = jsymbol(sym)
         reverseJavaName.get(internalName) match {
           case None         =>
             reverseJavaName.put(internalName, trackedSym)
           case Some(oldsym) =>
-            assert((oldsym == trackedSym) || List(RuntimeNothingClass, RuntimeNullClass).contains(oldsym), // NothingClass, NullClass,
+            assert((oldsym == trackedSym) || (oldsym == RuntimeNothingClass) || (oldsym == RuntimeNullClass), // In contrast, neither NothingClass nor NullClass show up bytecode-level.
                    "how can getCommonSuperclass() do its job if different class symbols get the same bytecode-level internal name.")
         }
       }
@@ -2722,7 +2723,7 @@ abstract class GenASM extends SubComponent with BytecodeWriters {
           // TODO Logical's 2nd elem should be declared ValueTypeKind, to better approximate its allowed values (isIntSized, its comments appears to convey)
           // TODO GenICode uses `toTypeKind` to define that elem, `toValueTypeKind` would be needed instead.
           // TODO How about adding some asserts to Logical and similar ones to capture the remaining constraint (UNIT not allowed).
-          case Logical(op, kind) => (op, kind) match {
+          case Logical(op, kind) => ((op, kind): @unchecked) match {
             case (AND, LONG) => emit(Opcodes.LAND)
             case (AND, INT)  => emit(Opcodes.IAND)
             case (AND, _)    =>
@@ -2742,7 +2743,7 @@ abstract class GenASM extends SubComponent with BytecodeWriters {
               if (kind != BOOL) { emitT2T(INT, kind) }
           }
 
-          case Shift(op, kind) => (op, kind) match {
+          case Shift(op, kind) => ((op, kind): @unchecked) match {
             case (LSL, LONG) => emit(Opcodes.LSHL)
             case (LSL, INT)  => emit(Opcodes.ISHL)
             case (LSL, _) =>
