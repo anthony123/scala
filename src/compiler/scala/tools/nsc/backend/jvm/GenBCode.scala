@@ -413,23 +413,25 @@ abstract class GenBCode extends BCodeUtils {
 
     def genLoadIf(tree: If, expectedType: TypeKind): TypeKind = {
       val If(condp, thenp, elsep) = tree
-      genLoad(condp, BOOL)
-      val postThenPoint = new asm.tree.LabelNode()
-      val jmpOverThen   = new asm.tree.JumpInsnNode(asm.Opcodes.IFEQ, postThenPoint)
-      mnode.instructions.add(jmpOverThen)
 
-      val thenKind = toTypeKind(thenp.tpe)
-      val elseKind = if (elsep.isEmpty) UNIT else toTypeKind(elsep.tpe)
+      val success = new asm.Label
+      val failure = new asm.Label
+
+      val hasElse = !elsep.isEmpty
+      val postIf  = if(hasElse) new asm.Label else failure
+
+      genCond(condp, success, failure)
+
+      val thenKind      = toTypeKind(thenp.tpe)
+      val elseKind      = if (!hasElse) UNIT else toTypeKind(elsep.tpe)
       def hasUnitBranch = (thenKind == UNIT || elseKind == UNIT)
-      val resKind  = if (hasUnitBranch) UNIT else toTypeKind(tree.tpe)
+      val resKind       = if (hasUnitBranch) UNIT else toTypeKind(tree.tpe)
 
+      mnode visitLabel success
       genLoad(thenp, resKind)
-      val postIf = new asm.Label
-      if (!elsep.isEmpty) {
-        bc goTo postIf
-      }
-      mnode.instructions.add(postThenPoint)
-      if (!elsep.isEmpty) {
+      if(hasElse) { bc goTo postIf }
+      mnode visitLabel failure
+      if(hasElse) {
         genLoad(elsep, resKind)
         mnode visitLabel postIf
       }
@@ -453,7 +455,18 @@ abstract class GenBCode extends BCodeUtils {
       else if (code == scalaPrimitives.HASH)   genScalaHash(receiver)
       else if (isArrayOp(code))                genArrayOp(tree, code, expectedType)
       else if (isLogicalOp(code) || isComparisonOp(code)) {
-        genLoad(tree, BOOL)
+        val success, failure, after = new asm.Label
+        genCond(tree, success, failure)
+        // success block
+          mnode visitLabel success
+          bc boolconst true
+          bc goTo after
+        // failure block
+          mnode visitLabel failure
+          bc boolconst false
+        // after
+        mnode visitLabel after
+
         BOOL
       }
       else if (code == scalaPrimitives.SYNCHRONIZED)
@@ -1042,17 +1055,100 @@ abstract class GenBCode extends BCodeUtils {
     /* If l or r is constant null, returns the other ; otherwise null */
     def ifOneIsNull(l: Tree, r: Tree) = if (isNull(l)) r else if (isNull(r)) l else null // TODO de-duplicate with GenICode
 
+    private def genCJUMP(success: asm.Label, failure: asm.Label, op: TestOp, tk: TypeKind) {
+      ???
+    }
+
+    private def genCZJUMP(success: asm.Label, failure: asm.Label, op: TestOp, tk: TypeKind) {
+      ???
+    }
+
+    /**
+     * Generate code for conditional expressions.
+     * The jump targets success/failure of the test are `then-target` and `else-target` resp.
+     */
+    private def genCond(tree: Tree, success: asm.Label, failure: asm.Label) {
+
+          def genComparisonOp(l: Tree, r: Tree, code: Int) {
+            val op: TestOp = code match {
+              case scalaPrimitives.LT => LT
+              case scalaPrimitives.LE => LE
+              case scalaPrimitives.GT => GT
+              case scalaPrimitives.GE => GE
+              case scalaPrimitives.ID | scalaPrimitives.EQ => EQ
+              case scalaPrimitives.NI | scalaPrimitives.NE => NE
+
+              case _ => abort("Unknown comparison primitive: " + code)
+            }
+
+            // special-case reference (in)equality test for null (null eq x, x eq null)
+            lazy val nonNullSide = ifOneIsNull(l, r)
+            if (scalaPrimitives.isReferenceEqualityOp(code) && nonNullSide != null) {
+              genLoad(nonNullSide, ObjectReference)
+              genCZJUMP(success, failure, op, ObjectReference)
+            }
+            else {
+              val tk = getMaxType(l.tpe :: r.tpe :: Nil)
+              genLoad(l, tk)
+              genLoad(r, tk)
+              genCJUMP(success, failure, op, tk)
+            }
+          }
+
+          def default() = {
+            genLoad(tree, BOOL)
+            genCZJUMP(success, failure, NE, BOOL)
+          }
+
+      tree match {
+
+        case Apply(fun, args) if isPrimitive(fun.symbol) =>
+          import scalaPrimitives.{ ZNOT, ZAND, ZOR, EQ, getPrimitive }
+
+          // lhs and rhs of test
+          val Select(lhs, _) = fun
+          val rhs = if(args.isEmpty) EmptyTree else args.head; // args.isEmpty only for ZNOT
+
+              def genZandOrZor(and: Boolean) = { // TODO WRONG
+                // reaching "keepGoing" indicates the rhs should be evaluated too (ie not short-circuited).
+                val keepGoing = new asm.Label
+
+                if (and) genCond(lhs, keepGoing, failure)
+                else     genCond(lhs, success,   keepGoing)
+
+                mnode visitLabel keepGoing
+                genCond(rhs, success, failure)
+              }
+
+          getPrimitive(fun.symbol) match {
+            case ZNOT   => genCond(lhs, failure, success)
+            case ZAND   => genZandOrZor(and = true)
+            case ZOR    => genZandOrZor(and = false)
+            case code   =>
+              if (scalaPrimitives.isUniversalEqualityOp(code) && toTypeKind(lhs.tpe).isReferenceType) {
+                // `lhs` has reference type
+                if (code == EQ) genEqEqPrimitive(lhs, rhs, success, failure)
+                else            genEqEqPrimitive(lhs, rhs, failure, success)
+              }
+              else if (scalaPrimitives.isComparisonOp(code))
+                genComparisonOp(lhs, rhs, code)
+              else
+                default
+          }
+
+        case _ => default
+      }
+
+    } // end of genCond()
+
     /**
      * Generate the "==" code for object references. It is equivalent of
      * if (l eq null) r eq null else l.equals(r);
      *
      * @param l       left-hand side of the '=='
      * @param r       right-hand side of the '=='
-     * @param ctx     current context
-     * @param thenCtx target context if the comparison yields true  TODO
-     * @param elseCtx target context if the comparison yields false TODO
      */
-    def genEqEqPrimitive(l: Tree, r: Tree) {
+    def genEqEqPrimitive(l: Tree, r: Tree, success: asm.Label, failure: asm.Label) {
       ???
     }
 
