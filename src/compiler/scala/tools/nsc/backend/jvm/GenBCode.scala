@@ -57,6 +57,7 @@ abstract class GenBCode extends BCodeUtils {
     private var mnode: asm.tree.MethodNode = null
     private var jMethodName: String        = null
     private var isModuleInitialized        = false // in GenASM this is local to genCode(), ie should get false whenever a new method is emitted (including fabricated ones eg addStaticInit())
+    private var methSymbol: Symbol         = null
 
     // bookkeeping for method-local vars and params
     private val locIdx = mutable.Map.empty[Symbol, Int] // (local-or-param-sym -> index-of-local-in-method)
@@ -245,6 +246,7 @@ abstract class GenBCode extends BCodeUtils {
 
       val params      = vparamss.head
       claszSymbol     = msym.owner
+      methSymbol      = msym
       val Pair(flags, jmethod0) = initJMethod(
         cnode,
         msym, isNative,
@@ -1191,7 +1193,73 @@ abstract class GenBCode extends BCodeUtils {
      * @param r       right-hand-side of the '=='
      */
     def genEqEqPrimitive(l: Tree, r: Tree, success: asm.Label, failure: asm.Label) {
-      ???
+
+        /** True if the equality comparison is between values that require the use of the rich equality
+          * comparator (scala.runtime.Comparator.equals). This is the case when either side of the
+          * comparison might have a run-time type subtype of java.lang.Number or java.lang.Character.
+          * When it is statically known that both sides are equal and subtypes of Number of Character,
+          * not using the rich equality is possible (their own equals method will do ok.)*/
+        def mustUseAnyComparator: Boolean = {
+          def areSameFinals = l.tpe.isFinalType && r.tpe.isFinalType && (l.tpe =:= r.tpe)
+          !areSameFinals && platform.isMaybeBoxed(l.tpe.typeSymbol) && platform.isMaybeBoxed(r.tpe.typeSymbol)
+        }
+
+      if (mustUseAnyComparator) {
+        val equalsMethod = {
+            def default = platform.externalEquals
+            platform match {
+              case x: JavaPlatform =>
+                import x._
+                  if (l.tpe <:< BoxedNumberClass.tpe) {
+                    if (r.tpe <:< BoxedNumberClass.tpe) externalEqualsNumNum
+                    else if (r.tpe <:< BoxedCharacterClass.tpe) externalEqualsNumChar
+                    else externalEqualsNumObject
+                  }
+                  else default
+
+              case _ => default
+            }
+          }
+        genLoad(l, ObjectReference)
+        genLoad(r, ObjectReference)
+        genCallMethod(equalsMethod, Static(false))
+        genCZJUMP(success, failure, NE, BOOL)
+      }
+      else {
+        if (isNull(l)) {
+          // null == expr -> expr eq null
+          genLoad(r, ObjectReference)
+          genCZJUMP(success, failure, EQ, ObjectReference)
+        } else if (isNull(r)) {
+          // expr == null -> expr eq null
+          genLoad(l, ObjectReference)
+          genCZJUMP(success, failure, EQ, ObjectReference)
+        } else {
+          // l == r -> if (l eq null) r eq null else l.equals(r)
+          genLoad(l, ObjectReference)
+          bc dup ObjectReference
+          val lNull    = new asm.Label
+          val lNonNull = new asm.Label
+          genCZJUMP(lNull, lNonNull, EQ, ObjectReference)
+
+          mnode visitLabel lNull
+          bc drop ObjectReference
+          genLoad(r, ObjectReference)
+          genCZJUMP(success, failure, EQ, ObjectReference)
+
+          mnode visitLabel lNonNull
+          // dup of l's value is stack-top
+          genLoad(r, ObjectReference)
+          genCallMethod(Object_equals, Dynamic)
+          genCZJUMP(success, failure, NE, BOOL)
+        }
+      }
+    }
+
+    /** Make a fresh local variable, ensuring a unique name. */
+    def makeLocal(pos: Position, tpe: Type, name: String): Int = {
+      val sym = methSymbol.newVariable(cunit.freshTermName(name), pos, Flags.SYNTHETIC) setInfo tpe
+      index(sym)
     }
 
     /** Does this tree have a try-catch block? */
