@@ -1055,13 +1055,12 @@ abstract class GenBCode extends BCodeUtils {
     /* If l or r is constant null, returns the other ; otherwise null */
     def ifOneIsNull(l: Tree, r: Tree) = if (isNull(l)) r else if (isNull(r)) l else null // TODO de-duplicate with GenICode
 
+    /** Emit code to compare the two top-most stack values using the 'op' operator. */
     private def genCJUMP(success: asm.Label, failure: asm.Label, op: TestOp, tk: TypeKind) {
       if(tk.isIntSizedType) { // BOOL, BYTE, CHAR, SHORT, or INT
         bc.emitIF_ICMP(op, success)
-        bc goTo failure
       } else if(tk.isRefOrArrayType) { // REFERENCE(_) | ARRAY(_)
         bc.emitIF_ACMP(op, success)
-        bc goTo failure
       } else {
         (tk: @unchecked) match {
           case LONG   => emit(asm.Opcodes.LCMP)
@@ -1073,22 +1072,20 @@ abstract class GenBCode extends BCodeUtils {
             else                      emit(asm.Opcodes.DCMPL)
         }
         bc.emitIF(op, success)
-        bc goTo failure
       }
+      bc goTo failure
     }
 
     /** Emits code to compare (and consume) stack-top and zero using the 'op' operator */
     private def genCZJUMP(success: asm.Label, failure: asm.Label, op: TestOp, tk: TypeKind) {
       if(tk.isIntSizedType) { // BOOL, BYTE, CHAR, SHORT, or INT
         bc.emitIF(op, success)
-        bc goTo failure
       } else if(tk.isRefOrArrayType) { // REFERENCE(_) | ARRAY(_)
         // @unchecked because references aren't compared with GT, GE, LT, LE.
         (op : @unchecked) match {
           case EQ => bc emitIFNULL    success
           case NE => bc emitIFNONNULL success
         }
-        bc goTo failure
       } else {
         (tk: @unchecked) match {
           case LONG   =>
@@ -1104,8 +1101,8 @@ abstract class GenBCode extends BCodeUtils {
             else                      emit(asm.Opcodes.DCMPL)
         }
         bc.emitIF(op, success)
-        bc goTo failure
       }
+      bc goTo failure
     }
 
     /**
