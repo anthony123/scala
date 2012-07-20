@@ -1056,11 +1056,56 @@ abstract class GenBCode extends BCodeUtils {
     def ifOneIsNull(l: Tree, r: Tree) = if (isNull(l)) r else if (isNull(r)) l else null // TODO de-duplicate with GenICode
 
     private def genCJUMP(success: asm.Label, failure: asm.Label, op: TestOp, tk: TypeKind) {
-      ???
+      if(tk.isIntSizedType) { // BOOL, BYTE, CHAR, SHORT, or INT
+        bc.emitIF_ICMP(op, success)
+        bc goTo failure
+      } else if(tk.isRefOrArrayType) { // REFERENCE(_) | ARRAY(_)
+        bc.emitIF_ACMP(op, success)
+        bc goTo failure
+      } else {
+        (tk: @unchecked) match {
+          case LONG   => emit(asm.Opcodes.LCMP)
+          case FLOAT  =>
+            if (op == LT || op == LE) emit(asm.Opcodes.FCMPG)
+            else                      emit(asm.Opcodes.FCMPL)
+          case DOUBLE =>
+            if (op == LT || op == LE) emit(asm.Opcodes.DCMPG)
+            else                      emit(asm.Opcodes.DCMPL)
+        }
+        bc.emitIF(op, success)
+        bc goTo failure
+      }
     }
 
+    /** Emits code to compare (and consume) stack-top and zero using the 'op' operator */
     private def genCZJUMP(success: asm.Label, failure: asm.Label, op: TestOp, tk: TypeKind) {
-      ???
+      if(tk.isIntSizedType) { // BOOL, BYTE, CHAR, SHORT, or INT
+        bc.emitIF(op, success)
+        bc goTo failure
+      } else if(tk.isRefOrArrayType) { // REFERENCE(_) | ARRAY(_)
+        // @unchecked because references aren't compared with GT, GE, LT, LE.
+        (op : @unchecked) match {
+          case EQ => bc emitIFNULL    success
+          case NE => bc emitIFNONNULL success
+        }
+        bc goTo failure
+      } else {
+        (tk: @unchecked) match {
+          case LONG   =>
+            emit(asm.Opcodes.LCONST_0)
+            emit(asm.Opcodes.LCMP)
+          case FLOAT  =>
+            emit(asm.Opcodes.FCONST_0)
+            if (op == LT || op == LE) emit(asm.Opcodes.FCMPG)
+            else                      emit(asm.Opcodes.FCMPL)
+          case DOUBLE =>
+            emit(asm.Opcodes.DCONST_0)
+            if (op == LT || op == LE) emit(asm.Opcodes.DCMPG)
+            else                      emit(asm.Opcodes.DCMPL)
+        }
+        bc.emitIF(op, success)
+        bc goTo failure
+      }
     }
 
     /**
@@ -1070,7 +1115,7 @@ abstract class GenBCode extends BCodeUtils {
     private def genCond(tree: Tree, success: asm.Label, failure: asm.Label) {
 
           def genComparisonOp(l: Tree, r: Tree, code: Int) {
-            val op: TestOp = code match {
+            val op: TestOp = (code: @switch) match {
               case scalaPrimitives.LT => LT
               case scalaPrimitives.LE => LE
               case scalaPrimitives.GT => GT
@@ -1145,8 +1190,8 @@ abstract class GenBCode extends BCodeUtils {
      * Generate the "==" code for object references. It is equivalent of
      * if (l eq null) r eq null else l.equals(r);
      *
-     * @param l       left-hand side of the '=='
-     * @param r       right-hand side of the '=='
+     * @param l       left-hand-side  of the '=='
+     * @param r       right-hand-side of the '=='
      */
     def genEqEqPrimitive(l: Tree, r: Tree, success: asm.Label, failure: asm.Label) {
       ???
