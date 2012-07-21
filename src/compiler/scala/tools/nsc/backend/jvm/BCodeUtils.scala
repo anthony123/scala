@@ -2287,14 +2287,19 @@ abstract class BCodeUtils extends SubComponent with BytecodeWriters {
     var acc: List[LabelDef] = Nil
     override def traverse(tree: Tree) {
       val saved = acc
+      acc = Nil
       super.traverse(tree)
-      // acc contains any LabelDefs found under (but not at) `tree`
+      // acc contains all LabelDefs found under (but not at) `tree`
       tree match {
         case lblDf: LabelDef => acc ::= lblDf
         case _               => ()
       }
-      if(acc.nonEmpty) { result += (tree -> acc) }
-      acc = saved
+      if(acc.isEmpty) {
+        acc = saved
+      } else {
+        result += (tree -> acc)
+        acc = acc ::: saved
+      }
     }
   }
 
