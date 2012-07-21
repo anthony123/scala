@@ -59,17 +59,44 @@ abstract class GenBCode extends BCodeUtils {
     private var isModuleInitialized        = false // in GenASM this is local to genCode(), ie should get false whenever a new method is emitted (including fabricated ones eg addStaticInit())
     private var methSymbol: Symbol         = null
 
+    // bookkeeping for program labels within a method.
+    private var locLabel: Map[ /* LabelDef */ Symbol, asm.Label ] = null
+    def programPoint(labelSym: Symbol): asm.Label = {
+      locLabel.getOrElse(labelSym, {
+        val pp = new asm.Label
+        locLabel += (labelSym -> pp)
+        pp
+      })
+    }
+
     // bookkeeping for method-local vars and params
     private val locIdx = mutable.Map.empty[Symbol, Int] // (local-or-param-sym -> index-of-local-in-method)
     private var nxtIdx = -1 // next available index for local-var
     private def sizeOf(k: TypeKind): Int = if(k.isWideType) 2 else 1
-    private def index(sym: Symbol): Int = {
+    def index(sym: Symbol): Int = {
       locIdx.getOrElseUpdate(sym, {
         val idx = nxtIdx;
         assert(idx != -1, "GenBCode.index() run before GenBCode.genDedDef()")
         nxtIdx += sizeOf(toTypeKind(sym.info))
         idx
       })
+    }
+
+    // bookkeeping: all LabelDefs a method contains (useful when duplicating any `finally` clauses containing one or more LabelDef)
+    var labelDefsAtOrUnder: collection.Map[Tree, List[LabelDef]] = null
+    var labelDef: collection.Map[Symbol, LabelDef] = null// (LabelDef-sym -> LabelDef)
+
+    // on entering a method
+    private def resetMethodBookkeeping(dd: DefDef) {
+      locIdx.clear()
+      locLabel = immutable.Map.empty[ /* LabelDef */ Symbol, asm.Label ]
+      // populate labelDefsAtOrUnder
+      val ldf = new LabelDefsFinder
+      ldf.traverse(dd.rhs)
+      labelDefsAtOrUnder = ldf.result.withDefaultValue(Nil)
+      labelDef = labelDefsAtOrUnder(dd.rhs).map(ld => (ld.symbol -> ld)).toMap
+      // TODO local-ranges table
+      // TODO exh-handlers table
     }
 
     override def getCurrentCUnit(): CompilationUnit = { cunit }
@@ -235,9 +262,7 @@ abstract class GenBCode extends BCodeUtils {
       assert(mnode == null, "GenBCode detected nested method.")
       val msym = dd.symbol
       // clear method-specific stuff
-      locIdx.clear()
-          // TODO local-ranges table
-          // TODO exh-handlers table
+      resetMethodBookkeeping(dd)
 
       val DefDef(_, _, _, vparamss, _, rhs) = dd
       assert(vparamss.isEmpty || vparamss.tail.isEmpty, "Malformed parameter list: " + vparamss)
@@ -258,13 +283,25 @@ abstract class GenBCode extends BCodeUtils {
       jMethodName = javaName(msym)
       isModuleInitialized = false
 
-      // add params
+      // add method-local vars for params
       nxtIdx = if (msym.isStaticMember) 0 else 1;
       for (p <- params) {
         val tk = toTypeKind(p.symbol.info)
         locIdx += (p.symbol -> nxtIdx)
         nxtIdx += sizeOf(tk)
       }
+      /* Add method-local vars for LabelDef-params.
+       *
+       * This makes sure that:
+       *   (1) upon visiting any "forward-jumping" Apply (ie visited before its target LabelDef), and after
+       *   (2) grabbing the corresponding param symbols,
+       * those param-symbols can be used to access method-local vars.
+       *
+       * When duplicating a finally-contained LabelDef, another program-point is needed for the copy (each such copy has its own asm.Label),
+       * but the same vars (given by the LabelDef's params) can be reused,
+       * because no LabelDef ends up nested within itself after such duplication.
+       */
+      for(ld <- labelDefsAtOrUnder(dd.rhs); p <- ld.params) { index(p.symbol) }
 
       val returnType =
         if (msym.isConstructor) UNIT
@@ -489,7 +526,7 @@ abstract class GenBCode extends BCodeUtils {
       var generatedType = expectedType
 
       tree match {
-        case lblDf : LabelDef => genLabelDef(lblDf)
+        case lblDf : LabelDef => genLabelDef(lblDf, expectedType)
 
         case ValDef(_, nme.THIS, _, _) =>
           debuglog("skipping trivial assign to _$this: " + tree)
@@ -605,8 +642,11 @@ abstract class GenBCode extends BCodeUtils {
 
     } // end of GenBCode.genLoad()
 
-    private def genLabelDef(lblDf: LabelDef) {
-      ???
+    private def genLabelDef(lblDf: LabelDef, expectedType: TypeKind) {
+      // duplication of `finally`-contained LabelDefs is handled when emitting a RET. No bookkeeping for that required here.
+      // no need to call index() over lblDf.params, on first access that magic happens (moreover, no LocalVariableTable entries needed for them).
+      mnode visitLabel programPoint(lblDf.symbol)
+      genLoad(lblDf.rhs, expectedType)
     }
 
     private def genReturn(r: Return) {
@@ -727,7 +767,8 @@ abstract class GenBCode extends BCodeUtils {
           val sym = fun.symbol
 
           if (sym.isLabel) {  // jump to a label
-            ???
+            genLoadLabelArguments(args, labelDef(sym), tree.pos)
+            bc goTo programPoint(sym)
           } else if (isPrimitive(sym)) { // primitive method call
             generatedType = genPrimitiveOp(app, expectedType)
           } else {  // normal method call
@@ -889,8 +930,35 @@ abstract class GenBCode extends BCodeUtils {
     }
 
     /** Generate code that loads args into label parameters. */
-    def genLoadLabelArguments(args: List[Tree], labelSym: Symbol) {
-      ???
+    def genLoadLabelArguments(args: List[Tree], lblDef: LabelDef, gotoPos: Position) {
+      assert(args forall { a => a.hasSymbolWhich( s => !s.isLabel) }, "SI-6089 at: " + gotoPos) // SI-6089
+      val params: List[Symbol] = lblDef.params.map(_.symbol)
+      assert(args.length == params.length, "Wrong number of arguments in call to label at: " + gotoPos)
+
+          def isTrivial(kv: (Tree, Symbol)) = kv match {
+            case (This(_), p) if p.name == nme.THIS     => true
+            case (arg @ Ident(_), p) if arg.symbol == p => true
+            case _                                      => false
+          }
+
+      val aps = ((args zip params) filterNot isTrivial)
+
+      // first push *all* arguments. This makes sure any labelDef-var will use the previous value.
+      aps foreach {
+        case (arg, param) =>
+          val localTK = toTypeKind(param.info) // TODO a map (local-sym, TypeKind) would save recomputing tk.
+          genLoad(arg, localTK)
+      }
+
+      // second assign one by one to the LabelDef's variables.
+      aps.reverse foreach {
+        case (_, param) =>
+          val localTK = toTypeKind(param.info) // TODO a map (local-sym, TypeKind) would save recomputing tk.
+          // TODO FIXME a "this" param results from tail-call xform. If so, the `else` branch seems perfectly fine. And the `then` branch must be wrong.
+          if (param.name == nme.THIS) mnode.visitVarInsn(asm.Opcodes.ASTORE, 0)
+          else bc.store(index(param), localTK)
+      }
+
     }
 
     def genLoadArguments(args: List[Tree], tpes: List[Type]) {

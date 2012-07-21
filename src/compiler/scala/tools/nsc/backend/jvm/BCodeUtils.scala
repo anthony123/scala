@@ -2274,4 +2274,28 @@ abstract class BCodeUtils extends SubComponent with BytecodeWriters {
 
   } // end of trait JAndroidBuilder
 
+  /**
+   * Collects (in `result`) all LabelDef nodes enclosed (directly or not) by each node it visits.
+   *
+   * In other words, this traverser prepares a map giving
+   * all labelDefs (the entry-value) having a Tree node (the entry-key) as ancestor.
+   * The entry-value for a LabelDef entry-key always contains the entry-key.
+   *
+   * */
+  class LabelDefsFinder extends Traverser {
+    val result = mutable.Map.empty[Tree, List[LabelDef]]
+    var acc: List[LabelDef] = Nil
+    override def traverse(tree: Tree) {
+      val saved = acc
+      super.traverse(tree)
+      // acc contains any LabelDefs found under (but not at) `tree`
+      tree match {
+        case lblDf: LabelDef => acc ::= lblDf
+        case _               => ()
+      }
+      if(acc.nonEmpty) { result += (tree -> acc) }
+      acc = saved
+    }
+  }
+
 } // end of class BCodeUtils
