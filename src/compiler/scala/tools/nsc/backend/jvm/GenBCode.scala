@@ -13,7 +13,6 @@ import scala.collection.mutable.{ ListBuffer, Buffer }
 import scala.tools.nsc.symtab._
 import scala.annotation.switch
 import scala.tools.asm
-import asm.tree.{JumpInsnNode, LabelNode, ClassNode}
 
 /** Prepare in-memory representations of classfiles using the ASM Tree API, and serialize them to disk.
  *
@@ -70,36 +69,40 @@ abstract class GenBCode extends BCodeUtils {
     }
 
     // bookkeeping for method-local vars and params
-    private val locIdx = mutable.Map.empty[Symbol, Int] // (local-or-param-sym -> index-of-local-in-method)
+    private val locals = mutable.Map.empty[Symbol, Local] // (local-or-param-sym -> Local(TypeKind, name, idx))
     private var nxtIdx = -1 // next available index for local-var
     private def sizeOf(k: TypeKind): Int = if(k.isWideType) 2 else 1
     def index(sym: Symbol): Int = {
-      locIdx.getOrElseUpdate(sym, {
-        val idx = nxtIdx;
-        assert(idx != -1, "GenBCode.index() run before GenBCode.genDedDef()")
-        nxtIdx += sizeOf(toTypeKind(sym.info))
-        idx
-      })
+      locals.getOrElseUpdate(sym, makeLocal(sym)).idx
     }
 
     // bookkeeping: all LabelDefs a method contains (useful when duplicating any `finally` clauses containing one or more LabelDef)
     var labelDefsAtOrUnder: collection.Map[Tree, List[LabelDef]] = null
     var labelDef: collection.Map[Symbol, LabelDef] = null// (LabelDef-sym -> LabelDef)
 
+    /* bookkeeping the scopes of non-synthetic local vars, to emit debug info (`emitVars`). */
+    var varsInScope: immutable.Map[Symbol, asm.Label] = null // (local-var-sym -> start-of-scope)
+
     // on entering a method
     private def resetMethodBookkeeping(dd: DefDef) {
-      locIdx.clear()
+      locals.clear()
       locLabel = immutable.Map.empty[ /* LabelDef */ Symbol, asm.Label ]
       // populate labelDefsAtOrUnder
       val ldf = new LabelDefsFinder
       ldf.traverse(dd.rhs)
       labelDefsAtOrUnder = ldf.result.withDefaultValue(Nil)
       labelDef = labelDefsAtOrUnder(dd.rhs).map(ld => (ld.symbol -> ld)).toMap
-      // TODO local-ranges table
+      assert(varsInScope == null, "Unbalanced entering/exiting of GenBCode's genBlock().")
       // TODO exh-handlers table
     }
 
     override def getCurrentCUnit(): CompilationUnit = { cunit }
+
+    def currProgramPoint(): asm.Label = {
+      val pp = new asm.Label
+      mnode visitLabel pp
+      pp
+    }
 
     override def run() {
       scalaPrimitives.init
@@ -285,11 +288,7 @@ abstract class GenBCode extends BCodeUtils {
 
       // add method-local vars for params
       nxtIdx = if (msym.isStaticMember) 0 else 1;
-      for (p <- params) {
-        val tk = toTypeKind(p.symbol.info)
-        locIdx += (p.symbol -> nxtIdx)
-        nxtIdx += sizeOf(tk)
-      }
+      for (p <- params) { makeLocal(p.symbol) }
       /* Add method-local vars for LabelDef-params.
        *
        * This makes sure that:
@@ -301,13 +300,17 @@ abstract class GenBCode extends BCodeUtils {
        * but the same vars (given by the LabelDef's params) can be reused,
        * because no LabelDef ends up nested within itself after such duplication.
        */
-      for(ld <- labelDefsAtOrUnder(dd.rhs); p <- ld.params) { index(p.symbol) }
+      for(ld <- labelDefsAtOrUnder(dd.rhs); p <- ld.params) {
+        assert(!locals.contains(p.symbol), "supposedly the first time sym was seen, but no, couldn't be that way, at: " + ld.pos)
+        makeLocal(p.symbol)
+      }
 
       val returnType =
         if (msym.isConstructor) UNIT
         else toTypeKind(msym.info.resultType)
 
       if (!isAbstractMethod && !isNative) {
+        val veryFirstProgramPoint = currProgramPoint()
         genLoad(rhs, returnType)
         // TODO see JPlainBuilder.addAndroidCreatorCode()
         rhs match {
@@ -320,6 +323,18 @@ abstract class GenBCode extends BCodeUtils {
             )
           case _ =>
             bc emitRETURN returnType
+        }
+        if(emitVars) {
+          // add entries to LocalVariableTable JVM attribute
+          val onePastLastProgramPoint = currProgramPoint()
+          val hasStaticBitSet = ((flags & asm.Opcodes.ACC_STATIC) != 0)
+          if (!hasStaticBitSet) {
+            mnode.visitLocalVariable("this", thisDescr(thisName), null, veryFirstProgramPoint, onePastLastProgramPoint, 0)
+          }
+          for (p <- params) {
+            val Local(tk, name, idx) = locals(p.symbol)
+            mnode.visitLocalVariable(name, descriptor(tk), null, veryFirstProgramPoint, onePastLastProgramPoint, idx)
+          }
         }
       }
       mnode = null
@@ -533,12 +548,12 @@ abstract class GenBCode extends BCodeUtils {
 
         case ValDef(_, _, _, rhs) =>
           val sym = tree.symbol
-          val tk  = toTypeKind(sym.info)
+          assert(!locals.contains(sym), "supposedly the first time sym was seen, but no, couldn't be that way, at: " + tree.pos)
+          val Local(tk, _, idx) = makeLocal(sym)
           if (rhs == EmptyTree) { bc.genConstant(getZeroOf(tk)) }
           else { genLoad(rhs, tk) }
-          assert(!locIdx.contains(sym), "supposedly the first time sym was seen, but no, couldn't be that way.")
-          bc.store(index(sym), tk)
-          // TODO ctx1.scope.add(local)
+          varsInScope += (sym -> currProgramPoint())
+          bc.store(idx, tk)
           generatedType = UNIT
 
         case t : If =>
@@ -614,7 +629,7 @@ abstract class GenBCode extends BCodeUtils {
             case _                  => bc.genConstant(value);            generatedType = toTypeKind(tree.tpe)
           }
 
-        case blck : Block => genBlock(blck)
+        case blck : Block => genBlock(blck, expectedType)
 
         case Typed(Super(_, _), _) => genLoad(This(claszSymbol), expectedType)
 
@@ -896,8 +911,20 @@ abstract class GenBCode extends BCodeUtils {
       generatedType
     }
 
-    private def genBlock(blck: Block) {
-      ???
+    def genBlock(tree: Block, expectedType: TypeKind) {
+      val Block(stats, expr) = tree
+      val savedScope = varsInScope
+      varsInScope = immutable.Map.empty[Symbol, asm.Label]
+      stats foreach genStat
+      genLoad(expr, expectedType)
+      val end = currProgramPoint()
+      if(emitVars) { // add entries to LocalVariableTable JVM attribute
+        for (Pair(sym, start) <- varsInScope) {
+          val Local(tk, name, idx) = locals(sym)
+          mnode.visitLocalVariable(name, descriptor(tk), null, start, end, idx)
+        }
+      }
+      varsInScope = savedScope
     }
 
     def adapt(from: TypeKind, to: TypeKind, pos: Position): Unit = {
@@ -944,19 +971,14 @@ abstract class GenBCode extends BCodeUtils {
       val aps = ((args zip params) filterNot isTrivial)
 
       // first push *all* arguments. This makes sure any labelDef-var will use the previous value.
-      aps foreach {
-        case (arg, param) =>
-          val localTK = toTypeKind(param.info) // TODO a map (local-sym, TypeKind) would save recomputing tk.
-          genLoad(arg, localTK)
-      }
+      aps foreach { case (arg, param) => genLoad(arg, locals(param).tk) }
 
       // second assign one by one to the LabelDef's variables.
       aps.reverse foreach {
         case (_, param) =>
-          val localTK = toTypeKind(param.info) // TODO a map (local-sym, TypeKind) would save recomputing tk.
           // TODO FIXME a "this" param results from tail-call xform. If so, the `else` branch seems perfectly fine. And the `then` branch must be wrong.
           if (param.name == nme.THIS) mnode.visitVarInsn(asm.Opcodes.ASTORE, 0)
-          else bc.store(index(param), localTK)
+          else bc.store(index(param), locals(param).tk)
       }
 
     }
@@ -1325,10 +1347,21 @@ abstract class GenBCode extends BCodeUtils {
       }
     }
 
-    /** Make a fresh local variable, ensuring a unique name. */
-    def makeLocal(pos: Position, tpe: Type, name: String): Int = {
-      val sym = methSymbol.newVariable(cunit.freshTermName(name), pos, Flags.SYNTHETIC) setInfo tpe
-      index(sym)
+    /** Make a fresh local variable, ensuring a unique name.
+     *  The invoker must make sure javaName() is called on the sym's tpe (so as to track any inner classes). */
+    def makeLocal(tpe: Type, name: String): Symbol = {
+      val sym = methSymbol.newVariable(cunit.freshTermName(name), NoPosition, Flags.SYNTHETIC) setInfo tpe
+      sym
+    }
+
+    def makeLocal(sym: Symbol): Local = {
+      assert(!locals.contains(sym), "attempt to create duplicate local var.")
+      assert(nxtIdx != -1, "not a valid start index")
+      val tk  = toTypeKind(sym.info)
+      val loc = Local(tk, javaName(sym), nxtIdx)
+      locals += (sym -> loc)
+      nxtIdx += sizeOf(tk)
+      loc
     }
 
     /** Does this tree have a try-catch block? */
@@ -1346,6 +1379,7 @@ abstract class GenBCode extends BCodeUtils {
     case class MonitorRelease(v: Symbol) extends Cleanup(v) { }
     case class Finalizer(f: Tree) extends Cleanup (f) { }
 
+    case class Local(tk: TypeKind, name: String, idx: Int)
 
   } // end of class BCodePhase
 
