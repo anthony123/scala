@@ -134,9 +134,12 @@ abstract class GenBCode extends BCodeUtils {
       assert(varsInScope == null, "Unbalanced entering/exiting of GenBCode's genBlock().")
       // check previous invocation of genDefDef unregistered as many cleanups as it registered.
       assert(cleanups == Nil, "Previous invocation of genDefDef didn't unregister as many cleanups as it registered.")
+      isModuleInitialized = false
     }
 
     override def getCurrentCUnit(): CompilationUnit = { cunit }
+
+    def isParcelableClass = isAndroidParcelableClass(claszSymbol)
 
     override def run() {
       scalaPrimitives.init
@@ -170,39 +173,35 @@ abstract class GenBCode extends BCodeUtils {
           pkg.pop()
 
         case cd: ClassDef =>
+          claszSymbol = cd.symbol
           // mirror class, if needed
-          if (isStaticModule(cd.symbol) && isTopLevelModule(cd.symbol)) {
-            if (cd.symbol.companionClass == NoSymbol) {
-              mirrorCodeGen.genMirrorClass(cd.symbol, cunit)
+          if (isStaticModule(claszSymbol) && isTopLevelModule(claszSymbol)) {
+            if (claszSymbol.companionClass == NoSymbol) {
+              mirrorCodeGen.genMirrorClass(claszSymbol, cunit)
             } else {
-              log("No mirror class for module with linked class: " + cd.symbol.fullName)
+              log("No mirror class for module with linked class: " + claszSymbol.fullName)
             }
           }
           // "plain" class
           genPlainClass(cd)
           // bean info class, if needed
-          if (cd.symbol hasAnnotation BeanInfoAttr) {
+          if (claszSymbol hasAnnotation BeanInfoAttr) {
             beanInfoCodeGen.genBeanInfoClass(
-              cd.symbol, cunit,
-              fieldSymbols(cd.symbol),
-              methodSymbols(cd) filterNot skipMethod
+              claszSymbol, cunit,
+              fieldSymbols(claszSymbol),
+              methodSymbols(cd)
             )
           }
 
-        case ModuleDef(mods, name, impl) =>
-          abort("Modules should have been eliminated by refchecks: " + tree)
+        case _: ModuleDef => abort("Modules should have been eliminated by refchecks: " + tree)
 
-        case ValDef(mods, name, tpt, rhs) =>
-          () // fields are added in the case handler for ClassDef
+        case ValDef(mods, name, tpt, rhs) => () // fields are added in the case handler for ClassDef
 
-        case dd : DefDef =>
-          if(!skipMethod(dd.symbol)) { genDefDef(dd) }
+        case dd : DefDef => genDefDef(dd)
 
-        case Template(_, _, body) =>
-          body foreach gen
+        case Template(_, _, body) => body foreach gen
 
-        case _ =>
-          abort("Illegal tree in gen: " + tree)
+        case _ => abort("Illegal tree in gen: " + tree)
       }
     } // end of method gen(Tree)
 
@@ -231,15 +230,13 @@ abstract class GenBCode extends BCodeUtils {
       cnode = new asm.tree.ClassNode()
       initJClass(cnode, csym, thisName, getGenericSignature(csym, csym.owner), cunit)
 
-      /* TODO
-       *       val scOpt = c.lookupStaticCtor
-       *       isModuleInitialized = false
-       *       if (isStaticModule(c.symbol) || isAndroidParcelableClass(c.symbol)) {
-       *         addStaticInit(scOpt)
-       *       } else if (scOpt.isDefined) {
-       *         addStaticInit(scOpt)
-       *       }
-       **/
+      val hasStaticCtor = methodSymbols(cd) exists (_.isStaticConstructor)
+      if(!hasStaticCtor) {
+        // but needs one ...
+        if(isStaticModule(claszSymbol) || isAndroidParcelableClass(claszSymbol)) {
+          fabricateStaticInit()
+        }
+      }
 
       addSerialVUID(csym, cnode)
       addClassFields(csym)
@@ -247,13 +244,40 @@ abstract class GenBCode extends BCodeUtils {
       addInnerClasses(csym, cnode)
 
       /*
-       * TODO this is the time for collapsing of jump-chains, dce, locals optimization, etc. on the asm.tree.ClassNode.
+       * TODO this is a good time to collapse jump-chains, perform dce and remove unused locals, on the asm.tree.ClassNode.
        * See Ch. 8. "Method Analysis" in the ASM User Guide, http://download.forge.objectweb.org/asm/asm4-guide.pdf
        **/
       writeIfNotTooBig("" + csym.name, thisName, cnode, csym)
       cnode = null
 
+      assert(cd.symbol == claszSymbol, "Someone messed up BCodePhase.claszSymbol during genPlainClass().")
+
     } // end of method genPlainClass()
+
+    /** TODO document, explain interplay with `appendToStaticCtor()` */
+    private def fabricateStaticInit() {
+
+      val clinit: asm.MethodVisitor = cnode.visitMethod(
+        PublicStatic, // TODO confirm whether we really don't want ACC_SYNTHETIC nor ACC_DEPRECATED
+        CLASS_CONSTRUCTOR_NAME,
+        mdesc_arglessvoid,
+        null, // no java-generic-signature
+        null  // no throwable exceptions
+      )
+      clinit.visitCode()
+
+      /* "legacy static initialization" */
+      if (isStaticModule(claszSymbol)) {
+        clinit.visitTypeInsn(asm.Opcodes.NEW, thisName)
+        clinit.visitMethodInsn(asm.Opcodes.INVOKESPECIAL,
+                               thisName, INSTANCE_CONSTRUCTOR_NAME, mdesc_arglessvoid)
+      }
+      if (isParcelableClass) { legacyAddCreatorCode(clinit, cnode, claszSymbol, thisName) }
+      clinit.visitInsn(asm.Opcodes.RETURN)
+
+      clinit.visitMaxs(0, 0) // just to follow protocol, dummy arguments
+      clinit.visitEnd()
+    }
 
     private def fieldSymbols(cls: Symbol): List[Symbol] = {
       for (f <- cls.info.decls.toList ; if !f.isMethod && f.isTerm && !f.isModule) yield f;
@@ -296,6 +320,9 @@ abstract class GenBCode extends BCodeUtils {
     @inline final def emit(opc: Int) { mnode.visitInsn(opc) }
 
     def genDefDef(dd: DefDef) {
+      // the only method whose implementation is not emitted: getClass()
+      if(definitions.isGetClass(dd.symbol)) { return }
+
       assert(mnode == null, "GenBCode detected nested method.")
       val msym = dd.symbol
       // clear method-specific stuff
@@ -307,7 +334,6 @@ abstract class GenBCode extends BCodeUtils {
       val isAbstractMethod = msym.isDeferred || msym.owner.isInterface
 
       val params      = vparamss.head
-      claszSymbol     = msym.owner
       methSymbol      = msym
       val Pair(flags, jmethod0) = initJMethod(
         cnode,
@@ -318,7 +344,6 @@ abstract class GenBCode extends BCodeUtils {
       )
       mnode       = jmethod0.asInstanceOf[asm.tree.MethodNode]
       jMethodName = javaName(msym)
-      isModuleInitialized = false
 
       // add method-local vars for params
       nxtIdx = if (msym.isStaticMember) 0 else 1;
@@ -367,13 +392,49 @@ abstract class GenBCode extends BCodeUtils {
           }
           for (p <- params) { emitLocalVarScope(p.symbol, veryFirstProgramPoint, onePastLastProgramPoint) }
         }
+
+        if(methSymbol.isStaticConstructor) {
+          appendToStaticCtor(dd)
+        }
+
       }
       mnode = null
     } // end of method genDefDef()
 
+    /** TODO document, explain interplay with `fabricateStaticInit()` */
+    private def appendToStaticCtor(dd: DefDef) {
+      val last = mnode.instructions.getLast()
+      assert(last.getOpcode() == asm.Opcodes.RETURN)
+      mnode.instructions.remove(last)
+      assert(mnode.instructions.toArray.forall(_.getOpcode != asm.Opcodes.RETURN),
+             "The assumption that a static-ctor has only one RETURN and it's the last instruction doesn't hold at: " + dd.pos)
+      // TODO In other words, we assume there's only one RETURN and it's the last instruction. More robust would be for the code below to appear in `genReturn()`.
+      if (isStaticModule(claszSymbol)) {
+        // call object's private ctor from static ctor
+        val className = javaName(methSymbol.enclClass)
+        mnode.visitTypeInsn(asm.Opcodes.NEW, className)
+        genCallMethod(methSymbol.enclClass.primaryConstructor, Static(true))
+      }
+      if (isParcelableClass) { addAndroidCreatorCode() }
+      mnode.visitInsn(asm.Opcodes.RETURN)
+    }
+
     private def emitLocalVarScope(sym: Symbol, start: asm.Label, end: asm.Label) {
       val Local(tk, name, idx) = locals(sym)
       mnode.visitLocalVariable(name, descriptor(tk), null, start, end, idx)
+    }
+
+    /** TODO document */
+    private def addAndroidCreatorCode() {
+      val fieldName   = newTermName(androidFieldName)
+      val fieldAccess = asm.Opcodes.ACC_STATIC | asm.Opcodes.ACC_FINAL
+      val fieldType   = javaName(AndroidCreatorClass) // tracks inner classes if any.
+      val fieldDescr  = descriptor(AndroidCreatorClass.tpe)
+      cnode.visitField(fieldAccess, fieldName, fieldDescr, null, null)
+
+      val methodSymbol = definitions.getMember(claszSymbol.companionModule, androidFieldName)
+      genCallMethod(methodSymbol, Static(false))
+      mnode.visitFieldInsn(asm.Opcodes.PUTSTATIC, thisName, fieldName, fieldDescr)
     }
 
     /**

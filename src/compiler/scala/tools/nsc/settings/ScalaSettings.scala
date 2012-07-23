@@ -229,5 +229,9 @@ trait ScalaSettings extends AbsScalaSettings
   def isScaladoc = false
 
   /** Test whether GenBCode will run instead of GenASM */
-  def isBCodeActive = !(optimiseSettings.exists(_.value))
+  def isBCodeActive = !mustUseGenJVM && !mustUseGenASM && canUseBCode
+
+  def canUseBCode   = !(optimiseSettings.exists(_.value))
+  def mustUseGenJVM = (target.value == "jvm-1.5-fjbg")
+  def mustUseGenASM = (target.value == "jvm-1.5-asm")
 }

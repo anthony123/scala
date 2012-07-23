@@ -610,13 +610,6 @@ class Global(var currentSettings: Settings, var reporter: Reporter)
     val runsRightAfter = None
   } with CleanUp
 
-  // phaseName = "bcode"
-  object genBCode extends {
-    val global: Global.this.type = Global.this
-    val runsAfter = List("cleanup")
-    val runsRightAfter = None
-  } with GenBCode
-
   // phaseName = "icode"
   object genicode extends {
     val global: Global.this.type = Global.this
@@ -665,6 +658,13 @@ class Global(var currentSettings: Settings, var reporter: Reporter)
     val runsAfter = List("dce")
     val runsRightAfter = None
   } with GenASM
+
+  // phaseName = "bcode"
+  object genBCode extends {
+    val global: Global.this.type = Global.this
+    val runsAfter = List("dce")
+    val runsRightAfter = None
+  } with GenBCode
 
   // This phase is optional: only added if settings.make option is given.
   // phaseName = "dependencyAnalysis"

@@ -2233,7 +2233,7 @@ abstract class BCodeUtils extends SubComponent with BytecodeWriters {
 
     // TODO see JPlainBuilder.addAndroidCreatorCode()
 
-    def legacyAddCreatorCode(clinit: asm.MethodVisitor, jclass: asm.ClassWriter, csym: Symbol, thisName: String) {
+    def legacyAddCreatorCode(clinit: asm.MethodVisitor, jclass: asm.ClassVisitor, csym: Symbol, thisName: String) {
       val creatorType: asm.Type = javaType(AndroidCreatorClass)
       val tdesc_creator = creatorType.getDescriptor
 
