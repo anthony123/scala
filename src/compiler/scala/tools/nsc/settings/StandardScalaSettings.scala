@@ -42,7 +42,7 @@ trait StandardScalaSettings {
   val print =          BooleanSetting ("-print", "Print program with Scala-specific features removed.")
   val target =          ChoiceSetting ("-target", "target", "Target platform for object files.",
                                        List("jvm-1.5", "jvm-1.5-fjbg", "jvm-1.5-asm", "jvm-1.6", "jvm-1.7", "msil"),
-                                       "jvm-1.5-asm")
+                                       "jvm-1.6")
   val unchecked =      BooleanSetting ("-unchecked", "Enable detailed unchecked (erasure) warnings.")
   val uniqid =         BooleanSetting ("-uniqid", "Uniquely tag all identifiers in debugging output.")
   val usejavacp =      BooleanSetting ("-usejavacp", "Utilize the java.class.path in classpath resolution.")

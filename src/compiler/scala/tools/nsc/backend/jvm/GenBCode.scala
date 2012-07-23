@@ -333,7 +333,7 @@ abstract class GenBCode extends BCodeUtils {
       val isNative = msym.hasAnnotation(definitions.NativeAttr)
       val isAbstractMethod = msym.isDeferred || msym.owner.isInterface
 
-      val params      = vparamss.head
+      val params      = if(vparamss.isEmpty) Nil else vparamss.head
       methSymbol      = msym
       val Pair(flags, jmethod0) = initJMethod(
         cnode,
@@ -359,8 +359,8 @@ abstract class GenBCode extends BCodeUtils {
        * but the same vars (given by the LabelDef's params) can be reused,
        * because no LabelDef ends up nested within itself after such duplication.
        */
-      for(ld <- labelDefsAtOrUnder(dd.rhs); p <- ld.params) {
-        assert(!locals.contains(p.symbol), "supposedly the first time sym was seen, but no, couldn't be that way, at: " + ld.pos)
+      for(ld <- labelDefsAtOrUnder(dd.rhs); p <- ld.params; if !locals.contains(p.symbol)) {
+        // the tail-calls xform results in symbols shared btw method-params and labelDef-params, thus the guard above.
         makeLocal(p.symbol)
       }
 
@@ -673,7 +673,10 @@ abstract class GenBCode extends BCodeUtils {
             excCls = classSymToDrop
 
           case BoundEH   (patSymbol,      caseBody) =>
-            makeLocal(patSymbol) // rather than creating on first-access, we do it right away to emit debug-info for the created local var.
+            if(!locals.contains(patSymbol)) {
+              // TODO understand why patSymbol may already have been entered as local-var, eg in test\files\run\contrib674.scala
+              makeLocal(patSymbol) // rather than creating on first-access, we do it right away to emit debug-info for the created local var.
+            }
             store(patSymbol)
             genLoad(caseBody, kind)
             endHandler = currProgramPoint()
@@ -718,7 +721,7 @@ abstract class GenBCode extends BCodeUtils {
 
     private def protect(start: asm.Label, end: asm.Label, handler: asm.Label, excCls: Symbol) {
       val excInternalName: String =
-        if (excCls == NoSymbol || excCls == ThrowableClass) null
+        if (excCls == null || excCls == NoSymbol || excCls == ThrowableClass) null
         else javaName(excCls)
       // TODO warn if (start == end) (not necessarily wrong, but unusual).
       mnode.visitTryCatchBlock(start, end, handler, excInternalName)
@@ -1234,7 +1237,7 @@ abstract class GenBCode extends BCodeUtils {
 
     /** Generate code that loads args into label parameters. */
     def genLoadLabelArguments(args: List[Tree], lblDef: LabelDef, gotoPos: Position) {
-      assert(args forall { a => a.hasSymbolWhich( s => !s.isLabel) }, "SI-6089 at: " + gotoPos) // SI-6089
+      assert(args forall { a => !a.hasSymbol || a.hasSymbolWhich( s => !s.isLabel) }, "SI-6089 at: " + gotoPos) // SI-6089
       val params: List[Symbol] = lblDef.params.map(_.symbol)
       assert(args.length == params.length, "Wrong number of arguments in call to label at: " + gotoPos)
 
@@ -1516,7 +1519,7 @@ abstract class GenBCode extends BCodeUtils {
           import scalaPrimitives.{ ZNOT, ZAND, ZOR, EQ, getPrimitive }
 
           // lhs and rhs of test
-          val Select(lhs, _) = fun
+          lazy val Select(lhs, _) = fun
           val rhs = if(args.isEmpty) EmptyTree else args.head; // args.isEmpty only for ZNOT
 
               def genZandOrZor(and: Boolean) = { // TODO WRONG
@@ -1627,6 +1630,7 @@ abstract class GenBCode extends BCodeUtils {
      *  The invoker must make sure javaName() is called on the sym's tpe (so as to track any inner classes). */
     def makeLocal(tpe: Type, name: String): Symbol = {
       val sym = methSymbol.newVariable(cunit.freshTermName(name), NoPosition, Flags.SYNTHETIC) setInfo tpe
+      makeLocal(sym)
       sym
     }
 
