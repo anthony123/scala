@@ -58,14 +58,26 @@ abstract class GenBCode extends BCodeUtils {
     private var isModuleInitialized        = false // in GenASM this is local to genCode(), ie should get false whenever a new method is emitted (including fabricated ones eg addStaticInit())
     private var methSymbol: Symbol         = null
 
-    // bookkeeping for program labels within a method.
-    private var locLabel: Map[ /* LabelDef */ Symbol, asm.Label ] = null
+    // bookkeeping for program points within a method associated to LabelDefs (other program points aren't tracked here).
+    private var locLabel: immutable.Map[ /* LabelDef */ Symbol, asm.Label ] = null
     def programPoint(labelSym: Symbol): asm.Label = {
+      assert(labelSym.isLabel, "trying to map a non-label symbol to an asm.Label, at: " + labelSym.pos)
       locLabel.getOrElse(labelSym, {
         val pp = new asm.Label
         locLabel += (labelSym -> pp)
         pp
       })
+    }
+
+    // bookkeeping for cleanup tasks to perform on returning (monitor-exits, finally-clauses)
+    var cleanups: List[Cleanup] = Nil
+    private def registerCleanup(c: Cleanup) {
+      cleanups = c :: cleanups
+    }
+    private def unregisterCleanup(x: AnyRef) {
+      assert(cleanups.head contains x,
+             "Bad nesting of cleanup operations: " + cleanups + " trying to unregister: " + x)
+      cleanups = cleanups.tail
     }
 
     // bookkeeping for method-local vars and params
@@ -75,13 +87,39 @@ abstract class GenBCode extends BCodeUtils {
     def index(sym: Symbol): Int = {
       locals.getOrElseUpdate(sym, makeLocal(sym)).idx
     }
+    def store(locSym: Symbol) {
+      val Local(tk, _, idx) = locals(locSym)
+      bc.store(idx, tk)
+    }
+    def load(locSym: Symbol) {
+      val Local(tk, _, idx) = locals(locSym)
+      bc.load(idx, tk)
+    }
 
     // bookkeeping: all LabelDefs a method contains (useful when duplicating any `finally` clauses containing one or more LabelDef)
     var labelDefsAtOrUnder: collection.Map[Tree, List[LabelDef]] = null
     var labelDef: collection.Map[Symbol, LabelDef] = null// (LabelDef-sym -> LabelDef)
 
-    /* bookkeeping the scopes of non-synthetic local vars, to emit debug info (`emitVars`). */
+    // bookkeeping the scopes of non-synthetic local vars, to emit debug info (`emitVars`).
     var varsInScope: immutable.Map[Symbol, asm.Label] = null // (local-var-sym -> start-of-scope)
+
+    // helpers around program-points.
+    def currProgramPoint(): asm.Label = {
+      mnode.instructions.getLast match {
+        case labnode: asm.tree.LabelNode => labnode.getLabel
+        case _ =>
+          val pp = new asm.Label
+          mnode visitLabel pp
+          pp
+      }
+    }
+    def markProgramPoint(lbl: asm.Label) {
+      val skip = {
+        (lbl == null) ||
+        (mnode.instructions.getLast match { case labnode: asm.tree.LabelNode => (labnode.getLabel == lbl); case _ => false } )
+      }
+      if(!skip) { mnode visitLabel lbl }
+    }
 
     // on entering a method
     private def resetMethodBookkeeping(dd: DefDef) {
@@ -92,17 +130,13 @@ abstract class GenBCode extends BCodeUtils {
       ldf.traverse(dd.rhs)
       labelDefsAtOrUnder = ldf.result.withDefaultValue(Nil)
       labelDef = labelDefsAtOrUnder(dd.rhs).map(ld => (ld.symbol -> ld)).toMap
+      // check previous invocation of genDefDef exited as many varsInScope as it entered.
       assert(varsInScope == null, "Unbalanced entering/exiting of GenBCode's genBlock().")
-      // TODO exh-handlers table
+      // check previous invocation of genDefDef unregistered as many cleanups as it registered.
+      assert(cleanups == Nil, "Previous invocation of genDefDef didn't unregister as many cleanups as it registered.")
     }
 
     override def getCurrentCUnit(): CompilationUnit = { cunit }
-
-    def currProgramPoint(): asm.Label = {
-      val pp = new asm.Label
-      mnode visitLabel pp
-      pp
-    }
 
     override def run() {
       scalaPrimitives.init
@@ -331,14 +365,16 @@ abstract class GenBCode extends BCodeUtils {
           if (!hasStaticBitSet) {
             mnode.visitLocalVariable("this", thisDescr(thisName), null, veryFirstProgramPoint, onePastLastProgramPoint, 0)
           }
-          for (p <- params) {
-            val Local(tk, name, idx) = locals(p.symbol)
-            mnode.visitLocalVariable(name, descriptor(tk), null, veryFirstProgramPoint, onePastLastProgramPoint, idx)
-          }
+          for (p <- params) { emitLocalVarScope(p.symbol, veryFirstProgramPoint, onePastLastProgramPoint) }
         }
       }
       mnode = null
     } // end of method genDefDef()
+
+    private def emitLocalVarScope(sym: Symbol, start: asm.Label, end: asm.Label) {
+      val Local(tk, name, idx) = locals(sym)
+      mnode.visitLocalVariable(name, descriptor(tk), null, start, end, idx)
+    }
 
     /**
      * Emits code that adds nothing to the operand stack.
@@ -462,7 +498,44 @@ abstract class GenBCode extends BCodeUtils {
     }
 
     def genSynchronized(tree: Apply, expectedType: TypeKind): TypeKind = {
-      ???
+      val Apply(fun, args) = tree
+      val monitor = makeLocal(ObjectClass.tpe, "monitor")
+      val argTpe = args.head.tpe
+
+      // if the synchronized block returns a result, store it in a local variable.
+      // Just leaving it on the stack is not valid in MSIL (stack is cleaned when leaving try-blocks).
+      val hasResult = expectedType != UNIT
+      val monitorResult: Symbol = if (hasResult) makeLocal(argTpe, "monitorResult") else null;
+
+      // ---------- (1) emit code to push a reference to the monitor.
+      genLoadQualifier(fun)
+      bc dup ObjectReference
+      store(monitor)
+      emit(asm.Opcodes.MONITORENTER)
+
+      // ---------- (2) emit code for the synchronized block proper.
+      registerCleanup(MonitorRelease(monitor))
+      val startProtected = currProgramPoint()
+      genLoad(args.head, expectedType /* toTypeKind(tree.tpe.resultType) */)
+      if (hasResult) { store(monitorResult) }
+      val endProtected = currProgramPoint()
+      unregisterCleanup(monitor)
+
+      load(monitor)
+      emit(asm.Opcodes.MONITOREXIT)
+      if (hasResult) { load(monitorResult) }
+      val postHandler = new asm.Label
+      bc goTo postHandler
+
+      // ---------- (3) emit code for the exception handler.
+      protect(startProtected, endProtected, currProgramPoint(), ThrowableClass)
+      load(monitor)
+      emit(asm.Opcodes.MONITOREXIT)
+      emit(asm.Opcodes.ATHROW)
+
+      mnode visitLabel postHandler
+
+      expectedType
     }
 
     def genLoadIf(tree: If, expectedType: TypeKind): TypeKind = {
@@ -481,20 +554,131 @@ abstract class GenBCode extends BCodeUtils {
       def hasUnitBranch = (thenKind == UNIT || elseKind == UNIT)
       val resKind       = if (hasUnitBranch) UNIT else toTypeKind(tree.tpe)
 
-      mnode visitLabel success
+      markProgramPoint(success)
       genLoad(thenp, resKind)
       if(hasElse) { bc goTo postIf }
-      mnode visitLabel failure
+      markProgramPoint(failure)
       if(hasElse) {
         genLoad(elsep, resKind)
-        mnode visitLabel postIf
+        markProgramPoint(postIf)
       }
 
       resKind
     }
 
+    /** TODO documentation */
     def genLoadTry(tree: Try): TypeKind = {
-      ??? // TODO
+      val Try(block, catches, finalizer) = tree
+      val kind = toTypeKind(tree.tpe)
+
+      val caseHandlers: List[EHClause] =
+        for (CaseDef(pat, _, caseBody) <- catches /* TODO why .reverse ? */ ) yield {
+          pat match {
+            case Typed(Ident(nme.WILDCARD), tpt)  => NamelessEH(tpt.tpe.typeSymbol, caseBody)
+            case Ident(nme.WILDCARD)              => NamelessEH(ThrowableClass,     caseBody)
+            case Bind(_, _)                       => BoundEH   (pat.symbol,         caseBody)
+          }
+        }
+
+      val after        = new asm.Label
+      val guardResult  = kind != UNIT && mayCleanStack(finalizer)
+      val tmp          = if (guardResult) makeLocal(tree.tpe, "tmp") else null;
+      val hasFinally   = (finalizer != EmptyTree)
+      val postHandlers = if(hasFinally) new asm.Label  else after // the non-exception-handler-version of the finally-clause.
+      val finalHandler = if(hasFinally) new asm.Label  else null; // the exception-handler-version of the finally-clause.
+
+      // ------ (1) emit try-block ------
+      val startTryBody = currProgramPoint()
+      registerCleanup(Finalizer(finalizer))
+      genLoad(block, kind)
+      unregisterCleanup(finalizer)
+      val endTryBody = currProgramPoint()
+      bc goTo postHandlers
+
+      // ------ (2) emit case-clauses, including finally-duplicates ------
+
+      for (ch <- caseHandlers) {
+
+        // (2.a) emit case clause proper
+        val startHandler = currProgramPoint()
+        var endHandler: asm.Label = null
+        var excCls: Symbol        = null
+        registerCleanup(Finalizer(finalizer))
+        ch match {
+          case NamelessEH(classSymToDrop, caseBody) =>
+            bc drop REFERENCE(classSymToDrop)
+            genLoad(caseBody, kind)
+            endHandler = currProgramPoint()
+            excCls = classSymToDrop
+
+          case BoundEH   (patSymbol,      caseBody) =>
+            makeLocal(patSymbol) // rather than creating on first-access, we do it right away to emit debug-info for the created local var.
+            store(patSymbol)
+            genLoad(caseBody, kind)
+            endHandler = currProgramPoint()
+            emitLocalVarScope(patSymbol, startHandler, endHandler)
+            excCls = patSymbol.tpe.typeSymbol
+        }
+        unregisterCleanup(finalizer)
+
+        // (2.b)  mark the try-body as protected by this case clause.
+        protect(startTryBody, endTryBody, startHandler, excCls)
+        if(hasFinally) {
+          // (2.c.i)  mark the finally-clause protecting this case clause (except the duplicate finalizer)
+          protect(startHandler, endHandler, finalHandler, null)
+          // (2.c.ii) duplicate finalizer
+          emitFinalizer(finalizer, tmp, true) // TODO check if GenICode protects a dup finalizer with a finalizer (shouldn't)
+        }
+        // (2.d) emit jump to post-try program point.
+        bc goTo after
+
+      }
+
+      // ------ (3) emit the exception-handler-version of the finally-clause ------
+
+      if(hasFinally) {
+        markProgramPoint(finalHandler)
+        protect(startTryBody, endTryBody, finalHandler, null)
+        val Local(fTK, _, fIdx) = locals(makeLocal(ThrowableClass.tpe, "exc"))
+        bc.store(fIdx, fTK)
+        emitFinalizer(finalizer, null, true)
+        bc.load(fIdx, fTK)
+        emit(asm.Opcodes.ATHROW)
+      }
+
+      // ------ (4) emit the non-exception-handler-version of the finally-clause ------
+
+      markProgramPoint(postHandlers)
+      if(hasFinally) { emitFinalizer(finalizer, tmp, false) }
+      markProgramPoint(after)
+
+      kind
+    } // end of genLoadTry()
+
+    private def protect(start: asm.Label, end: asm.Label, handler: asm.Label, excCls: Symbol) {
+      val excInternalName: String =
+        if (excCls == NoSymbol || excCls == ThrowableClass) null
+        else javaName(excCls)
+      // TODO warn if (start == end) (not necessarily wrong, but unusual).
+      mnode.visitTryCatchBlock(start, end, handler, excInternalName)
+    }
+
+    /** `tmp` (if non-null) is the symbol of the local-var used to preserve the result of the try-body, see `guardResult` */
+    private def emitFinalizer(finalizer: Tree, tmp: Symbol, isDuplicate: Boolean) {
+      var saved: immutable.Map[ /* LabelDef */ Symbol, asm.Label ] = null
+      if(isDuplicate) {
+        saved = locLabel
+        for(ldef <- labelDefsAtOrUnder(finalizer)) {
+          locLabel -= ldef.symbol
+        }
+      }
+      // when duplicating, the above guarantees new asm.Labels are used for LabelDefs contained in the finalizer (their vars are reused, that's ok)
+      if(tmp != null) { store(tmp) }
+      genLoad(finalizer, UNIT)
+      if(tmp != null) { load(tmp)  }
+      if(isDuplicate) {
+        locLabel = saved
+      }
     }
 
     def genPrimitiveOp(tree: Apply, expectedType: TypeKind): TypeKind = {
@@ -512,14 +696,14 @@ abstract class GenBCode extends BCodeUtils {
         val success, failure, after = new asm.Label
         genCond(tree, success, failure)
         // success block
-          mnode visitLabel success
+          markProgramPoint(success)
           bc boolconst true
           bc goTo after
         // failure block
-          mnode visitLabel failure
+          markProgramPoint(failure)
           bc boolconst false
         // after
-        mnode visitLabel after
+        markProgramPoint(after)
 
         BOOL
       }
@@ -552,14 +736,16 @@ abstract class GenBCode extends BCodeUtils {
           val Local(tk, _, idx) = makeLocal(sym)
           if (rhs == EmptyTree) { bc.genConstant(getZeroOf(tk)) }
           else { genLoad(rhs, tk) }
-          varsInScope += (sym -> currProgramPoint())
           bc.store(idx, tk)
+          varsInScope += (sym -> currProgramPoint())
           generatedType = UNIT
 
         case t : If =>
           generatedType = genLoadIf(t, expectedType)
 
-        case r : Return => genReturn(r) // TODO generatedType ?
+        case r : Return =>
+          genReturn(r)
+          generatedType = expectedType
 
         case t : Try =>
           generatedType = genLoadTry(t)
@@ -652,7 +838,7 @@ abstract class GenBCode extends BCodeUtils {
 
       // emit conversion
       if (generatedType != expectedType) {
-        adapt(generatedType, expectedType, tree.pos)
+        adapt(generatedType, expectedType)
       }
 
     } // end of GenBCode.genLoad()
@@ -660,12 +846,44 @@ abstract class GenBCode extends BCodeUtils {
     private def genLabelDef(lblDf: LabelDef, expectedType: TypeKind) {
       // duplication of `finally`-contained LabelDefs is handled when emitting a RET. No bookkeeping for that required here.
       // no need to call index() over lblDf.params, on first access that magic happens (moreover, no LocalVariableTable entries needed for them).
-      mnode visitLabel programPoint(lblDf.symbol)
+      markProgramPoint(programPoint(lblDf.symbol))
       genLoad(lblDf.rhs, expectedType)
     }
 
     private def genReturn(r: Return) {
-      ???
+      val Return(expr) = r
+      val returnedKind = toTypeKind(expr.tpe)
+      genLoad(expr, returnedKind)
+      lazy val tmp = makeLocal(expr.tpe, "tmp")
+      val activeCleanups = cleanups // visiting may result in Try nodes being found, and their finally-clauses added to GenBCode's cleanups.
+      var savedFinalizer = false
+      activeCleanups foreach {
+
+        case MonitorRelease(m) =>
+          load(m)
+          emit(asm.Opcodes.MONITOREXIT)
+          // TODO GenICode does here `ctx1.exitSynchronized(m)`, but we don't need that here, right?
+
+        case Finalizer(f) =>
+          if (returnedKind != UNIT && mayCleanStack(f)) {
+            store(tmp)
+            savedFinalizer = true
+            emitFinalizer(f, tmp,  true)
+          } else {
+            emitFinalizer(f, null, true)
+          }
+          /* TODO GenICode says (Q: Is that a problem here?):
+           *   "we have to run this without the same finalizer in the list,
+           *    otherwise infinite recursion happens for finalizers that contain 'return'"
+           */
+
+      }
+      assert(activeCleanups eq cleanups, "Unbalanced register/unregister of cleanups.")
+      if (savedFinalizer) { load(tmp) }
+      val returnType = if (methSymbol.isConstructor) UNIT
+                       else toTypeKind(methSymbol.info.resultType)
+      adapt(returnedKind, returnType)
+      bc emitRETURN returnType
     }
 
     private def genApply(tree: Apply, expectedType: TypeKind): TypeKind = {
@@ -902,12 +1120,12 @@ abstract class GenBCode extends BCodeUtils {
       val postMatch = new asm.Label
       for (sb <- switchBlocks.reverse) {
         val Pair(caseLabel, caseBody) = sb
-        mnode.visitLabel(caseLabel)
+        markProgramPoint(caseLabel)
         genLoad(caseBody, generatedType)
         bc goTo postMatch
       }
 
-      mnode.visitLabel(postMatch)
+      markProgramPoint(postMatch)
       generatedType
     }
 
@@ -919,15 +1137,12 @@ abstract class GenBCode extends BCodeUtils {
       genLoad(expr, expectedType)
       val end = currProgramPoint()
       if(emitVars) { // add entries to LocalVariableTable JVM attribute
-        for (Pair(sym, start) <- varsInScope) {
-          val Local(tk, name, idx) = locals(sym)
-          mnode.visitLocalVariable(name, descriptor(tk), null, start, end, idx)
-        }
+        for (Pair(sym, start) <- varsInScope) { emitLocalVarScope(sym, start, end) }
       }
       varsInScope = savedScope
     }
 
-    def adapt(from: TypeKind, to: TypeKind, pos: Position): Unit = {
+    def adapt(from: TypeKind, to: TypeKind): Unit = {
       if (!(from <:< to) && !(from == NullReference && to == NothingReference)) {
         to match {
           case UNIT => bc drop from
@@ -1250,7 +1465,7 @@ abstract class GenBCode extends BCodeUtils {
                 if (and) genCond(lhs, keepGoing, failure)
                 else     genCond(lhs, success,   keepGoing)
 
-                mnode visitLabel keepGoing
+                markProgramPoint(keepGoing)
                 genCond(rhs, success, failure)
               }
 
@@ -1333,12 +1548,12 @@ abstract class GenBCode extends BCodeUtils {
           val lNonNull = new asm.Label
           genCZJUMP(lNull, lNonNull, EQ, ObjectReference)
 
-          mnode visitLabel lNull
+          markProgramPoint(lNull)
           bc drop ObjectReference
           genLoad(r, ObjectReference)
           genCZJUMP(success, failure, EQ, ObjectReference)
 
-          mnode visitLabel lNonNull
+          markProgramPoint(lNonNull)
           // dup of l's value is stack-top
           genLoad(r, ObjectReference)
           genCallMethod(Object_equals, Dynamic)
@@ -1380,6 +1595,10 @@ abstract class GenBCode extends BCodeUtils {
     case class Finalizer(f: Tree) extends Cleanup (f) { }
 
     case class Local(tk: TypeKind, name: String, idx: Int)
+
+    trait EHClause
+    case class NamelessEH(classSymToDrop: Symbol, caseBody: Tree) extends EHClause
+    case class BoundEH    (patSymbol:     Symbol, caseBody: Tree) extends EHClause
 
   } // end of class BCodePhase
 
