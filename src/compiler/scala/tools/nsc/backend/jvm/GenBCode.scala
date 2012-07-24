@@ -71,12 +71,22 @@ abstract class GenBCode extends BCodeUtils {
 
     // bookkeeping for cleanup tasks to perform on returning (monitor-exits, finally-clauses)
     var cleanups: List[Cleanup] = Nil
-    private def registerCleanup(c: Cleanup) {
-      cleanups = c :: cleanups
+    def registerFinalizer(f: Tree) {
+      if(!f.isEmpty) { cleanups = Finalizer(f) :: cleanups }
     }
-    private def unregisterCleanup(x: AnyRef) {
-      assert(cleanups.head contains x,
-             "Bad nesting of cleanup operations: " + cleanups + " trying to unregister: " + x)
+    def registerMonitor(monitor: Symbol) {
+      cleanups = MonitorRelease(monitor) :: cleanups
+    }
+    def unregisterFinalizer(f: Tree) {
+      if(!f.isEmpty) {
+        assert(cleanups.head contains f,
+               "Bad nesting of cleanup operations: " + cleanups + " trying to unregister: " + f)
+        cleanups = cleanups.tail
+      }
+    }
+    def unregisterMonitor(monitor: Symbol) {
+      assert(cleanups.head contains monitor,
+             "Bad nesting of cleanup operations: " + cleanups + " trying to unregister: " + monitor)
       cleanups = cleanups.tail
     }
 
@@ -403,9 +413,16 @@ abstract class GenBCode extends BCodeUtils {
 
     /** TODO document, explain interplay with `fabricateStaticInit()` */
     private def appendToStaticCtor(dd: DefDef) {
-      val last = mnode.instructions.getLast()
-      assert(last.getOpcode() == asm.Opcodes.RETURN)
-      mnode.instructions.remove(last)
+
+      var last : asm.tree.AbstractInsnNode = null
+      var stop = false
+      do {
+        last = mnode.instructions.getLast()
+        stop = last.getOpcode() == asm.Opcodes.RETURN
+        assert(last.isInstanceOf[asm.tree.LabelNode] || stop, "found an unexpected instruction : " + last)
+        mnode.instructions.remove(last)
+      } while(!stop)
+
       assert(mnode.instructions.toArray.forall(_.getOpcode != asm.Opcodes.RETURN),
              "The assumption that a static-ctor has only one RETURN and it's the last instruction doesn't hold at: " + dd.pos)
       // TODO In other words, we assume there's only one RETURN and it's the last instruction. More robust would be for the code below to appear in `genReturn()`.
@@ -575,12 +592,12 @@ abstract class GenBCode extends BCodeUtils {
       emit(asm.Opcodes.MONITORENTER)
 
       // ---------- (2) emit code for the synchronized block proper.
-      registerCleanup(MonitorRelease(monitor))
+      registerMonitor(monitor)
       val startProtected = currProgramPoint()
       genLoad(args.head, expectedType /* toTypeKind(tree.tpe.resultType) */)
       if (hasResult) { store(monitorResult) }
       val endProtected = currProgramPoint()
-      unregisterCleanup(monitor)
+      unregisterMonitor(monitor)
 
       load(monitor)
       emit(asm.Opcodes.MONITOREXIT)
@@ -650,9 +667,9 @@ abstract class GenBCode extends BCodeUtils {
 
       // ------ (1) emit try-block ------
       val startTryBody = currProgramPoint()
-      registerCleanup(Finalizer(finalizer))
+      registerFinalizer(finalizer)
       genLoad(block, kind)
-      unregisterCleanup(finalizer)
+      unregisterFinalizer(finalizer)
       val endTryBody = currProgramPoint()
       bc goTo postHandlers
 
@@ -664,7 +681,7 @@ abstract class GenBCode extends BCodeUtils {
         val startHandler = currProgramPoint()
         var endHandler: asm.Label = null
         var excCls: Symbol        = null
-        registerCleanup(Finalizer(finalizer))
+        registerFinalizer(finalizer)
         ch match {
           case NamelessEH(classSymToDrop, caseBody) =>
             bc drop REFERENCE(classSymToDrop)
@@ -683,7 +700,7 @@ abstract class GenBCode extends BCodeUtils {
             emitLocalVarScope(patSymbol, startHandler, endHandler)
             excCls = patSymbol.tpe.typeSymbol
         }
-        unregisterCleanup(finalizer)
+        unregisterFinalizer(finalizer)
 
         // (2.b)  mark the try-body as protected by this case clause.
         protect(startTryBody, endTryBody, startHandler, excCls)
@@ -703,10 +720,10 @@ abstract class GenBCode extends BCodeUtils {
       if(hasFinally) {
         markProgramPoint(finalHandler)
         protect(startTryBody, endTryBody, finalHandler, null)
-        val Local(fTK, _, fIdx) = locals(makeLocal(ThrowableClass.tpe, "exc"))
-        bc.store(fIdx, fTK)
+        val Local(eTK, _, eIdx) = locals(makeLocal(ThrowableClass.tpe, "exc"))
+        bc.store(eIdx, eTK)
         emitFinalizer(finalizer, null, true)
-        bc.load(fIdx, fTK)
+        bc.load(eIdx, eTK)
         emit(asm.Opcodes.ATHROW)
       }
 
@@ -918,9 +935,10 @@ abstract class GenBCode extends BCodeUtils {
       val Return(expr) = r
       val returnedKind = toTypeKind(expr.tpe)
       genLoad(expr, returnedKind)
-      lazy val tmp = makeLocal(expr.tpe, "tmp")
       val activeCleanups = cleanups // visiting may result in Try nodes being found, and their finally-clauses added to GenBCode's cleanups.
-      var savedFinalizer = false
+      val saveReturnValue = (returnedKind != UNIT) && mayCleanStack(activeCleanups)
+      val tmp = if(saveReturnValue) makeLocal(expr.tpe, "tmp") else null;
+      if(saveReturnValue) { store(tmp) }
       activeCleanups foreach {
 
         case MonitorRelease(m) =>
@@ -929,13 +947,7 @@ abstract class GenBCode extends BCodeUtils {
           // TODO GenICode does here `ctx1.exitSynchronized(m)`, but we don't need that here, right?
 
         case Finalizer(f) =>
-          if (returnedKind != UNIT && mayCleanStack(f)) {
-            store(tmp)
-            savedFinalizer = true
-            emitFinalizer(f, tmp,  true)
-          } else {
-            emitFinalizer(f, null, true)
-          }
+          emitFinalizer(f, null, true) // null means "either there's nothing to store, or it was stored already"
           /* TODO GenICode says (Q: Is that a problem here?):
            *   "we have to run this without the same finalizer in the list,
            *    otherwise infinite recursion happens for finalizers that contain 'return'"
@@ -943,7 +955,7 @@ abstract class GenBCode extends BCodeUtils {
 
       }
       assert(activeCleanups eq cleanups, "Unbalanced register/unregister of cleanups.")
-      if (savedFinalizer) { load(tmp) }
+      if (saveReturnValue) { load(tmp) }
       val returnType = if (methSymbol.isConstructor) UNIT
                        else toTypeKind(methSymbol.info.resultType)
       adapt(returnedKind, returnType)
@@ -1648,6 +1660,12 @@ abstract class GenBCode extends BCodeUtils {
     def mayCleanStack(tree: Tree): Boolean = tree exists { // TODO de-duplicate with GenICode
       case Try(_, _, _) => true
       case _            => false
+    }
+    def mayCleanStack(activeCleanups: List[Cleanup]): Boolean = {
+      activeCleanups exists {
+        case _: MonitorRelease => false
+        case Finalizer(f)      => mayCleanStack(f)
+      }
     }
 
     def getMaxType(ts: List[Type]): TypeKind = // TODO de-duplicate with GenICode
