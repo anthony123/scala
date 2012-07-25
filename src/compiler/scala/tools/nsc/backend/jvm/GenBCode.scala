@@ -1650,20 +1650,23 @@ abstract class GenBCode extends BCodeUtils {
           genCZJUMP(success, failure, EQ, ObjectReference)
         } else {
           // l == r -> if (l eq null) r eq null else l.equals(r)
-          genLoad(l, ObjectReference)
-          bc dup ObjectReference
+          val eqEqTempLocal = makeLocal(AnyRefClass.tpe, nme.EQEQ_LOCAL_VAR)
           val lNull    = new asm.Label
           val lNonNull = new asm.Label
+
+          genLoad(l, ObjectReference)
+          genLoad(r, ObjectReference)
+          store(eqEqTempLocal)
+          bc dup ObjectReference
           genCZJUMP(lNull, lNonNull, EQ, ObjectReference)
 
           markProgramPoint(lNull)
           bc drop ObjectReference
-          genLoad(r, ObjectReference)
+          load(eqEqTempLocal)
           genCZJUMP(success, failure, EQ, ObjectReference)
 
           markProgramPoint(lNonNull)
-          // dup of l's value is stack-top
-          genLoad(r, ObjectReference)
+          load(eqEqTempLocal)
           genCallMethod(Object_equals, Dynamic)
           genCZJUMP(success, failure, NE, BOOL)
         }
