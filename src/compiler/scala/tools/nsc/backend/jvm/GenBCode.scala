@@ -25,7 +25,7 @@ abstract class GenBCode extends BCodeUtils {
   import icodes.opcodes._
   import definitions._
 
-  val phaseName = "bcode"
+  val phaseName = "jvm"
 
   override def newPhase(prev: Phase) = new BCodePhase(prev)
 
@@ -97,6 +97,22 @@ abstract class GenBCode extends BCodeUtils {
     def index(sym: Symbol): Int = {
       locals.getOrElseUpdate(sym, makeLocal(sym)).idx
     }
+    /** Make a fresh local variable, ensuring a unique name.
+     *  The invoker must make sure javaName() is called on the sym's tpe (so as to track any inner classes). */
+    def makeLocal(tpe: Type, name: String): Symbol = {
+      val sym = methSymbol.newVariable(cunit.freshTermName(name), NoPosition, Flags.SYNTHETIC) setInfo tpe
+      makeLocal(sym)
+      sym
+    }
+    def makeLocal(sym: Symbol): Local = {
+      assert(!locals.contains(sym), "attempt to create duplicate local var.")
+      assert(nxtIdx != -1, "not a valid start index")
+      val tk  = toTypeKind(sym.info)
+      val loc = Local(tk, javaName(sym), nxtIdx)
+      locals += (sym -> loc)
+      nxtIdx += sizeOf(tk)
+      loc
+    }
     def store(locSym: Symbol) {
       val Local(tk, _, idx) = locals(locSym)
       bc.store(idx, tk)
@@ -124,11 +140,11 @@ abstract class GenBCode extends BCodeUtils {
       }
     }
     def markProgramPoint(lbl: asm.Label) {
-      val skip = {
-        (lbl == null) ||
-        (mnode.instructions.getLast match { case labnode: asm.tree.LabelNode => (labnode.getLabel == lbl); case _ => false } )
-      }
+      val skip = (lbl == null) || isAtProgramPoint(lbl)
       if(!skip) { mnode visitLabel lbl }
+    }
+    def isAtProgramPoint(lbl: asm.Label): Boolean = {
+      (mnode.instructions.getLast match { case labnode: asm.tree.LabelNode => (labnode.getLabel == lbl); case _ => false } )
     }
 
     // on entering a method
@@ -646,6 +662,14 @@ abstract class GenBCode extends BCodeUtils {
 
     /** TODO documentation */
     def genLoadTry(tree: Try): TypeKind = {
+
+          /** Detects whether no instructions have been emitted since label `lbl` (by checking whether the current program point is still `lbl`)
+           *  and if so emits a NOP. This can be used to avoid an empty try-block being protected by exception handlers, which results in an illegal class file format exception. */
+          def padNOPIfAt(lbl: asm.Label) {
+            val noInstructionEmitted = isAtProgramPoint(lbl)
+            if(noInstructionEmitted) { emit(asm.Opcodes.NOP) }
+          }
+
       val Try(block, catches, finalizer) = tree
       val kind = toTypeKind(tree.tpe)
 
@@ -669,6 +693,7 @@ abstract class GenBCode extends BCodeUtils {
       val startTryBody = currProgramPoint()
       registerFinalizer(finalizer)
       genLoad(block, kind)
+      padNOPIfAt(startTryBody) // TODO The alternative is to elide all exc-handlers protecting the try body, which modifies semantics (e.g. ClassNotFound)
       unregisterFinalizer(finalizer)
       val endTryBody = currProgramPoint()
       bc goTo postHandlers
@@ -686,6 +711,7 @@ abstract class GenBCode extends BCodeUtils {
           case NamelessEH(classSymToDrop, caseBody) =>
             bc drop REFERENCE(classSymToDrop)
             genLoad(caseBody, kind)
+            padNOPIfAt(startHandler)
             endHandler = currProgramPoint()
             excCls = classSymToDrop
 
@@ -696,6 +722,7 @@ abstract class GenBCode extends BCodeUtils {
             }
             store(patSymbol)
             genLoad(caseBody, kind)
+            padNOPIfAt(startHandler)
             endHandler = currProgramPoint()
             emitLocalVarScope(patSymbol, startHandler, endHandler)
             excCls = patSymbol.tpe.typeSymbol
@@ -717,9 +744,11 @@ abstract class GenBCode extends BCodeUtils {
 
       // ------ (3) emit the exception-handler-version of the finally-clause ------
 
+      padNOPIfAt(startTryBody)
+      val pastLastHandler = currProgramPoint()
       if(hasFinally) {
         markProgramPoint(finalHandler)
-        protect(startTryBody, endTryBody, finalHandler, null)
+        protect(startTryBody, pastLastHandler, finalHandler, null)
         val Local(eTK, _, eIdx) = locals(makeLocal(ThrowableClass.tpe, "exc"))
         bc.store(eIdx, eTK)
         emitFinalizer(finalizer, null, true)
@@ -813,12 +842,15 @@ abstract class GenBCode extends BCodeUtils {
 
         case ValDef(_, _, _, rhs) =>
           val sym = tree.symbol
-          assert(!locals.contains(sym), "supposedly the first time sym was seen, but no, couldn't be that way, at: " + tree.pos)
-          val Local(tk, _, idx) = makeLocal(sym)
+          /* most of the time, !locals.contains(sym), unless the current activation of genLoad() is being called
+             while duplicating a finalizer that contains this ValDef. */
+          val Local(tk, _, idx) = locals.getOrElseUpdate(sym, makeLocal(sym))
           if (rhs == EmptyTree) { bc.genConstant(getZeroOf(tk)) }
           else { genLoad(rhs, tk) }
           bc.store(idx, tk)
-          varsInScope += (sym -> currProgramPoint())
+          if(!sym.isSynthetic) { // there are case <synthetic> ValDef's emitted by patmat
+            varsInScope += (sym -> currProgramPoint())
+          }
           generatedType = UNIT
 
         case t : If =>
@@ -1636,24 +1668,6 @@ abstract class GenBCode extends BCodeUtils {
           genCZJUMP(success, failure, NE, BOOL)
         }
       }
-    }
-
-    /** Make a fresh local variable, ensuring a unique name.
-     *  The invoker must make sure javaName() is called on the sym's tpe (so as to track any inner classes). */
-    def makeLocal(tpe: Type, name: String): Symbol = {
-      val sym = methSymbol.newVariable(cunit.freshTermName(name), NoPosition, Flags.SYNTHETIC) setInfo tpe
-      makeLocal(sym)
-      sym
-    }
-
-    def makeLocal(sym: Symbol): Local = {
-      assert(!locals.contains(sym), "attempt to create duplicate local var.")
-      assert(nxtIdx != -1, "not a valid start index")
-      val tk  = toTypeKind(sym.info)
-      val loc = Local(tk, javaName(sym), nxtIdx)
-      locals += (sym -> loc)
-      nxtIdx += sizeOf(tk)
-      loc
     }
 
     /** Does this tree have a try-catch block? */

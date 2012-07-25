@@ -1991,7 +1991,9 @@ abstract class BCodeUtils extends SubComponent with BytecodeWriters {
       val (excs, others) = msym.annotations partition (_.symbol == ThrowsClass)
       val thrownExceptions: List[String] = getExceptions(excs)
 
-      val jMethodName = javaName(msym)
+      val jMethodName =
+        if(msym.isStaticConstructor) CLASS_CONSTRUCTOR_NAME
+        else javaName(msym)
       val mdesc = asm.Type.getMethodDescriptor(resTpe, paramTypes: _*)
       val jmethod = jclass.visitMethod(
         flags,
