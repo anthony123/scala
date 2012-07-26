@@ -430,44 +430,71 @@ abstract class GenBCode extends BCodeUtils {
     /** TODO document, explain interplay with `fabricateStaticInit()` */
     private def appendToStaticCtor(dd: DefDef) {
 
-      var last : asm.tree.AbstractInsnNode = null
-      var stop = false
-      do {
-        last = mnode.instructions.getLast()
-        stop = last.getOpcode() == asm.Opcodes.RETURN
-        assert(last.isInstanceOf[asm.tree.LabelNode] || stop, "found an unexpected instruction : " + last)
-        mnode.instructions.remove(last)
-      } while(!stop)
+          def insertBefore(location: asm.tree.AbstractInsnNode, insns: List[asm.tree.AbstractInsnNode]) {
+            insns foreach { i => mnode.instructions.insertBefore(location, i) }
+          }
 
-      assert(mnode.instructions.toArray.forall(_.getOpcode != asm.Opcodes.RETURN),
-             "The assumption that a static-ctor has only one RETURN and it's the last instruction doesn't hold at: " + dd.pos)
-      // TODO In other words, we assume there's only one RETURN and it's the last instruction. More robust would be for the code below to appear in `genReturn()`.
-      if (isStaticModule(claszSymbol)) {
-        // call object's private ctor from static ctor
-        val className = javaName(methSymbol.enclClass)
-        mnode.visitTypeInsn(asm.Opcodes.NEW, className)
-        genCallMethod(methSymbol.enclClass.primaryConstructor, Static(true))
+      // collect all return instructions
+      var rets: List[asm.tree.AbstractInsnNode] = Nil
+      val iter = mnode.instructions.iterator()
+      while(iter.hasNext) {
+        val i = iter.next()
+        if(i.getOpcode() == asm.Opcodes.RETURN) { rets ::= i  }
       }
-      if (isParcelableClass) { addAndroidCreatorCode() }
-      mnode.visitInsn(asm.Opcodes.RETURN)
+
+      var andrFieldName:  String = null
+      var andrFieldDescr: String = null
+      if(isParcelableClass && rets.nonEmpty) {
+        // add a static field ("CREATOR") to this class to cache android.os.Parcelable$Creator
+        andrFieldName = newTermName(androidFieldName)
+        val fieldAccess    = asm.Opcodes.ACC_STATIC | asm.Opcodes.ACC_FINAL
+        val fieldType      = javaName(AndroidCreatorClass) // tracks inner classes if any.
+        val andrFieldDescr = descriptor(AndroidCreatorClass.tpe)
+        cnode.visitField(fieldAccess, andrFieldName, andrFieldDescr, null, null)
+      }
+
+      // insert a few instructions for initialization before each return instruction
+      for(r <- rets) {
+
+        if (isStaticModule(claszSymbol)) { // call object's private ctor from static ctor
+
+          // NEW `moduleName`
+          val className = javaName(methSymbol.enclClass)
+          val i0 = new asm.tree.TypeInsnNode(asm.Opcodes.NEW, className)
+
+          // INVOKESPECIAL <init>
+          val callee = methSymbol.enclClass.primaryConstructor
+          val jname  = javaName(callee)
+          val jowner = javaName(callee.owner)
+          val jtype  = javaType(callee).getDescriptor()
+          val i1 = new asm.tree.MethodInsnNode(asm.Opcodes.INVOKESPECIAL, jowner, jname, jtype)
+
+          insertBefore(r, List(i0, i1))
+        }
+
+        if(isParcelableClass) { // android creator code
+
+          // INVOKESTATIC CREATOR(): android.os.Parcelable$Creator; -- TODO where does this Android method come from?
+          val callee = definitions.getMember(claszSymbol.companionModule, androidFieldName)
+          val jowner = javaName(callee.owner)
+          val jname  = javaName(callee)
+          val jtype  = javaType(callee).getDescriptor()
+          val i0 = new asm.tree.MethodInsnNode(asm.Opcodes.INVOKESTATIC, jowner, jname, jtype)
+
+          // PUTSTATIC `thisName`.CREATOR;
+          val i1 = new asm.tree.FieldInsnNode(asm.Opcodes.PUTSTATIC, thisName, andrFieldName, andrFieldDescr)
+
+          insertBefore(r, List(i0, i1))
+        }
+
+      }
+
+
     }
 
     private def emitLocalVarScope(sym: Symbol, start: asm.Label, end: asm.Label) {
       val Local(tk, name, idx) = locals(sym)
       mnode.visitLocalVariable(name, descriptor(tk), null, start, end, idx)
-    }
-
-    /** TODO document */
-    private def addAndroidCreatorCode() {
-      val fieldName   = newTermName(androidFieldName)
-      val fieldAccess = asm.Opcodes.ACC_STATIC | asm.Opcodes.ACC_FINAL
-      val fieldType   = javaName(AndroidCreatorClass) // tracks inner classes if any.
-      val fieldDescr  = descriptor(AndroidCreatorClass.tpe)
-      cnode.visitField(fieldAccess, fieldName, fieldDescr, null, null)
-
-      val methodSymbol = definitions.getMember(claszSymbol.companionModule, androidFieldName)
-      genCallMethod(methodSymbol, Static(false))
-      mnode.visitFieldInsn(asm.Opcodes.PUTSTATIC, thisName, fieldName, fieldDescr)
     }
 
     /**
