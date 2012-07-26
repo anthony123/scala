@@ -40,7 +40,7 @@ trait StandardScalaSettings {
   val nowarn =         BooleanSetting ("-nowarn", "Generate no warnings.")
   val optimise:        BooleanSetting // depends on post hook which mutates other settings
   val print =          BooleanSetting ("-print", "Print program with Scala-specific features removed.")
-  val target =          ChoiceSetting ("-target", "target", "Target platform for object files.",
+  val target =          ChoiceSetting ("-target", "target", "Target platform for object files. All JVM 1.5 targets are deprecated.",
                                        List("jvm-1.5", "jvm-1.5-fjbg", "jvm-1.5-asm", "jvm-1.6", "jvm-1.7", "msil"),
                                        "jvm-1.6")
   val unchecked =      BooleanSetting ("-unchecked", "Enable detailed unchecked (erasure) warnings.")

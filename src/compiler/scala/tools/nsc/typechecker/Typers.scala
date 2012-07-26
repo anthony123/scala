@@ -1972,7 +1972,8 @@ trait Typers extends Modes with Adaptations with Tags {
                 case SilentResultValue(tpt) =>
                   val alias = enclClass.newAliasType(name.toTypeName, useCase.pos)
                   val tparams = cloneSymbolsAtOwner(tpt.tpe.typeSymbol.typeParams, alias)
-                  alias setInfo typeFun(tparams, appliedType(tpt.tpe, tparams map (_.tpe)))
+                  val newInfo = genPolyType(tparams, appliedType(tpt.tpe, tparams map (_.tpe)))
+                  alias setInfo newInfo
                   context.scope.enter(alias)
                 case _ =>
               }
@@ -2748,6 +2749,14 @@ trait Typers extends Modes with Adaptations with Tags {
     def typedArgs(args: List[Tree], mode: Int) =
       args mapConserve (arg => typedArg(arg, mode, 0, WildcardType))
 
+    /** Type trees in `args0` against corresponding expected type in `adapted0`.
+     *
+     * The mode in which each argument is typed is derived from `mode` and
+     * whether the arg was originally by-name or var-arg (need `formals0` for that)
+     * the default is by-val, of course.
+     *
+     * (docs reverse-engineered -- AM)
+     */
     def typedArgs(args0: List[Tree], mode: Int, formals0: List[Type], adapted0: List[Type]): List[Tree] = {
       val sticky = onlyStickyModes(mode)
       def loop(args: List[Tree], formals: List[Type], adapted: List[Type]): List[Tree] = {
@@ -3156,12 +3165,13 @@ trait Typers extends Modes with Adaptations with Tags {
 
       if (fun1.tpe.isErroneous) duplErrTree
       else {
-        val formals0 = unapplyTypeList(fun1.symbol, fun1.tpe)
-        val formals1 = formalTypes(formals0, args.length)
+        val resTp     = fun1.tpe.finalResultType.normalize
+        val nbSubPats = args.length
 
-        if (!sameLength(formals1, args)) duplErrorTree(WrongNumberArgsPatternError(tree, fun))
+        val (formals, formalsExpanded) = extractorFormalTypes(resTp, nbSubPats, fun1.symbol)
+        if (formals == null) duplErrorTree(WrongNumberArgsPatternError(tree, fun))
         else {
-          val args1 = typedArgs(args, mode, formals0, formals1)
+          val args1 = typedArgs(args, mode, formals, formalsExpanded)
           // This used to be the following (failing) assert:
           //   assert(isFullyDefined(pt), tree+" ==> "+UnApply(fun1, args1)+", pt = "+pt)
           // I modified as follows.  See SI-1048.
@@ -3883,40 +3893,51 @@ trait Typers extends Modes with Adaptations with Tags {
         }
       }
 
-      def typedBind(name: Name, body: Tree) = {
-        var vble = tree.symbol
-        def typedBindType(name: TypeName) = {
-          assert(body == EmptyTree, context.unit + " typedBind: " + name.debugString + " " + body + " " + body.getClass)
-          if (vble == NoSymbol)
-            vble =
-              if (isFullyDefined(pt))
-                context.owner.newAliasType(name, tree.pos) setInfo pt
-              else
-                context.owner.newAbstractType(name, tree.pos) setInfo TypeBounds.empty
-          val rawInfo = vble.rawInfo
-          vble = if (vble.name == tpnme.WILDCARD) context.scope.enter(vble)
-                 else namer.enterInScope(vble)
-          tree setSymbol vble setType vble.tpe
-        }
-        def typedBindTerm(name: TermName) = {
-          if (vble == NoSymbol)
-            vble = context.owner.newValue(name, tree.pos)
-          if (vble.name.toTermName != nme.WILDCARD) {
-            if ((mode & ALTmode) != 0)
-              VariableInPatternAlternativeError(tree)
-            vble = namer.enterInScope(vble)
-          }
-          val body1 = typed(body, mode, pt)
-          vble.setInfo(
-            if (treeInfo.isSequenceValued(body)) seqType(body1.tpe)
-            else body1.tpe)
-          treeCopy.Bind(tree, name, body1) setSymbol vble setType body1.tpe   // burak, was: pt
-        }
+      def typedBind(name: Name, body: Tree) =
         name match {
-          case x: TypeName  => typedBindType(x)
-          case x: TermName  => typedBindTerm(x)
+          case name: TypeName  => assert(body == EmptyTree, context.unit + " typedBind: " + name.debugString + " " + body + " " + body.getClass)
+            val sym =
+              if (tree.symbol != NoSymbol) tree.symbol
+              else {
+                if (isFullyDefined(pt))
+                  context.owner.newAliasType(name, tree.pos) setInfo pt
+                else
+                  context.owner.newAbstractType(name, tree.pos) setInfo TypeBounds.empty
+              }
+
+            if (name != tpnme.WILDCARD) namer.enterInScope(sym)
+            else context.scope.enter(sym)
+
+            tree setSymbol sym setType sym.tpe
+
+          case name: TermName  =>
+            val sym =
+              if (tree.symbol != NoSymbol) tree.symbol
+              else context.owner.newValue(name, tree.pos)
+
+            if (name != nme.WILDCARD) {
+              if ((mode & ALTmode) != 0) VariableInPatternAlternativeError(tree)
+              namer.enterInScope(sym)
+            }
+
+            val body1 = typed(body, mode, pt)
+            val symTp =
+              if (treeInfo.isSequenceValued(body)) seqType(body1.tpe)
+              else body1.tpe
+            sym setInfo symTp
+
+            // have to imperatively set the symbol for this bind to keep it in sync with the symbols used in the body of a case
+            // when type checking a case we imperatively update the symbols in the body of the case
+            // those symbols are bound by the symbols in the Binds in the pattern of the case,
+            // so, if we set the symbols in the case body, but not in the patterns,
+            // then re-type check the casedef (for a second try in typedApply for example -- SI-1832),
+            // we are no longer in sync: the body has symbols set that do not appear in the patterns
+            // since body1 is not necessarily equal to body, we must return a copied tree,
+            // but we must still mutate the original bind
+            tree setSymbol sym
+            treeCopy.Bind(tree, name, body1) setSymbol sym setType body1.tpe
         }
-      }
+
 
       def typedArrayValue(elemtpt: Tree, elems: List[Tree]) = {
         val elemtpt1 = typedType(elemtpt, mode)
@@ -4640,15 +4661,28 @@ trait Typers extends Modes with Adaptations with Tags {
                 // If the ambiguous name is a monomorphic type, we can relax this far.
                 def mt1 = t1 memberType impSym
                 def mt2 = t2 memberType impSym1
+                def characterize = List(
+                  s"types:  $t1 =:= $t2  ${t1 =:= t2}  members: ${mt1 =:= mt2}",
+                  s"member type 1: $mt1",
+                  s"member type 2: $mt2",
+                  s"$impSym == $impSym1  ${impSym == impSym1}",
+                  s"${impSym.debugLocationString} ${impSym.getClass}",
+                  s"${impSym1.debugLocationString} ${impSym1.getClass}"
+                ).mkString("\n  ")
+
+                // The symbol names are checked rather than the symbols themselves because
+                // each time an overloaded member is looked up it receives a new symbol.
+                // So foo.member("x") != foo.member("x") if x is overloaded.  This seems
+                // likely to be the cause of other bugs too...
+                if (t1 =:= t2 && impSym.name == impSym1.name)
+                  log(s"Suppressing ambiguous import: $t1 =:= $t2 && $impSym == $impSym1")
                 // Monomorphism restriction on types is in part because type aliases could have the
                 // same target type but attach different variance to the parameters. Maybe it can be
                 // relaxed, but doesn't seem worth it at present.
-                if (t1 =:= t2 && impSym == impSym1)
-                  log(s"Suppressing ambiguous import: $t1 =:= $t2 && $impSym == $impSym1")
                 else if (mt1 =:= mt2 && name.isTypeName && impSym.isMonomorphicType && impSym1.isMonomorphicType)
                   log(s"Suppressing ambiguous import: $mt1 =:= $mt2 && $impSym and $impSym1 are equivalent")
                 else {
-                  log(s"Import is genuinely ambiguous: !($t1 =:= $t2)")
+                  log(s"Import is genuinely ambiguous:\n  " + characterize)
                   ambiguousError(s"it is imported twice in the same scope by\n${imports.head}\nand ${imports1.head}")
                 }
               }
@@ -4868,7 +4902,7 @@ trait Typers extends Modes with Adaptations with Tags {
 
         case UnApply(fun, args) =>
           val fun1 = typed(fun)
-          val tpes = formalTypes(unapplyTypeList(fun.symbol, fun1.tpe), args.length)
+          val tpes = formalTypes(unapplyTypeList(fun.symbol, fun1.tpe, args.length), args.length)
           val args1 = map2(args, tpes)(typedPattern)
           treeCopy.UnApply(tree, fun1, args1) setType pt
 

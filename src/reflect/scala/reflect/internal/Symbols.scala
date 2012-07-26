@@ -78,6 +78,7 @@ trait Symbols extends api.Symbols { self: SymbolTable =>
     def asType: Type = tpe
     def asTypeIn(site: Type): Type = site.memberType(this)
     def asTypeConstructor: Type = typeConstructor
+    def setFlags(flags: FlagSet): this.type = setInternalFlags(flags)
     def setInternalFlags(flag: Long): this.type = { setFlag(flag); this }
     def setTypeSignature(tpe: Type): this.type = { setInfo(tpe); this }
     def getAnnotations: List[AnnotationInfo] = { initialize; annotations }
@@ -933,6 +934,7 @@ trait Symbols extends api.Symbols { self: SymbolTable =>
       || hasAnnotation(SerializableAttr) // last part can be removed, @serializable annotation is deprecated
     )
     def hasBridgeAnnotation = hasAnnotation(BridgeClass)
+    def hasStaticAnnotation = hasAnnotation(StaticClass)
     def isDeprecated        = hasAnnotation(DeprecatedAttr)
     def deprecationMessage  = getAnnotation(DeprecatedAttr) flatMap (_ stringArg 0)
     def deprecationVersion  = getAnnotation(DeprecatedAttr) flatMap (_ stringArg 1)
