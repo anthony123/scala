@@ -130,8 +130,11 @@ abstract class GenBCode extends BCodeUtils {
     var varsInScope: immutable.Map[Symbol, asm.Label] = null // (local-var-sym -> start-of-scope)
 
     // helpers around program-points.
+    def lastInsn: asm.tree.AbstractInsnNode = {
+      mnode.instructions.getLast
+    }
     def currProgramPoint(): asm.Label = {
-      mnode.instructions.getLast match {
+      lastInsn match {
         case labnode: asm.tree.LabelNode => labnode.getLabel
         case _ =>
           val pp = new asm.Label
@@ -144,7 +147,7 @@ abstract class GenBCode extends BCodeUtils {
       if(!skip) { mnode visitLabel lbl }
     }
     def isAtProgramPoint(lbl: asm.Label): Boolean = {
-      (mnode.instructions.getLast match { case labnode: asm.tree.LabelNode => (labnode.getLabel == lbl); case _ => false } )
+      (lastInsn match { case labnode: asm.tree.LabelNode => (labnode.getLabel == lbl); case _ => false } )
     }
 
     // on entering a method
@@ -166,6 +169,10 @@ abstract class GenBCode extends BCodeUtils {
     override def getCurrentCUnit(): CompilationUnit = { cunit }
 
     def isParcelableClass = isAndroidParcelableClass(claszSymbol)
+
+    // see https://github.com/scala/scala/commit/892ee3df93a10ffe24fb11b37ad7c3a9cb93d5de
+    def isAccessorToStaticField(msym: Symbol) = { msym.isAccessor && msym.accessed.hasStaticAnnotation }
+    def isStaticField(fsym: Symbol) = {  fsym.owner.isModuleClass && fsym.hasStaticAnnotation }
 
     override def run() {
       scalaPrimitives.init
@@ -307,7 +314,7 @@ abstract class GenBCode extends BCodeUtils {
 
     private def fieldSymbols(cls: Symbol): List[Symbol] = {
       for (f <- cls.info.decls.toList ;
-           if !f.isMethod && f.isTerm && !f.isModule && !(f.owner.isModuleClass && f.hasStaticAnnotation)
+           if !f.isMethod && f.isTerm && !f.isModule && !isStaticField(f)
       ) yield f;
     }
 
@@ -397,42 +404,45 @@ abstract class GenBCode extends BCodeUtils {
         if (msym.isConstructor) UNIT
         else toTypeKind(msym.info.resultType)
 
+            def emitBodyOfStaticAccessor() {
+              // in companion object accessors to @static fields, we access the static field directly
+              // see https://github.com/scala/scala/commit/892ee3df93a10ffe24fb11b37ad7c3a9cb93d5de
+              val hostClass   = msym.owner.companionClass
+              val fieldName   = javaName(msym.accessed)
+              val staticfield = hostClass.info.findMember(msym.accessed.name, NoFlags, NoFlags, false)
+              val fieldDescr  = descriptor(staticfield)
+
+              if (msym.isGetter) {
+                // GETSTATIC `hostClass`.`accessed`
+                emit(
+                  new asm.tree.FieldInsnNode(asm.Opcodes.GETSTATIC,
+                                             javaName(hostClass),
+                                             fieldName,
+                                             fieldDescr)
+                )
+                // RETURN `returnType`
+                bc emitRETURN returnType
+              } else if (msym.isSetter) {
+                // push setter's argument
+                load(params.head.symbol)
+                // GETSTATIC `hostClass`.`accessed`
+                emit(
+                  new asm.tree.FieldInsnNode(asm.Opcodes.PUTSTATIC,
+                                             javaName(hostClass),
+                                             fieldName,
+                                             fieldDescr)
+                )
+                // RETURN `returnType`
+                bc emitRETURN returnType
+              } else assert(false, "unreachable")
+            }
+
       if (!isAbstractMethod && !isNative) {
-        if(msym.isAccessor && msym.accessed.hasStaticAnnotation) {
-
-          // in companion object accessors to @static fields, we access the static field directly
-          // see https://github.com/scala/scala/commit/892ee3df93a10ffe24fb11b37ad7c3a9cb93d5de
-          val hostClass   = msym.owner.companionClass
-          val fieldName   = javaName(msym.accessed)
-          val staticfield = hostClass.info.findMember(msym.accessed.name, NoFlags, NoFlags, false)
-          val fieldDescr  = descriptor(staticfield)
-
-          if (msym.isGetter) {
-            // GETSTATIC `hostClass`.`accessed`
-            emit(
-              new asm.tree.FieldInsnNode(asm.Opcodes.GETSTATIC,
-                                         javaName(hostClass),
-                                         fieldName,
-                                         fieldDescr)
-            )
-            // RETURN `returnType`
-            bc emitRETURN returnType
-          } else if (msym.isSetter) {
-            // push setter's argument
-            load(params.head.symbol)
-            // GETSTATIC `hostClass`.`accessed`
-            emit(
-              new asm.tree.FieldInsnNode(asm.Opcodes.PUTSTATIC,
-                                         javaName(hostClass),
-                                         fieldName,
-                                         fieldDescr)
-            )
-            // RETURN `returnType`
-            bc emitRETURN returnType
-          } else assert(false, "unreachable")
-
+        if(isAccessorToStaticField(msym)) {
+          // special-cased method body for an accessor to @static field
+          emitBodyOfStaticAccessor()
         } else {
-
+          // normal method body
           val veryFirstProgramPoint = currProgramPoint()
           genLoad(rhs, returnType)
 
@@ -1177,7 +1187,7 @@ abstract class GenBCode extends BCodeUtils {
 
         case app @ Apply(fun @ Select(qual, _), args)
         if !methSymbol.isStaticConstructor
-        && fun.symbol.isAccessor && fun.symbol.accessed.hasStaticAnnotation =>
+        && isAccessorToStaticField(fun.symbol) =>
           // bypass the accessor to the companion object and load the static field directly
           // the only place were this bypass is not done, is the static initializer for the static field itself
           // see https://github.com/scala/scala/commit/892ee3df93a10ffe24fb11b37ad7c3a9cb93d5de
