@@ -454,7 +454,7 @@ abstract class GenBCode extends BCodeUtils {
             if (!hasStaticBitSet) {
               mnode.visitLocalVariable("this", thisDescr(thisName), null, veryFirstProgramPoint, onePastLastProgramPoint, 0)
             }
-            for (p <- params) { emitLocalVarScope(p.symbol, veryFirstProgramPoint, onePastLastProgramPoint) }
+            for (p <- params) { emitLocalVarScope(p.symbol, veryFirstProgramPoint, onePastLastProgramPoint, force = true) }
           }
 
           if(methSymbol.isStaticConstructor) {
@@ -531,9 +531,11 @@ abstract class GenBCode extends BCodeUtils {
 
     }
 
-    private def emitLocalVarScope(sym: Symbol, start: asm.Label, end: asm.Label) {
-      val Local(tk, name, idx) = locals(sym)
-      mnode.visitLocalVariable(name, descriptor(tk), null, start, end, idx)
+    private def emitLocalVarScope(sym: Symbol, start: asm.Label, end: asm.Label, force: Boolean = false) {
+      if(force || !sym.isSynthetic /* TODO HIDDEN */ ) {
+        val Local(tk, name, idx) = locals(sym)
+        mnode.visitLocalVariable(name, descriptor(tk), null, start, end, idx)
+      }
     }
 
     /**
@@ -975,15 +977,10 @@ abstract class GenBCode extends BCodeUtils {
         case Ident(name) =>
           val sym = tree.symbol
           if (!sym.isPackage) {
-            if (sym.isModule) {
-              genLoadModule(tree)
-              generatedType = toTypeKind(sym.info)
-            }
-            else {
-              val tk = toTypeKind(sym.info) // TODO cache and make index() return LocalInfo(Int, TypeKind)
-              bc.load(index(sym), tk)
-              generatedType = tk
-            }
+            val tk = toTypeKind(sym.info)
+            if (sym.isModule) { genLoadModule(tree) }
+            else { load(sym) }
+            generatedType = tk
           }
 
         case Literal(value) =>
@@ -1157,8 +1154,16 @@ abstract class GenBCode extends BCodeUtils {
           }
 
         case Apply(fun @ _, List(expr)) if (definitions.isBox(fun.symbol)) =>
-          genLoad(expr, toTypeKind(expr.tpe))
           val nativeKind = toTypeKind(expr.tpe)
+          genLoad(expr, nativeKind)
+          if (settings.Xdce.value) { // TODO reminder for future work: MethodNode-based closelim and dce.
+            // we store this boxed value to a local, even if not really needed.
+            // boxing optimization might use it, and dead code elimination will
+            // take care of unnecessary stores
+            val loc1 = makeLocal(expr.tpe, "boxed")
+            store(loc1)
+            load(loc1)
+          }
           val MethodNameAndType(mname, mdesc) = jBoxTo(nativeKind)
           bc.invokestatic(BoxesRunTime, mname, mdesc)
           generatedType = toTypeKind(fun.symbol.tpe.resultType)
