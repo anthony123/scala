@@ -57,6 +57,11 @@ abstract class GenBCode extends BCodeUtils {
     private var jMethodName: String        = null
     private var isModuleInitialized        = false // in GenASM this is local to genCode(), ie should get false whenever a new method is emitted (including fabricated ones eg addStaticInit())
     private var methSymbol: Symbol         = null
+    // used by genLoadTry() and genSynchronized()
+    private var earlyReturnVar: Symbol     = null
+    private var shouldEmitCleanup          = false
+    // used in connection with cleanups
+    private var returnType: TypeKind       = null
 
     // bookkeeping for program points within a method associated to LabelDefs (other program points aren't tracked here).
     private var locLabel: immutable.Map[ /* LabelDef */ Symbol, asm.Label ] = null
@@ -69,25 +74,17 @@ abstract class GenBCode extends BCodeUtils {
       })
     }
 
-    // bookkeeping for cleanup tasks to perform on returning (monitor-exits, finally-clauses)
-    var cleanups: List[Cleanup] = Nil
-    def registerFinalizer(f: Tree) {
-      if(!f.isEmpty) { cleanups = Finalizer(f) :: cleanups }
+    // bookkeeping for cleanup tasks to perform on leaving a method due to return statement under active (monitor-exits, finally-clauses)
+    var cleanups: List[asm.Label] = Nil
+    def registerCleanup(finCleanup: asm.Label) {
+      if(finCleanup != null) { cleanups = finCleanup :: cleanups }
     }
-    def registerMonitor(monitor: Symbol) {
-      cleanups = MonitorRelease(monitor) :: cleanups
-    }
-    def unregisterFinalizer(f: Tree) {
-      if(!f.isEmpty) {
-        assert(cleanups.head contains f,
-               "Bad nesting of cleanup operations: " + cleanups + " trying to unregister: " + f)
+    def unregisterCleanup(finCleanup: asm.Label) {
+      if(finCleanup != null) {
+        assert(cleanups.head eq finCleanup,
+               "Bad nesting of cleanup operations: " + cleanups + " trying to unregister: " + finCleanup)
         cleanups = cleanups.tail
       }
-    }
-    def unregisterMonitor(monitor: Symbol) {
-      assert(cleanups.head contains monitor,
-             "Bad nesting of cleanup operations: " + cleanups + " trying to unregister: " + monitor)
-      cleanups = cleanups.tail
     }
 
     // bookkeeping for method-local vars and params
@@ -164,6 +161,12 @@ abstract class GenBCode extends BCodeUtils {
       // check previous invocation of genDefDef unregistered as many cleanups as it registered.
       assert(cleanups == Nil, "Previous invocation of genDefDef didn't unregister as many cleanups as it registered.")
       isModuleInitialized = false
+      earlyReturnVar      = null
+      shouldEmitCleanup   = false
+      // used in connection with cleanups
+      returnType =
+        if (dd.symbol.isConstructor) UNIT
+        else toTypeKind(dd.symbol.info.resultType)
     }
 
     override def getCurrentCUnit(): CompilationUnit = { cunit }
@@ -399,10 +402,6 @@ abstract class GenBCode extends BCodeUtils {
         // the tail-calls xform results in symbols shared btw method-params and labelDef-params, thus the guard above.
         makeLocal(p.symbol)
       }
-
-      val returnType =
-        if (msym.isConstructor) UNIT
-        else toTypeKind(msym.info.resultType)
 
             def emitBodyOfStaticAccessor() {
               // in companion object accessors to @static fields, we access the static field directly
@@ -672,39 +671,72 @@ abstract class GenBCode extends BCodeUtils {
     def genSynchronized(tree: Apply, expectedType: TypeKind): TypeKind = {
       val Apply(fun, args) = tree
       val monitor = makeLocal(ObjectClass.tpe, "monitor")
-      val argTpe = args.head.tpe
+      val monCleanup = new asm.Label
 
       // if the synchronized block returns a result, store it in a local variable.
       // Just leaving it on the stack is not valid in MSIL (stack is cleaned when leaving try-blocks).
-      val hasResult = expectedType != UNIT
-      val monitorResult: Symbol = if (hasResult) makeLocal(argTpe, "monitorResult") else null;
+      val hasResult = (expectedType != UNIT)
+      val monitorResult: Symbol = if(hasResult) makeLocal(args.head.tpe, "monitorResult") else null;
 
-      // ---------- (1) emit code to push a reference to the monitor.
+      /* ------ (1) pushing and entering the monitor, also keeping a reference to it in a local var. ------ */
       genLoadQualifier(fun)
       bc dup ObjectReference
       store(monitor)
       emit(asm.Opcodes.MONITORENTER)
 
-      // ---------- (2) emit code for the synchronized block proper.
-      registerMonitor(monitor)
+      /* ------ (2) Synchronized block.
+       *            Reached by fall-through from (1).
+       *            Protected by:
+       *            (2.a) the EH-version of the monitor-exit, and
+       *            (2.b) whatever protects the whole synchronized expression.
+       * ------
+       */
       val startProtected = currProgramPoint()
+      registerCleanup(monCleanup)
       genLoad(args.head, expectedType /* toTypeKind(tree.tpe.resultType) */)
+      unregisterCleanup(monCleanup)
       if (hasResult) { store(monitorResult) }
+      nopIfNeeded(startProtected)
       val endProtected = currProgramPoint()
-      unregisterMonitor(monitor)
 
+      /* ------ (3) monitor-exit after normal, non-early-return, termination of (2).
+       *            Reached by fall-through from (2).
+       *            Protected by whatever protects the whole synchronized expression.
+       * ------
+       */
       load(monitor)
       emit(asm.Opcodes.MONITOREXIT)
-      if (hasResult) { load(monitorResult) }
+      if(hasResult) { load(monitorResult) }
       val postHandler = new asm.Label
       bc goTo postHandler
 
-      // ---------- (3) emit code for the exception handler.
+      /* ------ (4) exception-handler version of monitor-exit code.
+       *            Reached upon abrupt termination of (2).
+       *            Protected by whatever protects the whole synchronized expression.
+       * ------
+       */
       protect(startProtected, endProtected, currProgramPoint(), ThrowableClass)
       load(monitor)
       emit(asm.Opcodes.MONITOREXIT)
       emit(asm.Opcodes.ATHROW)
 
+      /* ------ (5) cleanup version of monitor-exit code.
+       *            Reached upon early-return from (2).
+       *            Protected by whatever protects the whole synchronized expression.
+       * ------
+       */
+      if(shouldEmitCleanup) {
+        markProgramPoint(monCleanup)
+        load(monitor)
+        emit(asm.Opcodes.MONITOREXIT)
+        pendingCleanups()
+      }
+
+      /* ------ (6) normal exit of the synchronized expression.
+       *            Reached after normal, non-early-return, termination of (3).
+       *            Protected by whatever protects the whole synchronized expression.
+       * ------
+       */
       mnode visitLabel postHandler
 
       expectedType
@@ -738,21 +770,21 @@ abstract class GenBCode extends BCodeUtils {
       resKind
     }
 
+    /** Detects whether no instructions have been emitted since label `lbl` (by checking whether the current program point is still `lbl`)
+     *  and if so emits a NOP. This can be used to avoid an empty try-block being protected by exception handlers, which results in an illegal class file format exception. */
+    def nopIfNeeded(lbl: asm.Label) {
+      val noInstructionEmitted = isAtProgramPoint(lbl)
+      if(noInstructionEmitted) { emit(asm.Opcodes.NOP) }
+    }
+
     /** TODO documentation */
     def genLoadTry(tree: Try): TypeKind = {
-
-          /** Detects whether no instructions have been emitted since label `lbl` (by checking whether the current program point is still `lbl`)
-           *  and if so emits a NOP. This can be used to avoid an empty try-block being protected by exception handlers, which results in an illegal class file format exception. */
-          def padNOPIfAt(lbl: asm.Label) {
-            val noInstructionEmitted = isAtProgramPoint(lbl)
-            if(noInstructionEmitted) { emit(asm.Opcodes.NOP) }
-          }
 
       val Try(block, catches, finalizer) = tree
       val kind = toTypeKind(tree.tpe)
 
       val caseHandlers: List[EHClause] =
-        for (CaseDef(pat, _, caseBody) <- catches /* TODO why .reverse ? */ ) yield {
+        for (CaseDef(pat, _, caseBody) <- catches) yield {
           pat match {
             case Typed(Ident(nme.WILDCARD), tpt)  => NamelessEH(tpt.tpe.typeSymbol, caseBody)
             case Ident(nme.WILDCARD)              => NamelessEH(ThrowableClass,     caseBody)
@@ -760,23 +792,40 @@ abstract class GenBCode extends BCodeUtils {
           }
         }
 
-      val after        = new asm.Label
-      val guardResult  = kind != UNIT && mayCleanStack(finalizer)
-      val tmp          = if (guardResult) makeLocal(tree.tpe, "tmp") else null;
-      val hasFinally   = (finalizer != EmptyTree)
-      val postHandlers = if(hasFinally) new asm.Label  else after // the non-exception-handler-version of the finally-clause.
-      val finalHandler = if(hasFinally) new asm.Label  else null; // the exception-handler-version of the finally-clause.
+      // ------ (0) locals used later ------
 
-      // ------ (1) emit try-block ------
+      // points to (a) the finally-clause conceptually reached via fall-through from try-catch, or (b) program point right after the try-catch-finally.
+      val postHandlers = new asm.Label
+      val hasFinally   = (finalizer != EmptyTree)
+      // used in the finally-clause reached via fall-through from try-catch, if any.
+      val guardResult  = hasFinally && (kind != UNIT) && mayCleanStack(finalizer)
+      // please notice `tmp` has type tree.tpe, while `earlyReturnVar` has the method return type. Because those two types can be different, dedicated vars are needed.
+      val tmp          = if(guardResult) makeLocal(tree.tpe, "tmp") else null;
+      // upon early return from the try-body or one of its EHs (but not the EH-version of the finally-clause) AND hasFinally, a cleanup is needed.
+      val finCleanup   = if(hasFinally) new asm.Label else null
+
+      /* ------ (1) try-block, protected by:
+       *                       (1.a) the EHs due to case-clauses,   emitted in (2),
+       *                       (1.b) the EH  due to finally-clause, emitted in (3.A)
+       *                       (1.c) whatever protects the whole try-catch-finally expression.
+       * ------
+       */
+
       val startTryBody = currProgramPoint()
-      registerFinalizer(finalizer)
+      registerCleanup(finCleanup)
       genLoad(block, kind)
-      padNOPIfAt(startTryBody) // TODO The alternative is to elide all exc-handlers protecting the try body, which modifies semantics (e.g. ClassNotFound)
-      unregisterFinalizer(finalizer)
+      unregisterCleanup(finCleanup)
+      nopIfNeeded(startTryBody) // we can't elide an exception-handler protecting an empty try-body, that would change semantics (e.g. ClassNotFound due to the EH)
       val endTryBody = currProgramPoint()
       bc goTo postHandlers
 
-      // ------ (2) emit case-clauses, including finally-duplicates ------
+      /* ------ (2) One EH for each case-clause (this does not include the EH-version of the finally-clause)
+       *            An EH in (2) is reached upon abrupt termination of (1).
+       *            An EH in (2) is protected by:
+       *                         (2.a) the EH-version of the finally-clause, if any.
+       *                         (2.b) whatever protects the whole try-catch-finally expression.
+       * ------
+       */
 
       for (ch <- caseHandlers) {
 
@@ -784,49 +833,46 @@ abstract class GenBCode extends BCodeUtils {
         val startHandler = currProgramPoint()
         var endHandler: asm.Label = null
         var excCls: Symbol        = null
-        registerFinalizer(finalizer)
+        registerCleanup(finCleanup)
         ch match {
           case NamelessEH(classSymToDrop, caseBody) =>
             bc drop REFERENCE(classSymToDrop)
-            genLoad(caseBody, kind)
-            padNOPIfAt(startHandler)
+            genLoad(caseBody, kind) // adapts caseBody to `kind`, thus it can be stored, if `guardResult`, in `tmp`.
+            nopIfNeeded(startHandler)
             endHandler = currProgramPoint()
             excCls = classSymToDrop
 
           case BoundEH   (patSymbol,      caseBody) =>
-            if(!locals.contains(patSymbol)) {
-              // TODO understand why patSymbol may already have been entered as local-var, eg in test\files\run\contrib674.scala
+            if(!locals.contains(patSymbol)) { // test\files\run\contrib674.scala , a local-var already exists for patSymbol.
               makeLocal(patSymbol) // rather than creating on first-access, we do it right away to emit debug-info for the created local var.
             }
             store(patSymbol)
             genLoad(caseBody, kind)
-            padNOPIfAt(startHandler)
+            nopIfNeeded(startHandler)
             endHandler = currProgramPoint()
             emitLocalVarScope(patSymbol, startHandler, endHandler)
             excCls = patSymbol.tpe.typeSymbol
         }
-        unregisterFinalizer(finalizer)
-
+        unregisterCleanup(finCleanup)
         // (2.b)  mark the try-body as protected by this case clause.
         protect(startTryBody, endTryBody, startHandler, excCls)
-        if(hasFinally) {
-          // (2.c.i)  mark the finally-clause protecting this case clause (except the duplicate finalizer)
-          protect(startHandler, endHandler, finalHandler, null)
-          // (2.c.ii) duplicate finalizer
-          emitFinalizer(finalizer, tmp, true) // TODO check if GenICode protects a dup finalizer with a finalizer (shouldn't)
-        }
-        // (2.d) emit jump to post-try program point.
-        bc goTo after
+        // (2.c) emit jump to the program point where the finally-clause-for-normal-exit starts, or in effect `after` if no finally-clause was given.
+        bc goTo postHandlers
 
       }
 
-      // ------ (3) emit the exception-handler-version of the finally-clause ------
+      /* ------ (3.A) The exception-handler-version of the finally-clause.
+       *              Reached upon abrupt termination of (1) or one of the EHs in (2).
+       *              Protected only by whatever protects the whole try-catch-finally expression.
+       * ------
+       */
 
-      padNOPIfAt(startTryBody)
-      val pastLastHandler = currProgramPoint()
+      // a note on terminology: this is not "postHandlers", despite appearences.
+      // "postHandlers" as in the source-code view. And from that perspective, both (3.A) and (3.B) are invisible implementation artifacts.
       if(hasFinally) {
-        markProgramPoint(finalHandler)
-        protect(startTryBody, pastLastHandler, finalHandler, null)
+        nopIfNeeded(startTryBody)
+        val finalHandler = currProgramPoint() // version of the finally-clause reached via unhandled exception.
+        protect(startTryBody, finalHandler, finalHandler, null)
         val Local(eTK, _, eIdx) = locals(makeLocal(ThrowableClass.tpe, "exc"))
         bc.store(eIdx, eTK)
         emitFinalizer(finalizer, null, true)
@@ -834,20 +880,61 @@ abstract class GenBCode extends BCodeUtils {
         emit(asm.Opcodes.ATHROW)
       }
 
-      // ------ (4) emit the non-exception-handler-version of the finally-clause ------
+      /* ------ (3.B) Cleanup-version of the finally-clause.
+       *              Reached upon early RETURN from (1) or from one of the EHs in (2)
+       *                     (and only from there, ie the only from program regions bracketed by registerCleanup/unregisterCleanup).
+       *              Protected only by whatever protects the whole try-catch-finally expression.
+       * TODO explain what happens upon RETURN contained in (3.B)
+       * ------
+       */
+
+      // this is not "postHandlers" either.
+      // `shouldEmitCleanup` can be set, yet this try expression lack a finally-clause.
+      // In other words, all combinations of (hasFinally, shouldEmitCleanup) are valid.
+      if(hasFinally && shouldEmitCleanup) {
+        markProgramPoint(finCleanup)
+        // regarding return value, the protocol is: in place of a `return-stmt`, a sequence of `adapt, store, jump` are inserted.
+        emitFinalizer(finalizer, null, false)
+        pendingCleanups()
+      }
+
+      /* ------ (4) finally-clause-for-normal-nonEarlyReturn-exit
+       *            Reached upon normal, non-early-return termination of (1) or one of the EHs in (2).
+       *            Protected only by whatever protects the whole try-catch-finally expression.
+       * TODO explain what happens upon RETURN contained in (4)
+       * ------
+       */
 
       markProgramPoint(postHandlers)
-      if(hasFinally) { emitFinalizer(finalizer, tmp, false) }
-      markProgramPoint(after)
+      if(hasFinally) {
+        emitFinalizer(finalizer, tmp, false) // the only invocation of emitFinalizer with `isDuplicate == false`
+      }
 
       kind
     } // end of genLoadTry()
+
+    /** if no more pending cleanups, all that remains to do is return. Otherwise jump to the next (outer) pending cleanup. */
+    private def pendingCleanups() {
+      cleanups match {
+        case Nil =>
+          if(earlyReturnVar != null) {
+            load(earlyReturnVar)
+            bc.emitRETURN(locals(earlyReturnVar).tk)
+          } else {
+            bc emitRETURN UNIT
+          }
+          shouldEmitCleanup = false
+
+        case nextCleanup :: _ =>
+          bc goTo nextCleanup
+      }
+    }
 
     private def protect(start: asm.Label, end: asm.Label, handler: asm.Label, excCls: Symbol) {
       val excInternalName: String =
         if (excCls == null || excCls == NoSymbol || excCls == ThrowableClass) null
         else javaName(excCls)
-      // TODO warn if (start == end) (not necessarily wrong, but unusual).
+      assert(start != end, "protecting a range of zero instructions leads to illegal class format. Solution: add a NOP to that range.")
       mnode.visitTryCatchBlock(start, end, handler, excInternalName)
     }
 
@@ -1040,32 +1127,31 @@ abstract class GenBCode extends BCodeUtils {
       val Return(expr) = r
       val returnedKind = toTypeKind(expr.tpe)
       genLoad(expr, returnedKind)
-      val activeCleanups = cleanups // visiting may result in Try nodes being found, and their finally-clauses added to GenBCode's cleanups.
-      val saveReturnValue = (returnedKind != UNIT) && mayCleanStack(activeCleanups)
-      val tmp = if(saveReturnValue) makeLocal(expr.tpe, "tmp") else null;
-      if(saveReturnValue) { store(tmp) }
-      activeCleanups foreach {
-
-        case MonitorRelease(m) =>
-          load(m)
-          emit(asm.Opcodes.MONITOREXIT)
-          // TODO GenICode does here `ctx1.exitSynchronized(m)`, but we don't need that here, right?
-
-        case Finalizer(f) =>
-          emitFinalizer(f, null, true) // null means "either there's nothing to store, or it was stored already"
-          /* TODO GenICode says (Q: Is that a problem here?):
-           *   "we have to run this without the same finalizer in the list,
-           *    otherwise infinite recursion happens for finalizers that contain 'return'"
-           */
-
-      }
-      assert(activeCleanups eq cleanups, "Unbalanced register/unregister of cleanups.")
-      if (saveReturnValue) { load(tmp) }
-      val returnType = if (methSymbol.isConstructor) UNIT
-                       else toTypeKind(methSymbol.info.resultType)
       adapt(returnedKind, returnType)
-      bc emitRETURN returnType
-    }
+      val saveReturnValue = (returnType != UNIT)
+
+      cleanups match {
+        case Nil =>
+          // not an assertion: !shouldEmitCleanup (at least not yet, pendingCleanups() may still have to run, and reset `shouldEmitCleanup`.
+          bc emitRETURN returnType
+        case nextCleanup :: rest =>
+          if(saveReturnValue) {
+            if(shouldEmitCleanup) {
+              cunit.warning(r.pos, "Return statement found in finally-clause, discarding its return-value in favor of that of a more deeply nested return.")
+              bc drop returnType
+            } else {
+              // regarding return value, the protocol is: in place of a `return-stmt`, a sequence of `adapt, store, jump` are inserted.
+              if(earlyReturnVar == null) {
+                earlyReturnVar = makeLocal(returnType.toType, "earlyReturnVar")
+              }
+              store(earlyReturnVar)
+            }
+          }
+          bc goTo nextCleanup
+          shouldEmitCleanup = true
+      }
+
+    } // end of genReturn()
 
     private def genApply(tree: Apply, expectedType: TypeKind): TypeKind = {
       var generatedType = expectedType
@@ -1795,12 +1881,6 @@ abstract class GenBCode extends BCodeUtils {
     def mayCleanStack(tree: Tree): Boolean = tree exists { // TODO de-duplicate with GenICode
       case Try(_, _, _) => true
       case _            => false
-    }
-    def mayCleanStack(activeCleanups: List[Cleanup]): Boolean = {
-      activeCleanups exists {
-        case _: MonitorRelease => false
-        case Finalizer(f)      => mayCleanStack(f)
-      }
     }
 
     def getMaxType(ts: List[Type]): TypeKind = // TODO de-duplicate with GenICode

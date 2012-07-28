@@ -414,7 +414,7 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
       val superClass: Symbol = if(ps.isEmpty) ObjectClass else ps.head.typeSymbol;
 
       val superInterfaces0: List[Symbol] = if(ps.isEmpty) Nil else c.symbol.mixinClasses;
-      val superInterfaces = superInterfaces0 ++ c.symbol.annotations.flatMap(ann => newParentForAttr(ann.symbol)) distinct
+      val superInterfaces = (superInterfaces0 ++ c.symbol.annotations.flatMap(ann => newParentForAttr(ann.symbol))).distinct
 
       val ifaces =
         if(superInterfaces.isEmpty) JClass.NO_INTERFACES

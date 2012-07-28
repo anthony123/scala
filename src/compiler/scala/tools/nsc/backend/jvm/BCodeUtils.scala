@@ -1723,7 +1723,7 @@ abstract class BCodeUtils extends SubComponent with BytecodeWriters {
       val linkedClass  = moduleClass.companionClass
       val linkedModule = linkedClass.companionSymbol
       lazy val conflictingNames: Set[Name] = {
-        linkedClass.info.members collect { case sym if sym.name.isTermName => sym.name } toSet
+        (linkedClass.info.members collect { case sym if sym.name.isTermName => sym.name }).toSet
       }
       debuglog("Potentially conflicting names for forwarders: " + conflictingNames)
 

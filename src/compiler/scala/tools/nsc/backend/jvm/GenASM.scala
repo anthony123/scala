@@ -1092,7 +1092,7 @@ abstract class GenASM extends BCodeUtils {
             hops ::= prev
             if (hops.contains(dest)) {
               // leave infinite-loops in place
-              return (dest, hops filterNot (dest eq))
+              return (dest, hops filterNot (dest eq _))
             }
             prev = dest;
             false
