@@ -1234,3 +1234,4 @@ abstract class GenASM extends BCodeUtils {
   }
 
 }
+
