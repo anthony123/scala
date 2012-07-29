@@ -62,6 +62,8 @@ abstract class GenBCode extends BCodeUtils {
     private var shouldEmitCleanup          = false
     // used in connection with cleanups
     private var returnType: TypeKind       = null
+    // line numbers
+    private var lastEmittedLineNr          = -1
 
     // bookkeeping for program points within a method associated to LabelDefs (other program points aren't tracked here).
     private var locLabel: immutable.Map[ /* LabelDef */ Symbol, asm.Label ] = null
@@ -146,6 +148,23 @@ abstract class GenBCode extends BCodeUtils {
     def isAtProgramPoint(lbl: asm.Label): Boolean = {
       (lastInsn match { case labnode: asm.tree.LabelNode => (labnode.getLabel == lbl); case _ => false } )
     }
+    def lineNumber(tree: Tree) {
+      if(!tree.pos.isDefined) return;
+      val nr = tree.pos.line
+      if(nr != lastEmittedLineNr) {
+        lastEmittedLineNr = nr
+        lastInsn match {
+          case lnn: asm.tree.LineNumberNode =>
+            if(lnn.line != nr) {
+              // "overwrite" previous landmark as no instructions have been emitted for it
+              mnode.instructions.remove(lnn)
+              mnode.visitLineNumber(nr, currProgramPoint())
+            } // otherwise do nothing.
+          case _ =>
+            mnode.visitLineNumber(nr, currProgramPoint())
+        }
+      }
+    }
 
     // on entering a method
     private def resetMethodBookkeeping(dd: DefDef) {
@@ -167,6 +186,7 @@ abstract class GenBCode extends BCodeUtils {
       returnType =
         if (dd.symbol.isConstructor) UNIT
         else toTypeKind(dd.symbol.info.resultType)
+      lastEmittedLineNr = -1
     }
 
     override def getCurrentCUnit(): CompilationUnit = { cunit }
@@ -437,6 +457,7 @@ abstract class GenBCode extends BCodeUtils {
             }
 
       if (!isAbstractMethod && !isNative) {
+        lineNumber(rhs)
         if(isAccessorToStaticField(msym)) {
           // special-cased method body for an accessor to @static field
           emitBodyOfStaticAccessor()
@@ -553,16 +574,19 @@ abstract class GenBCode extends BCodeUtils {
      * otherwise an `adapt()` to UNIT is performed if needed.
      */
     def genStat(tree: Tree) {
+      lineNumber(tree)
       tree match {
         case Assign(lhs @ Select(_, _), rhs) =>
           val isStatic = lhs.symbol.isStaticMember
           if (!isStatic) { genLoadQualifier(lhs) }
           genLoad(rhs, toTypeKind(lhs.symbol.info))
+          lineNumber(tree)
           bc fieldStore lhs.symbol
 
         case Assign(lhs, rhs) =>
           val tk = toTypeKind(lhs.symbol.info)
           genLoad(rhs, tk)
+          lineNumber(tree)
           bc.store(index(lhs.symbol), tk)
 
         case _ =>
@@ -575,6 +599,7 @@ abstract class GenBCode extends BCodeUtils {
 
       val thrownKind = toTypeKind(expr.tpe)
       genLoad(expr, thrownKind)
+      lineNumber(expr)
       emit(asm.Opcodes.ATHROW) // ICode enters here into enterIgnoreMode, we'll rely instead on DCE at ClassNode level.
 
       NothingReference // always returns the same, the invoker should know :)
@@ -630,6 +655,7 @@ abstract class GenBCode extends BCodeUtils {
         case _ =>
           abort("Too many arguments for primitive function: " + tree)
       }
+      lineNumber(tree)
       resKind
     }
 
@@ -664,6 +690,7 @@ abstract class GenBCode extends BCodeUtils {
         generatedType = INT
         emit(asm.Opcodes.ARRAYLENGTH)
       }
+      lineNumber(tree)
 
       generatedType
     }
@@ -738,6 +765,8 @@ abstract class GenBCode extends BCodeUtils {
        * ------
        */
       mnode visitLabel postHandler
+
+      lineNumber(tree)
 
       expectedType
     }
@@ -999,6 +1028,8 @@ abstract class GenBCode extends BCodeUtils {
     def genLoad(tree: Tree, expectedType: TypeKind) {
       var generatedType = expectedType
 
+      lineNumber(tree)
+
       tree match {
         case lblDf : LabelDef => genLabelDef(lblDf, expectedType)
 
@@ -1120,6 +1151,7 @@ abstract class GenBCode extends BCodeUtils {
       // duplication of `finally`-contained LabelDefs is handled when emitting a RET. No bookkeeping for that required here.
       // no need to call index() over lblDf.params, on first access that magic happens (moreover, no LocalVariableTable entries needed for them).
       markProgramPoint(programPoint(lblDf.symbol))
+      lineNumber(lblDf)
       genLoad(lblDf.rhs, expectedType)
     }
 
@@ -1129,6 +1161,7 @@ abstract class GenBCode extends BCodeUtils {
       genLoad(expr, returnedKind)
       adapt(returnedKind, returnType)
       val saveReturnValue = (returnType != UNIT)
+      lineNumber(r)
 
       cleanups match {
         case Nil =>
@@ -1155,6 +1188,7 @@ abstract class GenBCode extends BCodeUtils {
 
     private def genApply(tree: Apply, expectedType: TypeKind): TypeKind = {
       var generatedType = expectedType
+      lineNumber(tree)
       tree match {
 
         case Apply(TypeApply(fun, targs), _) =>
@@ -1369,6 +1403,7 @@ abstract class GenBCode extends BCodeUtils {
       var generatedType = ARRAY(elmKind)
       val elems         = elems0.toIndexedSeq
 
+      lineNumber(av)
       bc iconst   elems.length
       bc newarray elmKind
 
@@ -1394,6 +1429,7 @@ abstract class GenBCode extends BCodeUtils {
      *
      * On a second pass, we emit the switch blocks, one for each different target. */
     private def genMatch(tree: Match): TypeKind = {
+      lineNumber(tree)
       genLoad(tree.selector, INT)
       val generatedType = toTypeKind(tree.tpe)
 
@@ -1477,6 +1513,7 @@ abstract class GenBCode extends BCodeUtils {
 
     /** Emit code to Load the qualifier of `tree` on top of the stack. */
     def genLoadQualifier(tree: Tree) {
+      lineNumber(tree)
       tree match {
         case Select(qualifier, _) => genLoad(qualifier, toTypeKind(qualifier.tpe))
         case _                    => abort("Unknown qualifier " + tree)
@@ -1523,6 +1560,7 @@ abstract class GenBCode extends BCodeUtils {
           case s        => debugwarn("Bug: found package class where package object expected.  Converting.") ; s.moduleClass
         }
       )
+      lineNumber(tree)
       genLoadModule(module)
     }
 
@@ -1590,6 +1628,7 @@ abstract class GenBCode extends BCodeUtils {
 
     /** Generate coercion denoted by "code" */
     def genCoercion(tree: Tree, code: Int) = {
+      lineNumber(tree)
       import scalaPrimitives._
       (code: @switch) match {
         case B2B | S2S | C2C | I2I | L2L | F2F | D2D => ()
@@ -1609,7 +1648,7 @@ abstract class GenBCode extends BCodeUtils {
     )
 
     def genStringConcat(tree: Tree): TypeKind = {
-
+      lineNumber(tree)
       liftStringConcat(tree) match {
 
         // Optimization for expressions of the form "" + x.  We can avoid the StringBuilder.
@@ -1761,6 +1800,7 @@ abstract class GenBCode extends BCodeUtils {
             genCZJUMP(success, failure, NE, BOOL)
           }
 
+      lineNumber(tree)
       tree match {
 
         case Apply(fun, args) if isPrimitive(fun.symbol) =>
