@@ -217,6 +217,14 @@ abstract class GenBCode extends BCodeUtils {
       override def jmethod = BCodePhase.this.mnode
     }
 
+    /** If the selector type has a member with the right name,
+     *  it is the host class; otherwise the symbol's owner.
+     */
+    def findHostClass(selector: Type, sym: Symbol) = selector member sym.name match { // TODO de-duplicate with GenICode
+      case NoSymbol   => log(s"Rejecting $selector as host class for $sym") ; sym.owner
+      case _          => selector.typeSymbol
+    }
+
     /* ---------------- top-down traversal invoking ASM Tree API along the way ---------------- */
 
     def gen(tree: Tree) {
@@ -1093,7 +1101,8 @@ abstract class GenBCode extends BCodeUtils {
         case Select(qualifier, selector) =>
           val sym = tree.symbol
           generatedType = toTypeKind(sym.info)
-          val hostClass = qualifier.tpe.typeSymbol.orElse(sym.owner)
+          val hostClass = findHostClass(qualifier.tpe, sym)
+          log(s"Host class of $sym with qual $qualifier (${qualifier.tpe}) is $hostClass")
 
           if (sym.isModule)            { genLoadModule(tree) }
           else if (sym.isStaticMember) { bc.fieldLoad(sym, hostClass) }
@@ -1367,13 +1376,13 @@ abstract class GenBCode extends BCodeUtils {
             var targetTypeKind: TypeKind = null
             fun match {
               case Select(qual, _) =>
-                val qualSym = qual.tpe.typeSymbol
+                val qualSym = findHostClass(qual.tpe, sym)
                 if (qualSym == ArrayClass) { targetTypeKind = toTypeKind(qual.tpe) }
                 else { hostClass = qualSym }
 
-                debuglog(
+                log(
                   if (qualSym == ArrayClass) "Stored target type kind " + toTypeKind(qual.tpe) + " for " + sym.fullName
-                  else "Set more precise host class for " + sym.fullName + " host: " + qualSym
+                  else s"Set more precise host class for ${sym.fullName} hostClass: $qualSym"
                 )
               case _ =>
             }
