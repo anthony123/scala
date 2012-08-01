@@ -77,15 +77,15 @@ trait AnnotationInfos extends api.AnnotationInfos { self: SymbolTable =>
    */
   case class ScalaSigBytes(bytes: Array[Byte]) extends ClassfileAnnotArg {
     override def toString = (bytes map { byte => (byte & 0xff).toHexString }).mkString("[ ", " ", " ]")
-    lazy val encodedBytes = ByteCodecs.encode(bytes)    // TODO remove after migration to ASM-based GenJVM complete
-    def isLong: Boolean = (encodedBytes.length > 65535) // TODO remove after migration to ASM-based GenJVM complete
+    lazy val encodedBytes = ByteCodecs.encode(bytes)    // TODO remove after removing GenJVM from the compiler.
+    def isLong: Boolean = (encodedBytes.length > 65535) // TODO remove after removing GenJVM from the compiler.
     lazy val sevenBitsMayBeZero: Array[Byte] = {
       mapToNextModSevenBits(scala.reflect.internal.pickling.ByteCodecs.encode8to7(bytes))
     }
     def fitsInOneString: Boolean = {
       val numZeros = (sevenBitsMayBeZero count { b => b == 0 })
       val res = (sevenBitsMayBeZero.length + numZeros) <= 65535
-      assert(this.isLong == !res, "As things stand, can't just swap in `fitsInOneString()` for `isLong()`")
+      assert(this.isLong == !res, "`!fitsInOneString()` supposed to be used interchangeably with `isLong()`")
       res
     }
     def sigAnnot: Type =

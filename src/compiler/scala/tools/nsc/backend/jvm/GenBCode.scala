@@ -500,6 +500,9 @@ abstract class GenBCode extends BCodeUtils {
           }
 
         }
+
+        // Note we don't invoke visitMax, thus there are no FrameNode among mnode.instructions.
+        // The only non-instruction nodes to be found are LabelNode and LineNumberNode.
       }
       mnode = null
     } // end of method genDefDef()
