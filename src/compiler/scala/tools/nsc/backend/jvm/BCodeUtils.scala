@@ -1401,7 +1401,6 @@ abstract class BCodeUtils extends SubComponent with BytecodeWriters {
       ca
     }
 
-    // TODO this method isn't exercised during bootstrapping. Open question: is it bug free?
     private def arrEncode(sb: ScalaSigBytes): Array[String] = {
       var strs: List[String]  = Nil
       val bSeven: Array[Byte] = sb.sevenBitsMayBeZero
@@ -1410,14 +1409,15 @@ abstract class BCodeUtils extends SubComponent with BytecodeWriters {
       var offset     = 0
       var encLength  = 0
       while(offset < bSeven.size) {
-        val newEncLength = encLength.toLong + (if(bSeven(offset) == 0) 2 else 1)
-        if(newEncLength > 65535) {
+        val deltaEncLength = (if(bSeven(offset) == 0) 2 else 1)
+        val newEncLength   = encLength + deltaEncLength
+        if(newEncLength >= 65535) {
           val ba     = bSeven.slice(prevOffset, offset)
           strs     ::= new java.lang.String(ubytesToCharArray(ba))
           encLength  = 0
           prevOffset = offset
         } else {
-          encLength += 1
+          encLength += deltaEncLength
           offset    += 1
         }
       }
@@ -1426,7 +1426,7 @@ abstract class BCodeUtils extends SubComponent with BytecodeWriters {
         val ba = bSeven.slice(prevOffset, offset)
         strs ::= new java.lang.String(ubytesToCharArray(ba))
       }
-      assert(strs.size > 1, "encode instead as one String via strEncode()") // TODO too strict?
+      assert(strs.size > 1, "encode instead as one String via strEncode()")
       strs.reverse.toArray
     }
 

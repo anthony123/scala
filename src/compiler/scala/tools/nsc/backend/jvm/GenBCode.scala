@@ -259,9 +259,9 @@ abstract class GenBCode extends BCodeUtils {
 
         case _: ModuleDef => abort("Modules should have been eliminated by refchecks: " + tree)
 
-        case ValDef(mods, name, tpt, rhs) => () // fields are added in the case handler for ClassDef
+        case _: ValDef    => () // fields are added in the case handler for ClassDef
 
-        case dd : DefDef => genDefDef(dd)
+        case dd: DefDef   => genDefDef(dd)
 
         case Template(_, _, body) => body foreach gen
 
