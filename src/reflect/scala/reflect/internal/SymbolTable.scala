@@ -1,5 +1,5 @@
 /* NSC -- new scala compiler
- * Copyright 2005-2011 LAMP/EPFL
+ * Copyright 2005-2012 LAMP/EPFL
  * @author  Martin Odersky
  */
 
@@ -9,7 +9,7 @@ package internal
 import scala.collection.{ mutable, immutable }
 import util._
 
-abstract class SymbolTable extends makro.Universe
+abstract class SymbolTable extends macros.Universe
                               with Collections
                               with Names
                               with Symbols

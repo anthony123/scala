@@ -1,5 +1,5 @@
 /* NSC -- new Scala compiler
- * Copyright 2005-2011 LAMP/EPFL
+ * Copyright 2005-2012 LAMP/EPFL
  * @author  Martin Odersky
  */
 
@@ -616,7 +616,6 @@ trait StdNames {
     val apply: NameType                = "apply"
     val applyDynamic: NameType         = "applyDynamic"
     val applyDynamicNamed: NameType    = "applyDynamicNamed"
-    val applyImpl: NameType            = "applyImpl"
     val applyOrElse: NameType          = "applyOrElse"
     val args : NameType                = "args"
     val argv : NameType                = "argv"
@@ -628,14 +627,13 @@ trait StdNames {
     val array_length : NameType        = "array_length"
     val array_update : NameType        = "array_update"
     val arraycopy: NameType            = "arraycopy"
-    val asTermSymbol: NameType         = "asTermSymbol"
-    val asModuleSymbol: NameType       = "asModuleSymbol"
-    val asMethodSymbol: NameType       = "asMethodSymbol"
-    val asTypeSymbol: NameType         = "asTypeSymbol"
-    val asClassSymbol: NameType        = "asClassSymbol"
+    val asTerm: NameType               = "asTerm"
+    val asModule: NameType             = "asModule"
+    val asMethod: NameType             = "asMethod"
+    val asType: NameType               = "asType"
+    val asClass: NameType              = "asClass"
     val asInstanceOf_ : NameType       = "asInstanceOf"
     val asInstanceOf_Ob : NameType     = "$asInstanceOf"
-    val asTypeConstructor: NameType    = "asTypeConstructor"
     val assert_ : NameType             = "assert"
     val assume_ : NameType             = "assume"
     val basis : NameType               = "basis"
@@ -767,6 +765,7 @@ trait StdNames {
     val toObjectArray : NameType       = "toObjectArray"
     val toSeq: NameType                = "toSeq"
     val toString_ : NameType           = if (forMSIL) "ToString" else "toString"
+    val toTypeConstructor: NameType    = "toTypeConstructor"
     val tpe : NameType                 = "tpe"
     val tree : NameType                = "tree"
     val true_ : NameType               = "true"
@@ -937,6 +936,12 @@ trait StdNames {
       case `toDouble` => toDouble
       case _          => NO_NAME
     }
+
+    def primitiveMethodName(name: Name): TermName =
+      primitiveInfixMethodName(name) match {
+        case NO_NAME => primitivePostfixMethodName(name)
+        case name => name
+      }
 
     /** Translate a String into a list of simple TypeNames and TermNames.
      *  In all segments before the last, type/term is determined by whether

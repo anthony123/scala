@@ -80,10 +80,6 @@ trait Symbols { self: Universe =>
   /** The base API that all symbols support */
   trait SymbolBase { this: Symbol =>
 
-    /** An id number which is unique for all symbols in this universe */
-    // [Eugene++ to Martin] do we leave this here?
-    def id: Int
-
     /** The owner of this symbol. This is the symbol
      *  that directly contains the current symbol's definition.
      *  The `NoSymbol` symbol does not have an owner, and calling this method
@@ -112,18 +108,6 @@ trait Symbols { self: Universe =>
      */
     def fullName: String
 
-    /** If this symbol is a class, this symbol; otherwise the next enclosing
-     *  class, or `NoSymbol` if none exists.
-     */
-    def enclosingClass: Symbol =
-      if (isClass || this == NoSymbol) this else owner.enclosingClass
-
-    /** If this symbol is a method, this symbol; otherwise the next enclosing
-     *  method, or `NoSymbol` if none exists.
-     */
-    def enclosingMethod: Symbol =
-      if (isMethod || this == NoSymbol) this else owner.enclosingMethod
-
     /** Does this symbol represent the definition of a type?
      *  Note that every symbol is either a term or a type.
      *  So for every symbol `sym`, either `sym.isTerm` is true
@@ -132,9 +116,9 @@ trait Symbols { self: Universe =>
     def isType: Boolean = false
 
     /** This symbol cast to a TypeSymbol.
-     *  Returns ClassCastException if `isType` is false.
+     *  @throws ScalaReflectionException if `isType` is false.
      */
-    def asTypeSymbol: TypeSymbol = throw new ClassCastException(toString)
+    def asType: TypeSymbol = throw new ScalaReflectionException(s"$this is not a type")
 
     /** Does this symbol represent the definition of a term?
      *  Note that every symbol is either a term or a term.
@@ -144,9 +128,9 @@ trait Symbols { self: Universe =>
     def isTerm: Boolean = false
 
     /** This symbol cast to a TermSymbol.
-     *  Returns ClassCastException if `isTerm` is false.
+     *  @throws ScalaReflectionException if `isTerm` is false.
      */
-    def asTermSymbol: TermSymbol = throw new ClassCastException(toString)
+    def asTerm: TermSymbol = throw new ScalaReflectionException(s"$this is not a term")
 
     /** Does this symbol represent the definition of a method?
      *  If yes, `isTerm` is also guaranteed to be true.
@@ -154,9 +138,19 @@ trait Symbols { self: Universe =>
     def isMethod: Boolean = false
 
     /** This symbol cast to a MethodSymbol.
-     *  Returns ClassCastException if `isMethod` is false.
+     *  @throws ScalaReflectionException if `isMethod` is false.
      */
-    def asMethodSymbol: MethodSymbol = throw new ClassCastException(toString)
+    def asMethod: MethodSymbol = {
+      def overloadedMsg =
+        "encapsulates multiple overloaded alternatives and cannot be treated as a method. "+
+        "Consider invoking `<offending symbol>.asTerm.alternatives` and manually picking the required method"
+      def vanillaMsg = "is not a method"
+      val msg = if (isOverloadedMethod) overloadedMsg else vanillaMsg
+      throw new ScalaReflectionException(s"$this $msg")
+    }
+
+    /** Used to provide a better error message for `asMethod` */
+    protected def isOverloadedMethod = false
 
     /** Does this symbol represent the definition of a module (i.e. it
      *  results from an object definition?).
@@ -165,9 +159,9 @@ trait Symbols { self: Universe =>
     def isModule: Boolean = false
 
     /** This symbol cast to a ModuleSymbol defined by an object definition.
-     *  Returns ClassCastException if `isModule` is false.
+     *  @throws ScalaReflectionException if `isModule` is false.
      */
-    def asModuleSymbol: ModuleSymbol = throw new ClassCastException(toString)
+    def asModule: ModuleSymbol = throw new ScalaReflectionException(s"$this is not a module")
 
     /** Does this symbol represent the definition of a class or trait?
      *  If yes, `isType` is also guaranteed to be true.
@@ -181,9 +175,9 @@ trait Symbols { self: Universe =>
     def isModuleClass: Boolean = false
 
     /** This symbol cast to a ClassSymbol representing a class or trait.
-     *  Returns ClassCastException if `isClass` is false.
+     *  @throws ScalaReflectionException if `isClass` is false.
      */
-    def asClassSymbol: ClassSymbol = throw new ClassCastException(toString)
+    def asClass: ClassSymbol = throw new ScalaReflectionException(s"$this is not a class")
 
     /** Does this symbol represent a free term captured by reification?
      *  If yes, `isTerm` is also guaranteed to be true.
@@ -191,9 +185,9 @@ trait Symbols { self: Universe =>
     def isFreeTerm: Boolean = false
 
     /** This symbol cast to a free term symbol.
-     *  Returns ClassCastException if `isFreeTerm` is false.
+     *  @throws ScalaReflectionException if `isFreeTerm` is false.
      */
-    def asFreeTermSymbol: FreeTermSymbol = throw new ClassCastException(toString)
+    def asFreeTerm: FreeTermSymbol = throw new ScalaReflectionException(s"$this is not a free term")
 
     /** Does this symbol represent a free type captured by reification?
      *  If yes, `isType` is also guaranteed to be true.
@@ -201,9 +195,9 @@ trait Symbols { self: Universe =>
     def isFreeType: Boolean = false
 
     /** This symbol cast to a free type symbol.
-     *  Returns ClassCastException if `isFreeType` is false.
+     *  @throws ScalaReflectionException if `isFreeType` is false.
      */
-    def asFreeTypeSymbol: FreeTypeSymbol = throw new ClassCastException(toString)
+    def asFreeType: FreeTypeSymbol = throw new ScalaReflectionException(s"$this is not a free type")
 
     def newTermSymbol(name: TermName, pos: Position = NoPosition, flags: FlagSet = NoFlags): TermSymbol
     def newModuleAndClassSymbol(name: Name, pos: Position = NoPosition, flags: FlagSet = NoFlags): (ModuleSymbol, ClassSymbol)
@@ -219,16 +213,34 @@ trait Symbols { self: Universe =>
     final type NameType = TypeName
 
     /** The type constructor corresponding to this type symbol.
-     *  This is different from `asType` in that type parameters
-     *  are part of results of `asType`, but not of `asTypeConstructor`.
+     *  This is different from `toType` in that type parameters
+     *  are part of results of `toType`, but not of `toTypeConstructor`.
      *
      *  Example: Given a class declaration `class C[T] { ... } `, that generates a symbol
-     *  `C`. Then `C.asType` is the type `C[T]`, but `C.asTypeConstructor` is `C`.
+     *  `C`. Then `C.toType` is the type `C[T]`, but `C.toTypeConstructor` is `C`.
      */
-    def asTypeConstructor: Type
+    def toTypeConstructor: Type
+
+    /** A type reference that refers to this type symbol seen
+     *  as a member of given type `site`.
+     */
+    def toTypeIn(site: Type): Type
+
+    /**  A type reference that refers to this type symbol
+      *  Note if symbol is a member of a class, one almost always is interested
+      *  in `asTypeIn` with a site type instead.
+      *
+      *  Example: Given a class declaration `class C[T] { ... } `, that generates a symbol
+      *  `C`. Then `C.toType` is the type `C[T]`.
+      *
+      *  By contrast, `C.typeSignature` would be a type signature of form
+      *  `PolyType(ClassInfoType(...))` that describes type parameters, value
+      *  parameters, parent types, and members of `C`.
+      */
+     def toType: Type
 
     override def isType = true
-    override def asTypeSymbol = this
+    override def asType = this
   }
 
   /** The base API that all term symbols support */
@@ -238,13 +250,13 @@ trait Symbols { self: Universe =>
     final type NameType = TermName
 
     final override def isTerm = true
-    final override def asTermSymbol = this
+    final override def asTerm = this
   }
 
   /** The base API that all method symbols support */
   trait MethodSymbolBase extends TermSymbolBase { this: MethodSymbol =>
     final override def isMethod = true
-    final override def asMethodSymbol = this
+    final override def asMethod = this
   }
 
   /** The base API that all module symbols support */
@@ -257,24 +269,24 @@ trait Symbols { self: Universe =>
     // [Eugene++] when this becomes `moduleClass: ClassSymbol`, it will be the happiest day in my life
 
     final override def isModule = true
-    final override def asModuleSymbol = this
+    final override def asModule = this
   }
 
   /** The base API that all class symbols support */
   trait ClassSymbolBase extends TypeSymbolBase { this: ClassSymbol =>
     final override def isClass = true
-    final override def asClassSymbol = this
+    final override def asClass = this
   }
 
   /** The base API that all free type symbols support */
   trait FreeTypeSymbolBase extends TypeSymbolBase { this: FreeTypeSymbol =>
     final override def isFreeType = true
-    final override def asFreeTypeSymbol = this
+    final override def asFreeType = this
   }
 
   /** The base API that all free term symbols support */
   trait FreeTermSymbolBase extends TermSymbolBase { this: FreeTermSymbol =>
     final override def isFreeTerm = true
-    final override def asFreeTermSymbol = this
+    final override def asFreeTerm = this
   }
 }

@@ -1,5 +1,5 @@
  /* NSC -- new Scala compiler
- * Copyright 2005-2011 LAMP/EPFL
+ * Copyright 2005-2012 LAMP/EPFL
  * @author  Martin Odersky
  */
 
@@ -64,6 +64,8 @@ trait Symbols extends api.Symbols { self: SymbolTable =>
 
     def kind: String = kindString
     def isExistential: Boolean = this.isExistentiallyBound
+    def isParamWithDefault: Boolean = this.hasDefault
+    def isByNameParam: Boolean = this.isValueParameter && (this hasFlag BYNAMEPARAM)
 
     def newNestedSymbol(name: Name, pos: Position, newFlags: Long, isClass: Boolean): Symbol = name match {
       case n: TermName => newTermSymbol(n, pos, newFlags)
@@ -75,15 +77,17 @@ trait Symbols extends api.Symbols { self: SymbolTable =>
     def typeSignature: Type               = info
     def typeSignatureIn(site: Type): Type = site memberInfo this
 
-    def asType: Type = tpe
-    def asTypeIn(site: Type): Type = site.memberType(this)
-    def asTypeConstructor: Type = typeConstructor
+    def toType: Type = tpe
+    def toTypeIn(site: Type): Type = site.memberType(this)
+    def toTypeConstructor: Type = typeConstructor
     def setFlags(flags: FlagSet): this.type = setInternalFlags(flags)
     def setInternalFlags(flag: Long): this.type = { setFlag(flag); this }
     def setTypeSignature(tpe: Type): this.type = { setInfo(tpe); this }
     def getAnnotations: List[AnnotationInfo] = { initialize; annotations }
     def setAnnotations(annots: AnnotationInfo*): this.type = { setAnnotations(annots.toList); this }
 
+    def getter: Symbol = getter(owner)
+    def setter: Symbol = setter(owner)
   }
 
   /** The class for all symbols */
@@ -311,10 +315,16 @@ trait Symbols extends api.Symbols { self: SymbolTable =>
       skolem setInfo (basis.info cloneInfo skolem)
     }
 
+    // don't test directly -- use isGADTSkolem
+    // used to single out a gadt skolem symbol in deskolemizeGADT
+    // gadtskolems are created in adaptConstrPattern and removed at the end of typedCase
+    @inline final protected[Symbols] def GADT_SKOLEM_FLAGS = CASEACCESSOR | SYNTHETIC
+
     // flags set up to maintain TypeSkolem's invariant: origin.isInstanceOf[Symbol] == !hasFlag(EXISTENTIAL)
-    // CASEACCESSOR | SYNTHETIC used to single this symbol out in deskolemizeGADT
+    // GADT_SKOLEM_FLAGS (== CASEACCESSOR | SYNTHETIC) used to single this symbol out in deskolemizeGADT
+    // TODO: it would be better to allocate a new bit in the flag long for GADTSkolem rather than OR'ing together CASEACCESSOR | SYNTHETIC
     def newGADTSkolem(name: TypeName, origin: Symbol, info: Type): TypeSkolem =
-      newTypeSkolemSymbol(name, origin, origin.pos, origin.flags & ~(EXISTENTIAL | PARAM) | CASEACCESSOR | SYNTHETIC) setInfo info
+      newTypeSkolemSymbol(name, origin, origin.pos, origin.flags & ~(EXISTENTIAL | PARAM) | GADT_SKOLEM_FLAGS) setInfo info
 
     final def freshExistential(suffix: String): TypeSymbol =
       newExistential(freshExistentialName(suffix), pos)
@@ -454,6 +464,7 @@ trait Symbols extends api.Symbols { self: SymbolTable =>
     def isAliasType    = false
     def isAbstractType = false
     def isSkolem       = false
+    def isMacro        = this hasFlag MACRO
 
     /** A Type, but not a Class. */
     def isNonClassType = false
@@ -2484,6 +2495,21 @@ trait Symbols extends api.Symbols { self: SymbolTable =>
       mtpeResult = res
       res
     }
+
+    override def params: List[List[Symbol]] = paramss
+
+    override def isVarargs: Boolean = definitions.isVarArgsList(paramss.flatten)
+
+    override def returnType: Type = {
+      def loop(tpe: Type): Type =
+        tpe match {
+          case NullaryMethodType(ret) => loop(ret)
+          case MethodType(_, ret) => loop(ret)
+          case PolyType(_, tpe) => loop(tpe)
+          case tpe => tpe
+        }
+      loop(info)
+    }
   }
   implicit val MethodSymbolTag = ClassTag[MethodSymbol](classOf[MethodSymbol])
 
@@ -2683,7 +2709,7 @@ trait Symbols extends api.Symbols { self: SymbolTable =>
     // a type symbol bound by an existential type, for instance the T in
     // List[T] forSome { type T }
     override def isExistentialSkolem = this hasFlag EXISTENTIAL
-    override def isGADTSkolem        = this hasFlag CASEACCESSOR | SYNTHETIC
+    override def isGADTSkolem        = this hasAllFlags GADT_SKOLEM_FLAGS
     override def isTypeSkolem        = this hasFlag PARAM
     override def isAbstractType      = this hasFlag DEFERRED
 
@@ -2747,8 +2773,10 @@ trait Symbols extends api.Symbols { self: SymbolTable =>
     override def isJavaInterface         = hasAllFlags(JAVA | TRAIT)
     override def isNestedClass           = !owner.isPackageClass
     override def isNumericValueClass     = definitions.isNumericValueClass(this)
+    override def isNumeric               = isNumericValueClass
     override def isPackageObjectClass    = isModuleClass && (name == tpnme.PACKAGE)
     override def isPrimitiveValueClass   = definitions.isPrimitiveValueClass(this)
+    override def isPrimitive             = isPrimitiveValueClass
 
     // The corresponding interface is the last parent by convention.
     private def lastParent = if (tpe.parents.isEmpty) NoSymbol else tpe.parents.last.typeSymbol
@@ -2890,7 +2918,7 @@ trait Symbols extends api.Symbols { self: SymbolTable =>
     private[this] var typeOfThisCache: Type = _
     private[this] var typeOfThisPeriod      = NoPeriod
 
-    private var implicitMembersCacheValue: List[Symbol] = Nil
+    private var implicitMembersCacheValue: Scope = EmptyScope
     private var implicitMembersCacheKey1: Type = NoType
     private var implicitMembersCacheKey2: ScopeEntry = null
 
@@ -2909,7 +2937,7 @@ trait Symbols extends api.Symbols { self: SymbolTable =>
       typeOfThisCache
     }
 
-    def implicitMembers: List[Symbol] = {
+    def implicitMembers: Scope = {
       val tp = info
       if ((implicitMembersCacheKey1 ne tp) || (implicitMembersCacheKey2 ne tp.decls.elems)) {
         // Skip a package object class, because the members are also in

@@ -1,5 +1,5 @@
 /* NSC -- new Scala compiler
- * Copyright 2005-2011 LAMP/EPFL
+ * Copyright 2005-2012 LAMP/EPFL
  * @author  Martin Odersky
  */
 
@@ -670,7 +670,7 @@ trait Printers extends api.Printers { self: SymbolTable =>
     if (flags == NoFlags) nme.NoFlags.toString
     else {
       val s_flags = new collection.mutable.ListBuffer[String]
-      for (i <- 0 to 63 if (flags containsAll (1L << i)))
+      for (i <- 0 to 63 if (flags hasFlag (1L << i)))
         s_flags += flagToString(1L << i).replace("<", "").replace(">", "").toUpperCase
       s_flags mkString " | "
     }
