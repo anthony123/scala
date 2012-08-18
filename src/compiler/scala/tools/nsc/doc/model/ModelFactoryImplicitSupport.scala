@@ -113,9 +113,9 @@ trait ModelFactoryImplicitSupport {
         conversions = conversions.filter((ic: ImplicitConversionImpl) =>
           hardcoded.valueClassFilter(sym.nameString, ic.conversionQualifiedName))
 
-      // Put the class-specific conversions in front
+      // Put the visible conversions in front
       val (ownConversions, commonConversions) =
-        conversions.partition(!_.isCommonConversion)
+        conversions.partition(!_.isHiddenConversion)
 
       ownConversions ::: commonConversions
     }
@@ -176,7 +176,7 @@ trait ModelFactoryImplicitSupport {
       val appliedTree = new ApplyImplicitView(viewTree, List(Ident("<argument>") setType viewTree.tpe.paramTypes.head))
       val appliedTreeTyped: Tree = {
         val newContext = context.makeImplicit(context.ambiguousErrors)
-        newContext.macrosEnabled = false // [Eugene] I assume you want macro signature, not macro expansion
+        newContext.macrosEnabled = false
         val newTyper = global.analyzer.newTyper(newContext)
           newTyper.silent(_.typed(appliedTree, global.analyzer.EXPRmode, WildcardType), false) match {
 
@@ -416,7 +416,7 @@ trait ModelFactoryImplicitSupport {
 
     lazy val members: List[MemberEntity] = memberImpls
 
-    def isCommonConversion = hardcoded.commonConversionTargets.contains(conversionQualifiedName)
+    def isHiddenConversion = settings.hiddenImplicits(conversionQualifiedName)
 
     override def toString = "Implcit conversion from " + sym.tpe + " to " + toType + " done by " + convSym
   }

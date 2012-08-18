@@ -13,7 +13,7 @@ trait Symbols extends base.Symbols { self: Universe =>
   override type FreeTypeSymbol >: Null <: TypeSymbol with FreeTypeSymbolApi
 
   /** The API of symbols */
-  trait SymbolApi extends SymbolBase with HasFlagsBase { this: Symbol =>
+  trait SymbolApi extends SymbolBase { this: Symbol =>
 
     /** The position of this symbol
      */
@@ -21,7 +21,7 @@ trait Symbols extends base.Symbols { self: Universe =>
 
     /** A list of annotations attached to this Symbol.
      */
-    // [Eugene++] we cannot expose the `annotations` method because it doesn't auto-initialize a symbol (see SI-5423)
+    // we cannot expose the `annotations` method because it doesn't auto-initialize a symbol (see SI-5423)
     // there was an idea to use the `isCompilerUniverse` flag and auto-initialize symbols in `annotations` whenever this flag is false
     // but it doesn't work, because the unpickler (that is shared between reflective universes and global universes) is very picky about initialization
     // scala.reflect.internal.Types$TypeError: bad reference while unpickling scala.collection.immutable.Nil: type Nothing not found in scala.type not found.
@@ -67,6 +67,11 @@ trait Symbols extends base.Symbols { self: Universe =>
      */
     def isSynthetic: Boolean
 
+    /** Does this symbol represent an implementation artifact that isn't meant for public use?
+     *  Examples of such artifacts are erasure bridges and $outer fields.
+     */
+    def isImplementationArtifact: Boolean
+
     /** Does this symbol represent a local declaration or definition?
      *
      *  If yes, either `isPrivate` or `isProtected` are guaranteed to be true.
@@ -110,10 +115,10 @@ trait Symbols extends base.Symbols { self: Universe =>
      *
      *  The java access levels translate as follows:
      *
-     *  java private:     hasFlag(PRIVATE)                && (privateWithin == NoSymbol)
-     *  java package:     !hasFlag(PRIVATE | PROTECTED)   && (privateWithin == enclosingPackage)
-     *  java protected:   hasFlag(PROTECTED)              && (privateWithin == enclosingPackage)
-     *  java public:      !hasFlag(PRIVATE | PROTECTED)   && (privateWithin == NoSymbol)
+     *  java private:     isPrivate                  && (privateWithin == NoSymbol)
+     *  java package:     !isPrivate && !isProtected && (privateWithin == enclosingPackage)
+     *  java protected:   isProtected                && (privateWithin == enclosingPackage)
+     *  java public:      !isPrivate && !isProtected && (privateWithin == NoSymbol)
      */
     def privateWithin: Symbol
 
@@ -200,7 +205,6 @@ trait Symbols extends base.Symbols { self: Universe =>
   /** The API of term symbols */
   trait TermSymbolApi extends SymbolApi with TermSymbolBase { this: TermSymbol =>
     /** Does this symbol represent a value, i.e. not a module and not a method?
-     *  [Eugene++] I need a review of the implementation
      */
     def isValue: Boolean
 

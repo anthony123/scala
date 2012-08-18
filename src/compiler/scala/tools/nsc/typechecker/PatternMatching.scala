@@ -8,7 +8,7 @@ package scala.tools.nsc
 package typechecker
 
 import symtab._
-import Flags.{MUTABLE, METHOD, LABEL, SYNTHETIC, HIDDEN}
+import Flags.{MUTABLE, METHOD, LABEL, SYNTHETIC, ARTIFACT}
 import language.postfixOps
 import scala.tools.nsc.transform.TypingTransformers
 import scala.tools.nsc.transform.Transform
@@ -66,10 +66,6 @@ trait PatternMatching extends Transform with TypingTransformers with ast.TreeDSL
 
     object exceeded extends Exception {
       val advice = s"(The analysis required more space than allowed. Please try with scalac -Dscalac.patmat.analysisBudget=${AnalysisBudget.max*2} or -Dscalac.patmat.analysisBudget=off.)"
-    }
-
-    object stackOverflow extends Exception {
-      val advice = "(There was a stack overflow. Please try increasing the stack available to the compiler using e.g., -Xss2m.)"
     }
   }
 
@@ -198,6 +194,69 @@ trait PatternMatching extends Transform with TypingTransformers with ast.TreeDSL
     import typer.{typed, context, silent, reallyExists}
     // import typer.infer.containsUnchecked
 
+    // Why is it so difficult to say "here's a name and a context, give me any
+    // matching symbol in scope" ? I am sure this code is wrong, but attempts to
+    // use the scopes of the contexts in the enclosing context chain discover
+    // nothing. How to associate a name with a symbol would would be a wonderful
+    // linkage for which to establish a canonical acquisition mechanism.
+    def matchingSymbolInScope(pat: Tree): Symbol = {
+      def declarationOfName(tpe: Type, name: Name): Symbol = tpe match {
+        case PolyType(tparams, restpe)  => tparams find (_.name == name) getOrElse declarationOfName(restpe, name)
+        case MethodType(params, restpe) => params find (_.name == name) getOrElse declarationOfName(restpe, name)
+        case ClassInfoType(_, _, clazz) => clazz.rawInfo member name
+        case _                          => NoSymbol
+      }
+      pat match {
+        case Bind(name, _) =>
+          context.enclosingContextChain.foldLeft(NoSymbol: Symbol)((res, ctx) =>
+            res orElse declarationOfName(ctx.owner.rawInfo, name))
+        case _ => NoSymbol
+      }
+    }
+
+    // Issue better warnings than "unreachable code" when people mis-use
+    // variable patterns thinking they bind to existing identifiers.
+    //
+    // Possible TODO: more deeply nested variable patterns, like
+    //   case (a, b) => 1 ; case (c, d) => 2
+    // However this is a pain (at least the way I'm going about it)
+    // and I have to think these detailed errors are primarily useful
+    // for beginners, not people writing nested pattern matches.
+    def checkMatchVariablePatterns(m: Match) {
+      // A string describing the first variable pattern
+      var vpat: String = null
+      // Using an iterator so we can recognize the last case
+      val it = m.cases.iterator
+
+      def addendum(pat: Tree) = {
+        matchingSymbolInScope(pat) match {
+          case NoSymbol   => ""
+          case sym        =>
+            val desc = if (sym.isParameter) s"parameter ${sym.nameString} of" else sym + " in"
+            s"\nIf you intended to match against $desc ${sym.owner}, you must use backticks, like: case `${sym.nameString}` =>"
+        }
+      }
+
+      while (it.hasNext) {
+        val cdef = it.next
+        // If a default case has been seen, then every succeeding case is unreachable.
+        if (vpat != null)
+          context.unit./*error*/warning(cdef.body.pos, "unreachable code due to " + vpat + addendum(cdef.pat))
+        // If this is a default case and more cases follow, warn about this one so
+        // we have a reason to mention its pattern variable name and any corresponding
+        // symbol in scope.  Errors will follow from the remaining cases, at least
+        // once we make the above warning an error.
+        else if (it.hasNext && (treeInfo isDefaultCase cdef)) {
+          val vpatName = cdef.pat match {
+            case Bind(name, _)   => s" '$name'"
+            case _               => ""
+          }
+          vpat = s"variable pattern$vpatName on line ${cdef.pat.pos.line}"
+          context.unit.warning(cdef.pos, s"patterns after a variable pattern cannot match (SLS 8.1.1)" + addendum(cdef.pat))
+        }
+      }
+    }
+
     /** Implement a pattern match by turning its cases (including the implicit failure case)
       * into the corresponding (monadic) extractors, and combining them with the `orElse` combinator.
       *
@@ -210,6 +269,7 @@ trait PatternMatching extends Transform with TypingTransformers with ast.TreeDSL
       */
     def translateMatch(match_ : Match): Tree = {
       val Match(selector, cases) = match_
+      checkMatchVariablePatterns(match_)
 
       // we don't transform after uncurry
       // (that would require more sophistication when generating trees,
@@ -457,7 +517,7 @@ trait PatternMatching extends Transform with TypingTransformers with ast.TreeDSL
         // case Star(_) | ArrayValue  => error("stone age pattern relics encountered!")
 
         case _                       =>
-          error("unsupported pattern: "+ patTree +"(a "+ patTree.getClass +")")
+          typer.context.unit.error(patTree.pos, s"unsupported pattern: $patTree (a ${patTree.getClass}).\n This is a scalac bug. Tree diagnostics: ${asCompactDebugString(patTree)}.")
           noFurtherSubPats()
       }
 
@@ -1083,7 +1143,7 @@ trait PatternMatching extends Transform with TypingTransformers with ast.TreeDSL
 
           // ExplicitOuter replaces `Select(q, outerSym) OBJ_EQ expectedPrefix` by `Select(q, outerAccessor(outerSym.owner)) OBJ_EQ expectedPrefix`
           // if there's an outer accessor, otherwise the condition becomes `true` -- TODO: can we improve needsOuterTest so there's always an outerAccessor?
-          val outer = expectedTp.typeSymbol.newMethod(vpmName.outer) setInfo expectedTp.prefix setFlag SYNTHETIC | HIDDEN
+          val outer = expectedTp.typeSymbol.newMethod(vpmName.outer) setInfo expectedTp.prefix setFlag SYNTHETIC | ARTIFACT
 
           (Select(codegen._asInstanceOf(testedBinder, expectedTp), outer)) OBJ_EQ expectedOuter
         }
@@ -1787,20 +1847,7 @@ trait PatternMatching extends Transform with TypingTransformers with ast.TreeDSL
     class Prop
     case class Eq(p: Var, q: Const) extends Prop
 
-    type Const <: AbsConst
-    trait AbsConst {
-      // when we know V = C, which other equalities must hold
-      // in general, equality to some type implies equality to its supertypes
-      // (this multi-valued kind of equality is necessary for unreachability)
-      // note that we use subtyping as a model for implication between instanceof tests
-      // i.e., when S <:< T we assume x.isInstanceOf[S] implies x.isInstanceOf[T]
-      // unfortunately this is not true in general (see e.g. SI-6022)
-      def implies(other: Const): Boolean
-
-      // does V = C preclude V having value `other`?  V = null is an exclusive assignment,
-      // but V = 1 does not preclude V = Int, or V = Any
-      def excludes(other: Const): Boolean
-    }
+    type Const
 
     type TypeConst <: Const
     def TypeConst: TypeConstExtractor
@@ -1835,8 +1882,8 @@ trait PatternMatching extends Transform with TypingTransformers with ast.TreeDSL
       def propForEqualsTo(c: Const): Prop
 
       // populated by registerEquality
-      // once equalitySyms has been called, must not call registerEquality anymore
-      def equalitySyms: List[Sym]
+      // once implications has been called, must not call registerEquality anymore
+      def implications: List[(Sym, List[Sym], List[Sym])]
     }
 
     // would be nice to statically check whether a prop is equational or pure,
@@ -1935,19 +1982,8 @@ trait PatternMatching extends Transform with TypingTransformers with ast.TreeDSL
       var eqAxioms: Prop = True
       @inline def addAxiom(p: Prop) = eqAxioms = And(eqAxioms, p)
 
-      case class ExcludedPair(a: Const, b: Const) {
-        override def equals(o: Any) = o match {
-          case ExcludedPair(aa, bb) => (a == aa && b == bb) || (a == bb && b == aa)
-          case _ => false
-        }
-        // make ExcludedPair(a, b).hashCode == ExcludedPair(b, a).hashCode
-        override def hashCode = a.hashCode ^ b.hashCode
-      }
-
       patmatDebug("removeVarEq vars: "+ vars)
       vars.foreach { v =>
-        val excludedPair = new collection.mutable.HashSet[ExcludedPair]
-
         // if v.domainSyms.isEmpty, we must consider the domain to be infinite
         // otherwise, since the domain fully partitions the type of the value,
         // exactly one of the types (and whatever it implies, imposed separately) must be chosen
@@ -1962,27 +1998,11 @@ trait PatternMatching extends Transform with TypingTransformers with ast.TreeDSL
           else addAxiom(symForStaticTp)
         }
 
-        val syms = v.equalitySyms
-        patmatDebug("eqSyms "+(v, syms))
-        syms foreach { sym =>
-          // if we've already excluded the pair at some point (-A \/ -B), then don't exclude the symmetric one (-B \/ -A)
-          // (nor the positive implications -B \/ A, or -A \/ B, which would entail the equality axioms falsifying the whole formula)
-          val todo = syms filterNot (b => (b.const == sym.const) || excludedPair(ExcludedPair(b.const, sym.const)))
-          val (excluded, notExcluded) = todo partition (b => sym.const.excludes(b.const))
-          val implied = notExcluded filter (b => sym.const.implies(b.const))
-
-          patmatDebug("eq axioms for: "+ sym.const)
-          patmatDebug("excluded: "+ excluded)
-          patmatDebug("implied: "+ implied)
-
-          // when this symbol is true, what must hold...
-          implied  foreach (impliedSym => addAxiom(Or(Not(sym), impliedSym)))
-
+        v.implications foreach { case (sym, implied, excluded) =>
+          // when sym is true, what must hold...
+          implied  foreach (impliedSym  => addAxiom(Or(Not(sym), impliedSym)))
           // ... and what must not?
-          excluded foreach {excludedSym =>
-            excludedPair += ExcludedPair(sym.const, excludedSym.const)
-            addAxiom(Or(Not(sym), Not(excludedSym)))
-          }
+          excluded foreach (excludedSym => addAxiom(Or(Not(sym), Not(excludedSym))))
         }
       }
 
@@ -2032,21 +2052,29 @@ trait PatternMatching extends Transform with TypingTransformers with ast.TreeDSL
     def Lit(sym: Sym, pos: Boolean = true): Lit
 
     // throws an AnalysisBudget.Exception when the prop results in a CNF that's too big
+    // TODO: be smarter/more efficient about this (http://lara.epfl.ch/w/sav09:tseitin_s_encoding)
     def eqFreePropToSolvable(p: Prop): Formula = {
-      // TODO: for now, reusing the normalization from DPLL
-      def negationNormalForm(p: Prop): Prop = p match {
-        case And(a, b)      => And(negationNormalForm(a), negationNormalForm(b))
-        case Or(a, b)       => Or(negationNormalForm(a), negationNormalForm(b))
-        case Not(And(a, b)) => negationNormalForm(Or(Not(a), Not(b)))
-        case Not(Or(a, b))  => negationNormalForm(And(Not(a), Not(b)))
-        case Not(Not(p))    => negationNormalForm(p)
-        case Not(True)      => False
-        case Not(False)     => True
-        case True
-           | False
-           | (_ : Sym)
-           | Not(_ : Sym)   => p
-      }
+      def negationNormalFormNot(p: Prop, budget: Int = AnalysisBudget.max): Prop =
+        if (budget <= 0) throw AnalysisBudget.exceeded
+        else p match {
+          case And(a, b) =>  Or(negationNormalFormNot(a, budget - 1), negationNormalFormNot(b, budget - 1))
+          case Or(a, b)  => And(negationNormalFormNot(a, budget - 1), negationNormalFormNot(b, budget - 1))
+          case Not(p)    => negationNormalForm(p, budget - 1)
+          case True      => False
+          case False     => True
+          case s: Sym    => Not(s)
+        }
+
+      def negationNormalForm(p: Prop, budget: Int = AnalysisBudget.max): Prop =
+        if (budget <= 0) throw AnalysisBudget.exceeded
+        else p match {
+          case And(a, b)      => And(negationNormalForm(a, budget - 1), negationNormalForm(b, budget - 1))
+          case Or(a, b)       =>  Or(negationNormalForm(a, budget - 1), negationNormalForm(b, budget - 1))
+          case Not(negated)   => negationNormalFormNot(negated, budget - 1)
+          case True
+             | False
+             | (_ : Sym)      => p
+        }
 
       val TrueF          = formula()
       val FalseF         = formula(clause())
@@ -2089,12 +2117,7 @@ trait PatternMatching extends Transform with TypingTransformers with ast.TreeDSL
       }
 
       val start = Statistics.startTimer(patmatCNF)
-      val res =
-        try {
-          conjunctiveNormalForm(negationNormalForm(p))
-        } catch { case ex : StackOverflowError =>
-          throw AnalysisBudget.stackOverflow
-        }
+      val res   = conjunctiveNormalForm(negationNormalForm(p))
 
       Statistics.stopTimer(patmatCNF, start)
 
@@ -2278,22 +2301,121 @@ trait PatternMatching extends Transform with TypingTransformers with ast.TreeDSL
         observed; allConsts
       }
 
-      // accessing after calling registerNull will result in inconsistencies
-      lazy val domainSyms: Option[Set[Sym]] = domain map { _ map symForEqualsTo }
-
-      lazy val symForStaticTp: Option[Sym]  = symForEqualsTo.get(TypeConst(staticTpCheckable))
-
       // populate equalitySyms
       // don't care about the result, but want only one fresh symbol per distinct constant c
       def registerEquality(c: Const): Unit = {ensureCanModify; symForEqualsTo getOrElseUpdate(c, Sym(this, c))}
-
-      // don't access until all potential equalities have been registered using registerEquality
-      lazy val equalitySyms = {observed; symForEqualsTo.values.toList}
 
       // return the symbol that represents this variable being equal to the constant `c`, if it exists, otherwise False (for robustness)
       // (registerEquality(c) must have been called prior, either when constructing the domain or from outside)
       def propForEqualsTo(c: Const): Prop = {observed; symForEqualsTo.getOrElse(c, False)}
 
+      // [implementation NOTE: don't access until all potential equalities have been registered using registerEquality]p
+      /** the information needed to construct the boolean proposition that encods the equality proposition (V = C)
+       *
+       * that models a type test pattern `_: C` or constant pattern `C`, where the type test gives rise to a TypeConst C,
+       * and the constant pattern yields a ValueConst C
+       *
+       * for exhaustivity, we really only need implication (e.g., V = 1 implies that V = 1 /\ V = Int, if both tests occur in the match,
+       * and thus in this variable's equality symbols), but reachability also requires us to model things like V = 1 precluding V = "1"
+       */
+      lazy val implications = {
+        /** when we know V = C, which other equalities must hold
+         *
+         * in general, equality to some type implies equality to its supertypes
+         * (this multi-valued kind of equality is necessary for unreachability)
+         * note that we use subtyping as a model for implication between instanceof tests
+         * i.e., when S <:< T we assume x.isInstanceOf[S] implies x.isInstanceOf[T]
+         * unfortunately this is not true in general (see e.g. SI-6022)
+         */
+        def implies(lower: Const, upper: Const): Boolean =
+          // values and null
+            lower == upper ||
+          // type implication
+            (lower != NullConst && !upper.isValue &&
+             instanceOfTpImplies(if (lower.isValue) lower.wideTp else lower.tp, upper.tp))
+
+          // if(r) patmatDebug("implies    : "+(lower, lower.tp, upper, upper.tp))
+          // else  patmatDebug("NOT implies: "+(lower, upper))
+
+
+        /** does V = C preclude V having value `other`?
+         (1) V = null is an exclusive assignment,
+         (2) V = A and V = B, for A and B value constants, are mutually exclusive unless A == B
+             we err on the safe side, for example:
+               - assume `val X = 1; val Y = 1`, then
+                 (2: Int) match { case X => case Y =>  <falsely considered reachable>  }
+               - V = 1 does not preclude V = Int, or V = Any, it could be said to preclude V = String, but we don't model that
+
+         (3) for types we could try to do something fancy, but be conservative and just say no
+         */
+        def excludes(a: Const, b: Const): Boolean =
+          a != b && ((a == NullConst || b == NullConst) || (a.isValue && b.isValue))
+
+          // if(r) patmatDebug("excludes    : "+(a, a.tp, b, b.tp))
+          // else  patmatDebug("NOT excludes: "+(a, b))
+
+/*
+[ HALF BAKED FANCINESS: //!equalitySyms.exists(common => implies(common.const, a) && implies(common.const, b)))
+ when type tests are involved, we reason (conservatively) under a closed world assumption,
+ since we are really only trying to counter the effects of the symbols that we introduce to model type tests
+ we don't aim to model the whole subtyping hierarchy, simply to encode enough about subtyping to do unreachability properly
+
+ consider the following hierarchy:
+
+    trait A
+    trait B
+    trait C
+    trait AB extends B with A
+
+  // two types are mutually exclusive if there is no equality symbol whose constant implies both
+  object Test extends App {
+    def foo(x: Any) = x match {
+      case _ : C  => println("C")
+      case _ : AB => println("AB")
+      case _ : (A with B) => println("AB'")
+      case _ : B  => println("B")
+      case _ : A  => println("A")
+    }
+
+ of course this kind of reasoning is not true in general,
+ but we can safely pretend types are mutually exclusive as long as there are no counter-examples in the match we're analyzing}
+*/
+
+        val excludedPair = new collection.mutable.HashSet[ExcludedPair]
+
+        case class ExcludedPair(a: Const, b: Const) {
+          override def equals(o: Any) = o match {
+            case ExcludedPair(aa, bb) => (a == aa && b == bb) || (a == bb && b == aa)
+            case _ => false
+          }
+          // make ExcludedPair(a, b).hashCode == ExcludedPair(b, a).hashCode
+          override def hashCode = a.hashCode ^ b.hashCode
+        }
+
+        equalitySyms map { sym =>
+          // if we've already excluded the pair at some point (-A \/ -B), then don't exclude the symmetric one (-B \/ -A)
+          // (nor the positive implications -B \/ A, or -A \/ B, which would entail the equality axioms falsifying the whole formula)
+          val todo = equalitySyms filterNot (b => (b.const == sym.const) || excludedPair(ExcludedPair(b.const, sym.const)))
+          val (excluded, notExcluded) = todo partition (b => excludes(sym.const, b.const))
+          val implied = notExcluded filter (b => implies(sym.const, b.const))
+
+          patmatDebug("eq axioms for: "+ sym.const)
+          patmatDebug("excluded: "+ excluded)
+          patmatDebug("implied: "+ implied)
+
+          excluded foreach { excludedSym => excludedPair += ExcludedPair(sym.const, excludedSym.const)}
+
+          (sym, implied, excluded)
+        }
+      }
+
+      // accessing after calling registerNull will result in inconsistencies
+      lazy val domainSyms: Option[Set[Sym]] = domain map { _ map symForEqualsTo }
+
+      lazy val symForStaticTp: Option[Sym]  = symForEqualsTo.get(TypeConst(staticTpCheckable))
+
+      // don't access until all potential equalities have been registered using registerEquality
+      private lazy val equalitySyms = {observed; symForEqualsTo.values.toList}
 
       // don't call until all equalities have been registered and registerNull has been called (if needed)
       def describe = toString + ": " + staticTp + domain.map(_.mkString(" ::= ", " | ", "// "+ symForEqualsTo.keys)).getOrElse(symForEqualsTo.keys.mkString(" ::= ", " | ", " | ...")) + " // = " + path
@@ -2349,42 +2471,12 @@ trait PatternMatching extends Transform with TypingTransformers with ast.TreeDSL
         }
     }
 
-    sealed abstract class Const extends AbsConst {
+    sealed abstract class Const {
       def tp: Type
-      protected def wideTp: Type
+      def wideTp: Type
 
       def isAny = wideTp.typeSymbol == AnyClass
-
-      final def implies(other: Const): Boolean = {
-        val r = (this, other) match {
-          case (_: ValueConst, _: ValueConst) => this == other // hashconsed
-          case (_: ValueConst, _: TypeConst)  => instanceOfTpImplies(tp, other.tp)
-          case (_: TypeConst,  _)             => instanceOfTpImplies(tp, other.tp)
-          case _                              => false
-        }
-        // if(r) patmatDebug("implies    : "+(this, other))
-        // else  patmatDebug("NOT implies: "+(this, other))
-        r
-      }
-
-      // does V = C preclude V having value `other`?  V = null is an exclusive assignment,
-      // but V = 1 does not preclude V = Int, or V = Any
-      final def excludes(other: Const): Boolean = {
-        val r = (this, other) match {
-          case (_, NullConst)                 => true
-          case (NullConst, _)                 => true
-          // this causes false negative for unreachability, but that's ok:
-          // example: val X = 1; val Y = 1; (2: Int) match { case X => case Y => /* considered reachable */ }
-          case (_: ValueConst, _: ValueConst) => this != other
-          case (_: ValueConst, _: TypeConst)  => !(instanceOfTpImplies(tp, other.tp) || instanceOfTpImplies(other.tp, wideTp))
-          case (_: TypeConst,  _: ValueConst) => !(instanceOfTpImplies(other.tp, tp) || instanceOfTpImplies(tp, other.wideTp))
-          case (_: TypeConst,  _: TypeConst)  => !(instanceOfTpImplies(tp, other.tp) || instanceOfTpImplies(other.tp, tp))
-          case _                              => false
-        }
-        // if(r) patmatDebug("excludes    : "+(this, this.tp, other, other.tp))
-        // else  patmatDebug("NOT excludes: "+(this, other))
-        r
-      }
+      def isValue: Boolean //= tp.isStable
 
       // note: use reference equality on Const since they're hash-consed (doing type equality all the time is too expensive)
       // the equals inherited from AnyRef does just this
@@ -2396,15 +2488,9 @@ trait PatternMatching extends Transform with TypingTransformers with ast.TreeDSL
     // e.g., when we know some value must be of type T, can it still be of type S? (this is the positive formulation of what `excludes` on Const computes)
     // since we're talking values, there must have been a class involved in creating it, so rephrase our types in terms of classes
     // (At least conceptually: `true` is an instance of class `Boolean`)
-    private def widenToClass(tp: Type) = {
-      // getOrElse to err on the safe side -- all BTS should end in Any, right?
-      val wideTp = tp.widen
-      val clsTp =
-        if (wideTp.typeSymbol.isClass) wideTp
-        else wideTp.baseTypeSeq.toList.find(_.typeSymbol.isClass).getOrElse(AnyClass.tpe)
-      // patmatDebug("Widening to class: "+ (tp, clsTp, tp.widen, tp.widen.baseTypeSeq, tp.widen.baseTypeSeq.toList.find(_.typeSymbol.isClass)))
-      clsTp
-    }
+    private def widenToClass(tp: Type): Type =
+      if (tp.typeSymbol.isClass) tp
+      else tp.baseType(tp.baseClasses.head)
 
     object TypeConst extends TypeConstExtractor {
       def apply(tp: Type) = {
@@ -2421,7 +2507,7 @@ trait PatternMatching extends Transform with TypingTransformers with ast.TreeDSL
       private[this] val id: Int = Const.nextTypeId
 
       val wideTp = widenToClass(tp)
-
+      def isValue = false
       override def toString = tp.toString //+"#"+ id
     }
 
@@ -2465,14 +2551,15 @@ trait PatternMatching extends Transform with TypingTransformers with ast.TreeDSL
     }
     sealed class ValueConst(val tp: Type, val wideTp: Type, override val toString: String) extends Const {
       // patmatDebug("VC"+(tp, wideTp, toString))
-      assert(!(tp =:= NullTp))
+      assert(!(tp =:= NullTp)) // TODO: assert(!tp.isStable)
       private[this] val id: Int = Const.nextValueId
+      def isValue = true
     }
 
     lazy val NullTp = ConstantType(Constant(null))
     case object NullConst extends Const {
       def tp     = NullTp
-      protected def wideTp = NullTp
+      def wideTp = NullTp
 
       def isValue = true
       override def toString = "null"
@@ -2543,7 +2630,7 @@ trait PatternMatching extends Transform with TypingTransformers with ast.TreeDSL
         var reachable  = true
         var caseIndex  = 0
 
-        patmatDebug("reachability, vars:\n"+ ((propsCasesFail flatMap gatherVariables) map (_.describe) mkString ("\n")))
+        patmatDebug("reachability, vars:\n"+ ((propsCasesFail flatMap gatherVariables).distinct map (_.describe) mkString ("\n")))
         patmatDebug("equality axioms:\n"+ cnfString(eqAxiomsCNF))
 
         // invariant (prefixRest.length == current.length) && (prefix.reverse ++ prefixRest == symbolicCasesFail)
@@ -2558,10 +2645,10 @@ trait PatternMatching extends Transform with TypingTransformers with ast.TreeDSL
             current = current.tail
             val model = findModelFor(andFormula(eqFreePropToSolvable(current.head), prefix))
 
-  //          patmatDebug("trying to reach:\n"+ cnfString(current.head) +"\nunder prefix:\n"+ cnfString(prefix))
-  //          if (ok) patmatDebug("reached: "+ modelString(model))
+            // patmatDebug("trying to reach:\n"+ cnfString(eqFreePropToSolvable(current.head)) +"\nunder prefix:\n"+ cnfString(prefix))
+            // if (NoModel ne model) patmatDebug("reached: "+ modelString(model))
 
-            reachable = model ne NoModel
+            reachable = NoModel ne model
           }
         }
 
@@ -2623,17 +2710,19 @@ trait PatternMatching extends Transform with TypingTransformers with ast.TreeDSL
     // TODO: this is subject to the availability of TypeTags (since an abstract type with a type tag is checkable at run time)
     def checkableType(tp: Type): Type = {
       // TODO: this is extremely rough...
-      object toCheckable extends TypeMap {
-        def apply(tp: Type) = tp match {
-          case TypeRef(pre, sym, a :: as) if sym ne ArrayClass =>
-            // replace type args by existentials, since they can't be checked
-            // TODO: when type tags are available, we will check -- when this is implemented, can we take that into account here?
-            // TODO: don't reuse sym.typeParams, they have bounds (and those must not be considered)
-            newExistentialType(sym.typeParams, sym.tpe).asSeenFrom(pre, sym.owner)
-          case _ => mapOver(tp)
+      // replace type args by wildcards, since they can't be checked (don't use existentials: overkill)
+      // TODO: when type tags are available, we will check -- when this is implemented, can we take that into account here?
+      // similar to typer.infer.approximateAbstracts
+      object typeArgsToWildcardsExceptArray extends TypeMap {
+        def apply(tp: Type): Type = tp match {
+          case TypeRef(pre, sym, args) if args.nonEmpty && (sym ne ArrayClass) =>
+            TypeRef(pre, sym, args map (_ => WildcardType))
+          case _ =>
+            mapOver(tp)
         }
       }
-      val res = toCheckable(tp)
+
+      val res = typeArgsToWildcardsExceptArray(tp)
       patmatDebug("checkable "+(tp, res))
       res
     }
@@ -2849,7 +2938,7 @@ trait PatternMatching extends Transform with TypingTransformers with ast.TreeDSL
       // node in the tree that describes how to construct a counter-example
       case class VariableAssignment(variable: Var, equalTo: List[Const], notEqualTo: List[Const], fields: collection.mutable.Map[Symbol, VariableAssignment]) {
         // need to prune since the model now incorporates all super types of a constant (needed for reachability)
-        private lazy val uniqueEqualTo = equalTo filterNot (subsumed => equalTo.exists(better => (better ne subsumed) && (better implies subsumed)))
+        private lazy val uniqueEqualTo = equalTo filterNot (subsumed => equalTo.exists(better => (better ne subsumed) && instanceOfTpImplies(better.tp, subsumed.tp)))
         private lazy val prunedEqualTo = uniqueEqualTo filterNot (subsumed => variable.staticTpCheckable <:< subsumed.tp)
         private lazy val ctor       = (prunedEqualTo match { case List(TypeConst(tp)) => tp case _ => variable.staticTpCheckable }).typeSymbol.primaryConstructor
         private lazy val ctorParams = if (ctor == NoSymbol || ctor.paramss.isEmpty) Nil else ctor.paramss.head
@@ -3358,16 +3447,12 @@ trait PatternMatching extends Transform with TypingTransformers with ast.TreeDSL
             case Some(cds) => cds
           }
 
-          val allReachable =
-            if (unchecked) true
-            else {
-              val unreachables = unreachableCase(caseDefsWithGuards)
-              unreachables foreach {cd => reportUnreachable(cd.body.pos)}
-              // a switch with duplicate cases yields a verify error,
-              // and a switch with duplicate cases and guards cannot soundly be rewritten to an unguarded switch
-              // (even though the verify error would disappear, the behaviour would change)
-              unreachables.isEmpty
-            }
+          val allReachable = unchecked || {
+            // a switch with duplicate cases yields a verify error,
+            // and a switch with duplicate cases and guards cannot soundly be rewritten to an unguarded switch
+            // (even though the verify error would disappear, the behaviour would change)
+            unreachableCase(caseDefsWithGuards) map (cd => reportUnreachable(cd.body.pos)) isEmpty
+          }
 
           if (!allReachable) Nil
           else if (noGuards(caseDefsWithGuards)) {

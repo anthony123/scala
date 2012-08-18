@@ -973,7 +973,7 @@ trait Namers extends MethodSynthesis {
       // Add a () parameter section if this overrides some method with () parameters.
       if (clazz.isClass && vparamss.isEmpty && overriddenSymbol.alternatives.exists(
         _.info.isInstanceOf[MethodType])) {
-        vparamSymss = List(List())
+        vparamSymss = ListOfNil
       }
       mforeach(vparamss) { vparam =>
         if (vparam.tpt.isEmpty) {
@@ -987,6 +987,15 @@ trait Namers extends MethodSynthesis {
       // hence we make use of that and let them have whatever right-hand side they need
       // (either "macro ???" as they used to or just "???" to maximally simplify their compilation)
       if (fastTrack contains ddef.symbol) ddef.symbol setFlag MACRO
+
+      // macro defs need to be typechecked in advance
+      // because @macroImpl annotation only gets assigned during typechecking
+      // otherwise macro defs wouldn't be able to robustly coexist with their clients
+      // because a client could be typechecked before a macro def that it uses
+      if (ddef.symbol.isTermMacro) {
+        val pt = resultPt.substSym(tparamSyms, tparams map (_.symbol))
+        typer.computeMacroDefType(ddef, pt)
+      }
 
       thisMethodType({
         val rt = (
@@ -1023,7 +1032,7 @@ trait Namers extends MethodSynthesis {
       var baseParamss = (vparamss, overridden.tpe.paramss) match {
         // match empty and missing parameter list
         case (Nil, List(Nil)) => Nil
-        case (List(Nil), Nil) => List(Nil)
+        case (List(Nil), Nil) => ListOfNil
         case (_, paramss)     => paramss
       }
       assert(

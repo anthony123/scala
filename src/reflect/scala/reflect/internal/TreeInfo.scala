@@ -17,7 +17,7 @@ abstract class TreeInfo {
   val global: SymbolTable
 
   import global._
-  import definitions.{ isVarArgsList, isCastSymbol, ThrowableClass, TupleClass }
+  import definitions.{ isVarArgsList, isCastSymbol, ThrowableClass, TupleClass, MacroContextClass, MacroContextPrefixType }
 
   /* Does not seem to be used. Not sure what it does anyway.
   def isOwnerDefinition(tree: Tree): Boolean = tree match {
@@ -236,7 +236,7 @@ abstract class TreeInfo {
     case _ =>
       tree
   }
-  
+
   /** Is tree a self or super constructor call? */
   def isSelfOrSuperConstrCall(tree: Tree) = {
     // stripNamedApply for SI-3584: adaptToImplicitMethod in Typers creates a special context
@@ -370,6 +370,13 @@ abstract class TreeInfo {
     case Apply(fn, _)            => firstTypeArg(fn)
     case TypeApply(_, targ :: _) => targ
     case _                       => EmptyTree
+  }
+
+  /** If this tree represents a type application the type arguments. Otherwise Nil.
+   */
+  def typeArguments(tree: Tree): List[Tree] = tree match {
+    case TypeApply(_, targs) => targs
+    case _                   => Nil
   }
 
   /** If this tree has type parameters, those.  Otherwise Nil.
@@ -514,20 +521,18 @@ abstract class TreeInfo {
    */
   def noPredefImportForUnit(body: Tree) = {
     // Top-level definition whose leading imports include Predef.
-    def containsLeadingPredefImport(defs: List[Tree]): Boolean = defs match {
-      case PackageDef(_, defs1) :: _ => containsLeadingPredefImport(defs1)
-      case Import(expr, _) :: rest   => isReferenceToPredef(expr) || containsLeadingPredefImport(rest)
-      case _                         => false
+    def isLeadingPredefImport(defn: Tree): Boolean = defn match {
+      case PackageDef(_, defs1) => defs1 exists isLeadingPredefImport
+      case Import(expr, _)      => isReferenceToPredef(expr)
+      case _                    => false
     }
-
     // Compilation unit is class or object 'name' in package 'scala'
     def isUnitInScala(tree: Tree, name: Name) = tree match {
       case PackageDef(Ident(nme.scala_), defs) => firstDefinesClassOrObject(defs, name)
       case _                                   => false
     }
 
-    (  isUnitInScala(body, nme.Predef)
-    || containsLeadingPredefImport(List(body)))
+    isUnitInScala(body, nme.Predef) || isLeadingPredefImport(body)
   }
 
   def isAbsTypeDef(tree: Tree) = tree match {
@@ -584,4 +589,23 @@ abstract class TreeInfo {
   object DynamicUpdate extends DynamicApplicationExtractor(_ == nme.updateDynamic)
   object DynamicApplication extends DynamicApplicationExtractor(isApplyDynamicName)
   object DynamicApplicationNamed extends DynamicApplicationExtractor(_ == nme.applyDynamicNamed)
+
+  object MacroImplReference {
+    private def refPart(tree: Tree): Tree = tree match {
+      case TypeApply(fun, _) => refPart(fun)
+      case ref: RefTree => ref
+      case _ => EmptyTree
+    }
+
+    def unapply(tree: Tree) = refPart(tree) match {
+      case ref: RefTree => Some((ref.qualifier.symbol, ref.symbol, typeArguments(tree)))
+      case _            => None
+    }
+  }
+
+  def stripOffPrefixTypeRefinement(tpe: Type): Type =
+    tpe.dealias match {
+      case RefinedType(List(tpe), Scope(sym)) if tpe == MacroContextClass.tpe && sym.allOverriddenSymbols.contains(MacroContextPrefixType) => tpe
+      case _ => tpe
+    }
 }
