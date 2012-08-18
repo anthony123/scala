@@ -1319,15 +1319,32 @@ abstract class GenBCode extends BCodeUtils {
 
         case app @ Apply(fun @ Select(qual, _), args)
         if !methSymbol.isStaticConstructor
-        && isAccessorToStaticField(fun.symbol) =>
+        && isAccessorToStaticField(fun.symbol)
+        && qual.tpe.typeSymbol.orElse(fun.symbol.owner).companionClass != NoSymbol =>
           // bypass the accessor to the companion object and load the static field directly
-          // the only place were this bypass is not done, is the static initializer for the static field itself
+          // this bypass is not done:
+          // - if the static intializer for the static field itself
+          // - if there is no companion class of the object owner - this happens in the REPL
           // see https://github.com/scala/scala/commit/892ee3df93a10ffe24fb11b37ad7c3a9cb93d5de
+          // see https://github.com/scala/scala/commit/5a8dfad583b825158cf0abdae5d73a4a7f8cd997
+          // see https://github.com/scala/scala/commit/faa114e2fb6003031efa2cdd56a32a3c44aa71fb
           val sym = fun.symbol
           generatedType   = toTypeKind(sym.accessed.info)
-          val hostClass   = qual.tpe.typeSymbol.orElse(sym.owner).companionClass
+          val hostOwner   = qual.tpe.typeSymbol.orElse(sym.owner)
+          val hostClass   = hostOwner.companionClass
           val fieldName   = javaName(sym.accessed)
-          val staticfield = hostClass.info.findMember(sym.accessed.name, NoFlags, NoFlags, false)
+          val staticfield = hostClass.info.findMember(sym.accessed.name, NoFlags, NoFlags, false) orElse {
+            if (!currentRun.compiles(hostOwner)) {
+              // hostOwner was separately compiled -- the static field symbol needs to be recreated in hostClass
+              import Flags._
+              debuglog("recreating sym.accessed.name: " + sym.accessed.name)
+              val objectfield = hostOwner.info.findMember(sym.accessed.name, NoFlags, NoFlags, false)
+              val staticfield = hostClass.newVariable(newTermName(sym.accessed.name.toString), tree.pos, STATIC | SYNTHETIC | FINAL) setInfo objectfield.tpe
+              staticfield.addAnnotation(definitions.StaticClass)
+              hostClass.info.decls enter staticfield
+              staticfield
+            } else NoSymbol
+          }
           val fieldDescr  = descriptor(staticfield)
 
           if (sym.isGetter) {

@@ -1,5 +1,5 @@
 /* NSC -- new Scala compiler
- * Copyright 2005-2011 LAMP/EPFL
+ * Copyright 2005-2012 LAMP/EPFL
  * @author  Martin Odersky
  */
 
@@ -532,14 +532,11 @@ abstract class GenASM extends BCodeUtils {
             // TODO should but isn't: unbalanced start(s) of scope(s)
             val shouldBeEmpty = pending filter { p => val Pair(k, st) = p; st.nonEmpty };
 
-            val merged = mutable.Map.empty[Local, List[Interval]]
-
+             val merged = mutable.Map[Local, List[Interval]]()
               def addToMerged(lv: Local, start: Label, end: Label) {
-                val ranges = merged.getOrElseUpdate(lv, Nil)
-                val coalesced = fuse(ranges, Interval(start, end))
-                merged.update(lv, coalesced)
+                val intv   = Interval(start, end)
+                merged(lv) = if (merged contains lv) fuse(merged(lv), intv) else intv :: Nil
               }
-
             for(LocVarEntry(lv, start, end) <- seen) { addToMerged(lv, start, end) }
 
             /* for each var with unbalanced start(s) of scope(s):
