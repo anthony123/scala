@@ -122,6 +122,8 @@ trait BCodeTypes { _: GenBCode =>
     }
   }
 
+  final def hasInternalName(sym: Symbol) = { sym.isClass || (sym.isModule && !sym.isMethod) }
+
   /* Unlike for ICode's REFERENCE, isBoxedType(t) implies isReferenceType(t) */
   final def isReferenceType(t: asm.Type) = (t.getSort == asm.Type.OBJECT) // as a consequence, `isReferenceType(NothingReference) == true`
 

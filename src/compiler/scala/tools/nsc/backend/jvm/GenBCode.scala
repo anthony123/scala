@@ -96,7 +96,7 @@ abstract class GenBCode extends BCodeUtils with BCodeTypes {
       locals.getOrElseUpdate(sym, makeLocal(sym)).idx
     }
     /** Make a fresh local variable, ensuring a unique name.
-     *  The invoker must make sure javaName() is called on the sym's tpe (so as to track any inner classes). */
+     *  The invoker must make sure inner classes are tracked for the sym's tpe. */
     def makeLocal(tpe: Type, name: String): Symbol = {
       val sym = methSymbol.newVariable(cunit.freshTermName(name), NoPosition, Flags.SYNTHETIC) setInfo tpe
       makeLocal(sym)
@@ -106,8 +106,9 @@ abstract class GenBCode extends BCodeUtils with BCodeTypes {
       assert(!locals.contains(sym), "attempt to create duplicate local var.")
       assert(nxtIdx != -1, "not a valid start index")
       val tk  = toTypeKind(sym.info)
-      val loc = Local(tk, javaName(sym), nxtIdx)
+      val loc = Local(tk, sym.javaSimpleName.toString, nxtIdx)
       locals += (sym -> loc)
+      assert(tk.getSize > 0, "makeLocal called for a symbol whose type is Unit.")
       nxtIdx += tk.getSize
       loc
     }
@@ -374,7 +375,7 @@ abstract class GenBCode extends BCodeUtils with BCodeTypes {
 
         val jfield = new asm.tree.FieldNode(
           flags,
-          javaName(f),
+          f.javaSimpleName.toString,
           toTypeKind(f.tpe).getDescriptor(),
           javagensig,
           null // no initial value
@@ -414,7 +415,7 @@ abstract class GenBCode extends BCodeUtils with BCodeTypes {
         params.map(p => p.symbol.annotations)
       )
       mnode       = jmethod0.asInstanceOf[asm.tree.MethodNode]
-      jMethodName = javaName(msym)
+      jMethodName = msym.javaSimpleName.toString
 
       // add method-local vars for params
       nxtIdx = if (msym.isStaticMember) 0 else 1;
@@ -439,7 +440,7 @@ abstract class GenBCode extends BCodeUtils with BCodeTypes {
               // in companion object accessors to @static fields, we access the static field directly
               // see https://github.com/scala/scala/commit/892ee3df93a10ffe24fb11b37ad7c3a9cb93d5de
               val hostClass   = msym.owner.companionClass
-              val fieldName   = javaName(msym.accessed)
+              val fieldName   = msym.accessed.javaSimpleName.toString
               val staticfield = hostClass.info.findMember(msym.accessed.name, NoFlags, NoFlags, false)
               val fieldDescr  = toTypeKind(staticfield.tpe).getDescriptor
 
@@ -448,7 +449,7 @@ abstract class GenBCode extends BCodeUtils with BCodeTypes {
                 emit(
                   new asm.tree.FieldInsnNode(asm.Opcodes.GETSTATIC,
                                              javaName(hostClass),
-                                             fieldName,
+                                             fieldName.toString,
                                              fieldDescr)
                 )
                 // RETURN `returnType`
@@ -460,7 +461,7 @@ abstract class GenBCode extends BCodeUtils with BCodeTypes {
                 emit(
                   new asm.tree.FieldInsnNode(asm.Opcodes.PUTSTATIC,
                                              javaName(hostClass),
-                                             fieldName,
+                                             fieldName.toString,
                                              fieldDescr)
                 )
                 // RETURN `returnType`
@@ -548,7 +549,7 @@ abstract class GenBCode extends BCodeUtils with BCodeTypes {
 
           // INVOKESPECIAL <init>
           val callee = methSymbol.enclClass.primaryConstructor
-          val jname  = javaName(callee)
+          val jname  = callee.javaSimpleName.toString
           val jowner = javaName(callee.owner)
           val jtype  = asmMethodType(callee).getDescriptor()
           val i1 = new asm.tree.MethodInsnNode(asm.Opcodes.INVOKESPECIAL, jowner, jname, jtype)
@@ -561,7 +562,7 @@ abstract class GenBCode extends BCodeUtils with BCodeTypes {
           // INVOKESTATIC CREATOR(): android.os.Parcelable$Creator; -- TODO where does this Android method come from?
           val callee = definitions.getMember(claszSymbol.companionModule, androidFieldName)
           val jowner = javaName(callee.owner)
-          val jname  = javaName(callee)
+          val jname  = callee.javaSimpleName.toString
           val jtype  = asmMethodType(callee).getDescriptor()
           val i0 = new asm.tree.MethodInsnNode(asm.Opcodes.INVOKESTATIC, jowner, jname, jtype)
 
@@ -1333,7 +1334,7 @@ abstract class GenBCode extends BCodeUtils with BCodeTypes {
           generatedType   = toTypeKind(sym.accessed.info)
           val hostOwner   = qual.tpe.typeSymbol.orElse(sym.owner)
           val hostClass   = hostOwner.companionClass
-          val fieldName   = javaName(sym.accessed)
+          val fieldName   = sym.accessed.javaSimpleName.toString
           val staticfield = hostClass.info.findMember(sym.accessed.name, NoFlags, NoFlags, false) orElse {
             if (!currentRun.compiles(hostOwner)) {
               // hostOwner was separately compiled -- the static field symbol needs to be recreated in hostClass
