@@ -9,7 +9,6 @@ package backend
 package jvm
 
 import scala.collection.{ mutable, immutable }
-import scala.collection.mutable.{ ListBuffer, Buffer }
 import scala.tools.nsc.symtab._
 import scala.annotation.switch
 import scala.tools.asm
@@ -376,7 +375,7 @@ abstract class GenBCode extends BCodeUtils with BCodeTypes {
         val jfield = new asm.tree.FieldNode(
           flags,
           javaName(f),
-          javaType(f.tpe).getDescriptor(),
+          toTypeKind(f.tpe).getDescriptor(),
           javagensig,
           null // no initial value
         )
@@ -411,7 +410,7 @@ abstract class GenBCode extends BCodeUtils with BCodeTypes {
         cnode,
         msym, isNative,
         claszSymbol,  claszSymbol.isInterface,
-        params.map(p => javaType(p.symbol.info)),
+        params.map(p => toTypeKind(p.symbol.info)),
         params.map(p => p.symbol.annotations)
       )
       mnode       = jmethod0.asInstanceOf[asm.tree.MethodNode]
@@ -442,7 +441,7 @@ abstract class GenBCode extends BCodeUtils with BCodeTypes {
               val hostClass   = msym.owner.companionClass
               val fieldName   = javaName(msym.accessed)
               val staticfield = hostClass.info.findMember(msym.accessed.name, NoFlags, NoFlags, false)
-              val fieldDescr  = descriptor(staticfield)
+              val fieldDescr  = toTypeKind(staticfield.tpe).getDescriptor
 
               if (msym.isGetter) {
                 // GETSTATIC `hostClass`.`accessed`
@@ -534,7 +533,7 @@ abstract class GenBCode extends BCodeUtils with BCodeTypes {
         andrFieldName = newTermName(androidFieldName)
         val fieldAccess    = asm.Opcodes.ACC_STATIC | asm.Opcodes.ACC_FINAL
         val fieldType      = javaName(AndroidCreatorClass) // tracks inner classes if any.
-        val andrFieldDescr = descriptor(AndroidCreatorClass.tpe)
+        val andrFieldDescr = toTypeKind(AndroidCreatorClass.tpe).getDescriptor
         cnode.visitField(fieldAccess, andrFieldName, andrFieldDescr, null, null)
       }
 
@@ -551,7 +550,7 @@ abstract class GenBCode extends BCodeUtils with BCodeTypes {
           val callee = methSymbol.enclClass.primaryConstructor
           val jname  = javaName(callee)
           val jowner = javaName(callee.owner)
-          val jtype  = javaType(callee).getDescriptor()
+          val jtype  = asmMethodType(callee).getDescriptor()
           val i1 = new asm.tree.MethodInsnNode(asm.Opcodes.INVOKESPECIAL, jowner, jname, jtype)
 
           insertBefore(r, List(i0, i1))
@@ -563,7 +562,7 @@ abstract class GenBCode extends BCodeUtils with BCodeTypes {
           val callee = definitions.getMember(claszSymbol.companionModule, androidFieldName)
           val jowner = javaName(callee.owner)
           val jname  = javaName(callee)
-          val jtype  = javaType(callee).getDescriptor()
+          val jtype  = asmMethodType(callee).getDescriptor()
           val i0 = new asm.tree.MethodInsnNode(asm.Opcodes.INVOKESTATIC, jowner, jname, jtype)
 
           // PUTSTATIC `thisName`.CREATOR;
@@ -1287,7 +1286,7 @@ abstract class GenBCode extends BCodeUtils with BCodeTypes {
               }
 
             case rt if isReferenceType(generatedType) =>
-              assert(ctor.owner == classSymbol(rt), "Symbol " + ctor.owner.fullName + " is different than " + tpt)
+              // TODO RE-ENABLE assert(ctor.owner == classSymbol(rt), "Symbol " + ctor.owner.fullName + " is different than " + tpt)
               mnode.visitTypeInsn(asm.Opcodes.NEW, rt.getInternalName)
               bc dup generatedType
               genLoadArguments(args, ctor.info.paramTypes)
@@ -1347,7 +1346,7 @@ abstract class GenBCode extends BCodeUtils with BCodeTypes {
               staticfield
             } else NoSymbol
           }
-          val fieldDescr  = descriptor(staticfield)
+          val fieldDescr  = toTypeKind(staticfield.tpe).getDescriptor
 
           if (sym.isGetter) {
             // GETSTATIC `hostClass`.`accessed`
@@ -1603,7 +1602,7 @@ abstract class GenBCode extends BCodeUtils with BCodeTypes {
           asm.Opcodes.GETSTATIC,
           javaName(module) /* + "$" */ ,
           strMODULE_INSTANCE_FIELD,
-          descriptor(module)
+          toTypeKind(module.tpe).getDescriptor
         )
       }
     }

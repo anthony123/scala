@@ -123,7 +123,7 @@ trait BCodeTypes { _: GenBCode =>
   }
 
   /* Unlike for ICode's REFERENCE, isBoxedType(t) implies isReferenceType(t) */
-  final def isReferenceType(t: asm.Type) = (t.getSort == asm.Type.OBJECT) && !isNothingType(t)
+  final def isReferenceType(t: asm.Type) = (t.getSort == asm.Type.OBJECT) // as a consequence, `isReferenceType(NothingReference) == true`
 
   final def isNonBoxedReferenceType(t: asm.Type) = isReferenceType(t) && !isBoxedType(t)
 
@@ -164,7 +164,7 @@ trait BCodeTypes { _: GenBCode =>
    *       because they handle primitives and arrays, which `asmType()` doesn't.
    *       `asmType()` is just a shortcut for `asm.Type.getObjectType()`, as the preconditions listed below make clear.
    **/
-  private def asmType(sym: Symbol): asm.Type = {
+  def asmRefType(sym: Symbol): asm.Type = {
     assert(!primitiveTypeMap.contains(sym), "Use primitiveTypeMap instead.")
     assert(sym != definitions.ArrayClass,   "Use primitiveOrArrayOrRefType() instead.")
     assert(sym.isClass || (sym.isModule && !sym.isMethod), "Invoked for a symbol lacking JVM internal name: " + sym.fullName)
@@ -172,12 +172,18 @@ trait BCodeTypes { _: GenBCode =>
     asm.Type.getObjectType(sym.javaBinaryName.toString)
   }
 
-  val ObjectReference    = asmType(definitions.ObjectClass)
+  def asmMethodType(s: Symbol): asm.Type = {
+    assert(s.isMethod, "not a method-symbol: " + s)
+    val resT: asm.Type = if (s.isClassConstructor) asm.Type.VOID_TYPE else toTypeKind(s.tpe.resultType);
+    asm.Type.getMethodType( resT, (s.tpe.paramTypes map toTypeKind): _* )
+  }
+
+  val ObjectReference    = asmRefType(definitions.ObjectClass)
   val AnyRefReference    = ObjectReference // In tandem, javaName(definitions.AnyRefClass) == ObjectReference. Otherwise every `t1 == t2` requires special-casing.
-  val NothingReference   = asmType(definitions.NothingClass) // different from binarynme.RuntimeNothing
-  val NullReference      = asmType(definitions.NullClass)    // different from binarynme.RuntimeNull
-  val StringReference    = asmType(definitions.StringClass)
-  val ThrowableReference = asmType(definitions.ThrowableClass)
+  val NothingReference   = asmRefType(definitions.NothingClass) // different from binarynme.RuntimeNothing
+  val NullReference      = asmRefType(definitions.NullClass)    // different from binarynme.RuntimeNull
+  val StringReference    = asmRefType(definitions.StringClass)
+  val ThrowableReference = asmRefType(definitions.ThrowableClass)
   // This is problematic, because there's also BOXED_UNIT. Besides, it's not in use: val BoxedUnitReference = asmType(definitions.BoxedUnitClass)
 
   final def isRefOrArrayType(t: asm.Type) = isReferenceType(t)  || isArrayType(t)
@@ -287,7 +293,7 @@ trait BCodeTypes { _: GenBCode =>
     t.normalize match {
       case ThisType(sym)            =>
         if(sym == definitions.ArrayClass) ObjectReference
-        else asmType(sym)
+        else asmRefType(sym)
       case SingleType(_, sym)       => primitiveOrRefType(sym)
       case ConstantType(_)          => toTypeKind(t.underlying)
       case TypeRef(_, sym, args)    => primitiveOrArrayOrRefType(sym, if(args.isEmpty) null else args.head)
@@ -328,9 +334,9 @@ trait BCodeTypes { _: GenBCode =>
       // pos/spec-List.scala is the sole failure if we don't check for NoSymbol
       val traitSym = sym.owner.info.decl(tpnme.interfaceName(sym.name))
       if (traitSym != NoSymbol)
-        return asmType(traitSym)
+        return asmRefType(traitSym)
     }
-    asmType(sym)
+    asmRefType(sym)
   }
 
   private def primitiveOrRefType(sym: Symbol): asm.Type = {
@@ -372,7 +378,7 @@ trait BCodeTypes { _: GenBCode =>
 
       if(isNothingType(a))        { true  }
       else if(isReferenceType(b)) { classSymbol(a).tpe <:< classSymbol(b).tpe }
-      else if(isArrayType(b))     { componentType(a) == NullReference }
+      else if(isArrayType(b))     { a == NullReference }
       else                        { false }
 
     } else {
@@ -513,7 +519,7 @@ trait BCodeTypes { _: GenBCode =>
       val receiver = if (useMethodOwner) methodOwner else hostSymbol
       val jowner   = javaName(receiver)
       val jname    = javaName(method)
-      val jtype    = javaType(method).getDescriptor()
+      val jtype    = asmMethodType(method).getDescriptor()
 
           def dbg(invoke: String) {
             debuglog("%s %s %s.%s:%s".format(invoke, receiver.accessString, jowner, jname, jtype))
@@ -686,6 +692,7 @@ trait BCodeTypes { _: GenBCode =>
      * @param to   The type the value will be converted into.
      */
     def emitT2T(from: asm.Type, to: asm.Type) {
+      Console.println(from + "\t" + to)
       assert(isNonUnitValueType(from), from)
       assert(isNonUnitValueType(to),   to)
 
@@ -787,7 +794,7 @@ trait BCodeTypes { _: GenBCode =>
             asm.Opcodes.GETSTATIC,
             javaName(sym.owner),
             javaName(sym),
-            javaType(sym.tpe.underlying).getDescriptor()
+            toTypeKind(sym.tpe.underlying).getDescriptor()
           )
 
         case _ => abort("Unknown constant value: " + const)
@@ -1059,7 +1066,7 @@ trait BCodeTypes { _: GenBCode =>
         if(hostClass == null) javaName(field.owner)
         else                  javaName(hostClass)
       val fieldJName = javaName(field)
-      val fieldDescr = descriptor(field)
+      val fieldDescr = toTypeKind(field.tpe).getDescriptor
       val isStatic   = field.isStaticMember
       val opc =
         if(isLoad) { if (isStatic) Opcodes.GETSTATIC else Opcodes.GETFIELD }
