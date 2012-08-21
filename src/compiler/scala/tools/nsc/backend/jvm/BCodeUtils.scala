@@ -163,11 +163,11 @@ abstract class BCodeUtils extends SubComponent with BytecodeWriters {
       if (nme.isModuleName(name)) rootMirror.getModule(nme.stripModuleSuffix(name))
       else                        rootMirror.getClassByName(name.replace('/', '.')) // TODO fails for inner classes (but this hasn't been tested).
     assert(res0 != NoSymbol, "inameToSymbol() returned NoSymbol.")
-    val res = jsymbol(res0)
+    val res = trackedSymbol(res0)
     res
   }
 
-  def jsymbol(sym: Symbol): Symbol = {
+  def trackedSymbol(sym: Symbol): Symbol = {
     if(sym.isJavaDefined && sym.isModuleClass) sym.linkedClassOfClass
     else if(sym.isModule) sym.moduleClass
     else sym // we track only module-classes and plain-classes
@@ -584,7 +584,7 @@ abstract class BCodeUtils extends SubComponent with BytecodeWriters {
 
       if(emitStackMapFrame && hasInternalName) {
         val internalName = cachedJN.toString()
-        val trackedSym = jsymbol(sym)
+        val trackedSym = trackedSymbol(sym)
         reverseJavaName.get(internalName) match {
           case None         =>
             reverseJavaName.put(internalName, trackedSym)

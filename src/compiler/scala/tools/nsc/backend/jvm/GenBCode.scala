@@ -1522,14 +1522,14 @@ abstract class GenBCode extends BCodeUtils with BCodeTypes {
     }
 
     def adapt(from: asm.Type, to: asm.Type): Unit = {
-      if (!(<:<(from, to)) && !(from == NullReference && to == NothingReference)) {
+      if (!(<:<(from, to)) && !(isNullType(from) && isNothingType(to))) {
         to match {
           case UNIT => bc drop from
           case _    => bc.emitT2T(from, to)
         }
-      } else if (from == NothingReference) {
+      } else if(isNothingType(from)) {
         emit(asm.Opcodes.ATHROW) // ICode enters here into enterIgnoreMode, we'll rely instead on DCE at ClassNode level.
-      } else if (from == NullReference) {
+      } else if (isNullType(from)) {
         bc drop from
         mnode.visitInsn(asm.Opcodes.ACONST_NULL)
       }

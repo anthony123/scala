@@ -58,6 +58,22 @@ trait BCodeTypes { _: GenBCode =>
   val BOXED_FLOAT   = asm.Type.getObjectType("java/lang/Float")
   val BOXED_DOUBLE  = asm.Type.getObjectType("java/lang/Double")
 
+  // run-time
+  val RT_NOTHING    = asm.Type.getObjectType(definitions.RuntimeNothingClass.javaBinaryName.toString) // the bytecode-level manifestation of what shows up as NothingClass in Scala ASTs
+  val RT_NULL       = asm.Type.getObjectType(definitions.RuntimeNullClass.javaBinaryName.toString)    // the bytecode-level manifestation of what shows up as NullClass in Scala ASTs
+  // compile-time
+  val CT_NOTHING    = asm.Type.getObjectType(definitions.NothingClass.javaBinaryName.toString) // the internal name of CT_NOTHING is taken to be that of RT_NOTHING
+  val CT_NULL       = asm.Type.getObjectType(definitions.NullClass.javaBinaryName.toString)    // the internal name of CT_NULL    is taken to be that of RT_NULL
+
+  val phantomRefTypes = scala.collection.immutable.Map(
+    RT_NOTHING -> definitions.NothingClass.tpe,
+    RT_NULL    -> definitions.NullClass.tpe,
+    CT_NOTHING -> definitions.NothingClass.tpe,
+    CT_NULL    -> definitions.NullClass.tpe
+  )
+
+  val seenRefTypes = scala.collection.mutable.Map.empty[asm.Type, Type] ++= phantomRefTypes
+
   val classLiteral = immutable.Map[asm.Type, asm.Type](
     UNIT   -> BOXED_UNIT,
     BOOL   -> BOXED_BOOLEAN,
@@ -97,27 +113,13 @@ trait BCodeTypes { _: GenBCode =>
   }
 
   /** Reverse map for toType */
-  private lazy val reversePrimitiveMap: Map[asm.Type, Symbol] =
-    (primitiveTypeMap map (_.swap)).toMap
-
-  /** Defined for reference types (ie non-array non-primitive types; boxed ones are fine).
-   *
-   *  See also:
-   *    def primitiveOrArrayOrRefType(sym: Symbol, arrtarg: Type = null): asm.Type
-   *    def toTypeKind(t: Type): asm.Type
-   *
-   * */
-  def classSymbol(reft: asm.Type): Symbol = {
-    assert(!isArrayType(reft), "Invoked for an array type.")
-    assert(!isValueType(reft), "Invoked for a primitive type.")
-
-    rootMirror.getClassByName(stringToTypeName(reft.getInternalName.replace('/', '.')))
-  }
+  private lazy val reversePrimitiveMap: Map[asm.Type, Type] =
+    (primitiveTypeMap map { case (s, pt) => (s.tpe, pt) } map (_.swap)).toMap
 
   def toType(t: asm.Type): Type = {
-    reversePrimitiveMap get t map (_.tpe) getOrElse {
-      if(isReferenceType(t))  classSymbol(t).tpe
-      else if(isArrayType(t)) definitions.arrayType(toType(componentType(t)))
+    reversePrimitiveMap get t getOrElse {
+      if(isArrayType(t)) definitions.arrayType(toType(componentType(t)))
+      else if(isReferenceType(t)) seenRefTypes(t) // this covers also `phantomTypes`
       else abort("Unknown asm.Type.")
     }
   }
@@ -171,7 +173,14 @@ trait BCodeTypes { _: GenBCode =>
     assert(sym != definitions.ArrayClass,   "Use primitiveOrArrayOrRefType() instead.")
     assert(sym.isClass || (sym.isModule && !sym.isMethod), "Invoked for a symbol lacking JVM internal name: " + sym.fullName)
 
-    asm.Type.getObjectType(sym.javaBinaryName.toString)
+    val res = asm.Type.getObjectType(sym.javaBinaryName.toString)
+
+    // TODO what about trackedSymbol()
+    val tp = sym.tpe
+    assert(tp.isInstanceOf[TypeRef], "not a reference type.")
+    seenRefTypes += (res -> tp)
+
+    res
   }
 
   def asmMethodType(s: Symbol): asm.Type = {
@@ -180,23 +189,23 @@ trait BCodeTypes { _: GenBCode =>
     asm.Type.getMethodType( resT, (s.tpe.paramTypes map toTypeKind): _* )
   }
 
-  val ObjectReference    = asmRefType(definitions.ObjectClass)
+  val ObjectReference    = asm.Type.getObjectType(definitions.ObjectClass.javaBinaryName.toString)
   val AnyRefReference    = ObjectReference // In tandem, javaName(definitions.AnyRefClass) == ObjectReference. Otherwise every `t1 == t2` requires special-casing.
-  val NothingReference   = asmRefType(definitions.NothingClass) // different from binarynme.RuntimeNothing
-  val NullReference      = asmRefType(definitions.NullClass)    // different from binarynme.RuntimeNull
-  val StringReference    = asmRefType(definitions.StringClass)
-  val ThrowableReference = asmRefType(definitions.ThrowableClass)
+  val NothingReference   = CT_NOTHING // definitions.NothingClass has internal name different from binarynme.RuntimeNothing
+  val NullReference      = CT_NULL    // definitions.NullClass    has internal name different from binarynme.RuntimeNull
+  val StringReference    = asm.Type.getObjectType(definitions.StringClass.javaBinaryName.toString)
+  val ThrowableReference = asm.Type.getObjectType(definitions.ThrowableClass.javaBinaryName.toString)
   // This is problematic, because there's also BOXED_UNIT. Besides, it's not in use: val BoxedUnitReference = asmType(definitions.BoxedUnitClass)
 
   final def isRefOrArrayType(t: asm.Type) = isReferenceType(t)  || isArrayType(t)
 
-  final def isNothingType(t: asm.Type) = (t == NothingReference)
-  final def isNullType   (t: asm.Type) = (t == NullReference)
+  final def isNothingType(t: asm.Type) = { (t == RT_NOTHING) || (t == CT_NOTHING) }
+  final def isNullType   (t: asm.Type) = { (t == RT_NULL)    || (t == CT_NULL)    }
 
   final def isInterfaceType(t: asm.Type) = {
     isReferenceType(t) &&
     !isBoxedType(t)    && {
-      val cls = classSymbol(t)
+      val cls = seenRefTypes(t).typeSymbol
 
       cls.isInterface || cls.isTrait // cls.isImplClass not true for isTrait class symbols at this point (after mixin)
     }
@@ -329,6 +338,9 @@ trait BCodeTypes { _: GenBCode =>
     assert(!primitiveTypeMap.contains(sym), "Use primitiveTypeMap instead.")
     assert(sym != definitions.ArrayClass,   "Use primitiveOrArrayOrRefType() instead.")
 
+    if(sym == definitions.NullClass)    return RT_NULL;
+    if(sym == definitions.NothingClass) return RT_NOTHING;
+
     // Can't call .toInterface (at this phase) or we trip an assertion.
     // See PackratParser#grow for a method which fails with an apparent mismatch
     // between "object PackratParsers$class" and "trait PackratParsers"
@@ -338,6 +350,7 @@ trait BCodeTypes { _: GenBCode =>
       if (traitSym != NoSymbol)
         return asmRefType(traitSym)
     }
+
     asmRefType(sym)
   }
 
@@ -379,8 +392,8 @@ trait BCodeTypes { _: GenBCode =>
     } else if(isReferenceType(a)) {
 
       if(isNothingType(a))        { true  }
-      else if(isReferenceType(b)) { classSymbol(a).tpe <:< classSymbol(b).tpe }
-      else if(isArrayType(b))     { a == NullReference }
+      else if(isReferenceType(b)) { toType(a) <:< toType(b) }
+      else if(isArrayType(b))     { isNullType(a) }
       else                        { false }
 
     } else {
@@ -694,9 +707,11 @@ trait BCodeTypes { _: GenBCode =>
      * @param to   The type the value will be converted into.
      */
     def emitT2T(from: asm.Type, to: asm.Type) {
-      Console.println(from + "\t" + to)
-      assert(isNonUnitValueType(from), from)
-      assert(isNonUnitValueType(to),   to)
+
+        def msg = "(from: " + from + ", to: " + to + ")"
+
+      assert(isNonUnitValueType(from), "from is !isNonUnitValueType. " + msg)
+      assert(isNonUnitValueType(to),   "to is !isNonUnitValueType. " + msg)
 
           def pickOne(opcs: Array[Int]) { // TODO index on to.getSort
             val chosen = (to: @unchecked) match {
