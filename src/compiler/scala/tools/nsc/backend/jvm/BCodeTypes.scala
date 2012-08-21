@@ -520,7 +520,7 @@ trait BCodeTypes { _: GenBCode =>
       )
       val receiver = if (useMethodOwner) methodOwner else hostSymbol
       val jowner   = javaName(receiver)
-      val jname    = javaName(method)
+      val jname    = method.javaSimpleName.toString
       val jtype    = asmMethodType(method).getDescriptor()
 
           def dbg(invoke: String) {
@@ -795,7 +795,7 @@ trait BCodeTypes { _: GenBCode =>
           jmethod.visitFieldInsn(
             asm.Opcodes.GETSTATIC,
             javaName(sym.owner),
-            javaName(sym),
+            sym.javaSimpleName.toString,
             toTypeKind(sym.tpe.underlying).getDescriptor()
           )
 
@@ -1067,7 +1067,7 @@ trait BCodeTypes { _: GenBCode =>
       val owner      =
         if(hostClass == null) javaName(field.owner)
         else                  javaName(hostClass)
-      val fieldJName = javaName(field)
+      val fieldJName = field.javaSimpleName.toString
       val fieldDescr = toTypeKind(field.tpe).getDescriptor
       val isStatic   = field.isStaticMember
       val opc =
