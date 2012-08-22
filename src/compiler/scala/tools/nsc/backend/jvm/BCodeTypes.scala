@@ -31,6 +31,24 @@ trait BCodeTypes { _: GenBCode =>
   val FLOAT  = asm.Type.FLOAT_TYPE
   val DOUBLE = asm.Type.DOUBLE_TYPE
 
+  /*
+   * RT_NOTHING and RT_NULL exist at run-time only.
+   * They are the bytecode-level manifestation (in method signatures only) of what shows up as NothingClass resp. NullClass in Scala ASTs.
+   * Therefore, when RT_NOTHING or RT_NULL are to be emitted,
+   * a mapping is needed: the internal names of NothingClass and NullClass can't be emitted as-is.
+   */
+  val RT_NOTHING    = asm.Type.getObjectType("scala/runtime/Nothing$")
+  val RT_NULL       = asm.Type.getObjectType("scala/runtime/Null$")
+  val CT_NOTHING    = asm.Type.getObjectType("scala.Nothing") // TODO needed?
+  val CT_NULL       = asm.Type.getObjectType("scala.Null")    // TODO needed?
+
+  val ObjectReference    = asm.Type.getObjectType("java/lang/Object")
+  val AnyRefReference    = ObjectReference // In tandem, javaName(definitions.AnyRefClass) == ObjectReference. Otherwise every `t1 == t2` requires special-casing.
+  val StringReference    = asm.Type.getObjectType("java/lang/String")
+  val ThrowableReference = asm.Type.getObjectType("java/lang/Throwable")
+
+  // TODO rather than lazy, have an init() method that populates mutable collections. Spees up each access afterwards.
+
   /** A map from scala primitive Types to asm.Type */
   lazy val primitiveTypeMap: Map[Symbol, asm.Type] = {
     import definitions._
@@ -47,6 +65,16 @@ trait BCodeTypes { _: GenBCode =>
     )
   }
 
+  lazy val phantomTypeMap: Map[Symbol, asm.Type] = {
+    import definitions._
+    Map(
+      NothingClass -> RT_NOTHING,
+      NullClass    -> RT_NULL,
+      NothingClass -> RT_NOTHING, // we map on purpose to RT_NOTHING, getting rid of the distinction compile-time vs. runtime for NullClass.
+      NullClass    -> RT_NULL     // ditto.
+    )
+  }
+
   // in keeping with ICode's tradition of calling out boxed types.
   val BOXED_UNIT    = asm.Type.getObjectType("java/lang/Void")
   val BOXED_BOOLEAN = asm.Type.getObjectType("java/lang/Boolean")
@@ -58,21 +86,14 @@ trait BCodeTypes { _: GenBCode =>
   val BOXED_FLOAT   = asm.Type.getObjectType("java/lang/Float")
   val BOXED_DOUBLE  = asm.Type.getObjectType("java/lang/Double")
 
-  // run-time
-  val RT_NOTHING    = asm.Type.getObjectType(definitions.RuntimeNothingClass.javaBinaryName.toString) // the bytecode-level manifestation of what shows up as NothingClass in Scala ASTs
-  val RT_NULL       = asm.Type.getObjectType(definitions.RuntimeNullClass.javaBinaryName.toString)    // the bytecode-level manifestation of what shows up as NullClass in Scala ASTs
-  // compile-time
-  val CT_NOTHING    = asm.Type.getObjectType(definitions.NothingClass.javaBinaryName.toString) // the internal name of CT_NOTHING is taken to be that of RT_NOTHING
-  val CT_NULL       = asm.Type.getObjectType(definitions.NullClass.javaBinaryName.toString)    // the internal name of CT_NULL    is taken to be that of RT_NULL
-
-  val phantomRefTypes = scala.collection.immutable.Map(
+  val phantomRefTypes: Map[asm.Type, Type] = scala.collection.immutable.Map(
     RT_NOTHING -> definitions.NothingClass.tpe,
-    RT_NULL    -> definitions.NullClass.tpe,
-    CT_NOTHING -> definitions.NothingClass.tpe,
-    CT_NULL    -> definitions.NullClass.tpe
+    CT_NOTHING -> definitions.NothingClass.tpe
+    // RT_NULL    -> definitions.NullClass.tpe,
+    // CT_NULL    -> definitions.NullClass.tpe
   )
 
-  val seenRefTypes = scala.collection.mutable.Map.empty[asm.Type, Type] ++= phantomRefTypes
+  lazy val seenRefTypes = scala.collection.mutable.Map.empty[asm.Type, Type] ++= phantomRefTypes
 
   val classLiteral = immutable.Map[asm.Type, asm.Type](
     UNIT   -> BOXED_UNIT,
@@ -116,18 +137,16 @@ trait BCodeTypes { _: GenBCode =>
   private lazy val reversePrimitiveMap: Map[asm.Type, Type] =
     (primitiveTypeMap map { case (s, pt) => (s.tpe, pt) } map (_.swap)).toMap
 
-  def toType(t: asm.Type): Type = {
-    reversePrimitiveMap get t getOrElse {
-      if(isArrayType(t)) definitions.arrayType(toType(componentType(t)))
-      else if(isReferenceType(t)) seenRefTypes(t) // this covers also `phantomTypes`
-      else abort("Unknown asm.Type.")
-    }
-  }
-
   final def hasInternalName(sym: Symbol) = { sym.isClass || (sym.isModule && !sym.isMethod) }
 
-  /* Unlike for ICode's REFERENCE, isBoxedType(t) implies isReferenceType(t) */
-  final def isReferenceType(t: asm.Type) = (t.getSort == asm.Type.OBJECT) // as a consequence, `isReferenceType(NothingReference) == true`
+  // ---------------- inspector methods on asm.Type  ----------------
+
+  /*
+   * Unlike for ICode's REFERENCE, isBoxedType(t) implies isReferenceType(t)
+   * Also, `isReferenceType(RT_NOTHING) == true` , similarly for RT_NULL.
+   * Use isNullType() , isNothingType() to detect Nothing and Null.
+   */
+  final def isReferenceType(t: asm.Type) = (t.getSort == asm.Type.OBJECT)
 
   final def isNonBoxedReferenceType(t: asm.Type) = isReferenceType(t) && !isBoxedType(t)
 
@@ -144,8 +163,6 @@ trait BCodeTypes { _: GenBCode =>
     }
   }
 
-  final def isUnitType(t: asm.Type): Boolean = { t.getSort == asm.Type.VOID }
-
   final def isNonUnitValueType(t: asm.Type): Boolean = { isValueType(t) && !isUnitType(t) }
 
   final def isBoxedType(t: asm.Type) = {
@@ -159,6 +176,13 @@ trait BCodeTypes { _: GenBCode =>
     }
   }
 
+
+  final def isRefOrArrayType(t: asm.Type) = isReferenceType(t)  || isArrayType(t)
+
+  final def isNothingType(t: asm.Type) = { (t == RT_NOTHING) || (t == CT_NOTHING) }
+  final def isNullType   (t: asm.Type) = { (t == RT_NULL)    || (t == CT_NULL)    }
+  final def isUnitType   (t: asm.Type) = { t == UNIT }
+
   /*
    * For use only within BCodeTypes trait.
    *
@@ -167,48 +191,20 @@ trait BCodeTypes { _: GenBCode =>
    *   (2) From within `BCodeTypes`, two other helpers should be preferred (`primitiveOrRefType()` and `primitiveOrClassType`)
    *       because they handle primitives and arrays, which `asmType()` doesn't.
    *       `asmType()` is just a shortcut for `asm.Type.getObjectType()`, as the preconditions listed below make clear.
+   *   (3) However asmRefType also handles the phantom types (Null, Nothing)
    **/
-  def asmRefType(sym: Symbol): asm.Type = {
+  final def asmRefType(sym: Symbol): asm.Type = {
     assert(!primitiveTypeMap.contains(sym), "Use primitiveTypeMap instead.")
     assert(sym != definitions.ArrayClass,   "Use primitiveOrArrayOrRefType() instead.")
-    assert(sym.isClass || (sym.isModule && !sym.isMethod), "Invoked for a symbol lacking JVM internal name: " + sym.fullName)
+    assert(hasInternalName(sym),            "Invoked for a symbol lacking JVM internal name: " + sym.fullName)
 
-    val res = asm.Type.getObjectType(sym.javaBinaryName.toString)
-
-    // TODO what about trackedSymbol()
-    val tp = sym.tpe
-    assert(tp.isInstanceOf[TypeRef], "not a reference type.")
-    seenRefTypes += (res -> tp)
-
-    res
+    phantomTypeMap.getOrElse(sym, asm.Type.getObjectType(sym.javaBinaryName.toString))
   }
 
-  def asmMethodType(s: Symbol): asm.Type = {
+  final def asmMethodType(s: Symbol): asm.Type = {
     assert(s.isMethod, "not a method-symbol: " + s)
     val resT: asm.Type = if (s.isClassConstructor) asm.Type.VOID_TYPE else toTypeKind(s.tpe.resultType);
     asm.Type.getMethodType( resT, (s.tpe.paramTypes map toTypeKind): _* )
-  }
-
-  val ObjectReference    = asm.Type.getObjectType(definitions.ObjectClass.javaBinaryName.toString)
-  val AnyRefReference    = ObjectReference // In tandem, javaName(definitions.AnyRefClass) == ObjectReference. Otherwise every `t1 == t2` requires special-casing.
-  val NothingReference   = CT_NOTHING // definitions.NothingClass has internal name different from binarynme.RuntimeNothing
-  val NullReference      = CT_NULL    // definitions.NullClass    has internal name different from binarynme.RuntimeNull
-  val StringReference    = asm.Type.getObjectType(definitions.StringClass.javaBinaryName.toString)
-  val ThrowableReference = asm.Type.getObjectType(definitions.ThrowableClass.javaBinaryName.toString)
-  // This is problematic, because there's also BOXED_UNIT. Besides, it's not in use: val BoxedUnitReference = asmType(definitions.BoxedUnitClass)
-
-  final def isRefOrArrayType(t: asm.Type) = isReferenceType(t)  || isArrayType(t)
-
-  final def isNothingType(t: asm.Type) = { (t == RT_NOTHING) || (t == CT_NOTHING) }
-  final def isNullType   (t: asm.Type) = { (t == RT_NULL)    || (t == CT_NULL)    }
-
-  final def isInterfaceType(t: asm.Type) = {
-    isReferenceType(t) &&
-    !isBoxedType(t)    && {
-      val cls = seenRefTypes(t).typeSymbol
-
-      cls.isInterface || cls.isTrait // cls.isImplClass not true for isTrait class symbols at this point (after mixin)
-    }
   }
 
   /** On the JVM,
@@ -261,14 +257,14 @@ trait BCodeTypes { _: GenBCode =>
    *
    **/
 
-  /** The ultimate element type of this array. */
-  def elementType(t: asm.Type): asm.Type = {
+  /** The (ultimate) element type of this array. */
+  final def elementType(t: asm.Type): asm.Type = {
     assert(isArrayType(t), "Asked for the element type of a non-array type: " + t)
     t.getElementType
   }
 
   /** The type of items this array holds. */
-  def componentType(t: asm.Type): asm.Type = {
+  final def componentType(t: asm.Type): asm.Type = {
     assert(isArrayType(t), "Asked for the component type of a non-array type: " + t)
     val reduced = t.getDimensions - 1
     if(reduced == 0) t.getElementType
@@ -300,7 +296,7 @@ trait BCodeTypes { _: GenBCode =>
    *  Call to .normalize fixes #3003 (follow type aliases).
    *  Otherwise, primitiveOrArrayOrRefType() would return ObjectReference.
    **/
-  def toTypeKind(t: Type): asm.Type = {
+  final def toTypeKind(t: Type): asm.Type = {
     t.normalize match {
       case ThisType(sym)            =>
         if(sym == definitions.ArrayClass) ObjectReference
@@ -338,9 +334,6 @@ trait BCodeTypes { _: GenBCode =>
     assert(!primitiveTypeMap.contains(sym), "Use primitiveTypeMap instead.")
     assert(sym != definitions.ArrayClass,   "Use primitiveOrArrayOrRefType() instead.")
 
-    if(sym == definitions.NullClass)    return RT_NULL;
-    if(sym == definitions.NothingClass) return RT_NOTHING;
-
     // Can't call .toInterface (at this phase) or we trip an assertion.
     // See PackratParser#grow for a method which fails with an apparent mismatch
     // between "object PackratParsers$class" and "trait PackratParsers"
@@ -365,8 +358,10 @@ trait BCodeTypes { _: GenBCode =>
       case Some(pt) => pt
       case None =>
         sym match {
-          case definitions.ArrayClass => arrayOf(toTypeKind(arrtarg))
-          case _ if sym.isClass       => newReference(sym)
+          case definitions.ArrayClass   => arrayOf(toTypeKind(arrtarg))
+          case definitions.NullClass    => RT_NULL
+          case definitions.NothingClass => RT_NOTHING
+          case _ if sym.isClass         => newReference(sym)
           case _ =>
             assert(sym.isType, sym) // it must be compiling Array[a]
             ObjectReference
@@ -374,31 +369,45 @@ trait BCodeTypes { _: GenBCode =>
     }
   }
 
-  /** A simple, very very conservative, subtyping check. */
-  def <:<(a: asm.Type, b: asm.Type): Boolean = {
-    if(isArrayType(a)) {
-
-      /** Array subtyping is covariant here, as in Java. Necessary for checking code that interacts with Java. */
-      if(isArrayType(b))            { <:<(componentType(a), componentType(b)) }
-      else if(b == AnyRefReference) { true  } // TODO: platform dependent!
+  /** Subtype check `a <:< b` on asm.Types. It used to be called TypeKind.<:<() */
+  final def conforms(a: asm.Type, b: asm.Type): Boolean = {
+    if(isArrayType(a)) { // may be null
+      /* Array subtyping is covariant here, as in Java. Necessary for checking code that interacts with Java. */
+      if(isArrayType(b))            { conforms(componentType(a), componentType(b)) }
+      else if(b == AnyRefReference) { true  }
       else                          { false }
-
-    } else if(isBoxedType(a)) {
-
+    }
+    else if(isBoxedType(a)) { // may be null
       if(isBoxedType(b))            { a == b }
-      else if(b == AnyRefReference) { true   } // TODO: platform dependent!
-      else                          { false  }
-
-    } else if(isReferenceType(a)) {
-
+      else if(b == AnyRefReference) { true  }
+      else                          { false }
+    }
+    else if(isNullType(a)) { // known to be null
+      if(isNothingType(b))          { false }
+      else if(isValueType(b))       { false }
+      else                          { true  }
+    }
+    else if(isNothingType(a)) { // known to be Nothing
+      true
+    }
+    else if(isUnitType(a)) { // known to be Nothing
+      isUnitType(b)
+    }
+    else if(isReferenceType(a)) { // may be null
       if(isNothingType(a))        { true  }
-      else if(isReferenceType(b)) { toType(a) <:< toType(b) }
+      else if(isReferenceType(b)) { ??? }
       else if(isArrayType(b))     { isNullType(a) }
       else                        { false }
+    }
+    else {
 
-    } else {
+        def msg = "(a: " + a + ", b: " + b + ")"
+
+      assert(isNonUnitValueType(a), "a is !isNonUnitValueType. " + msg)
+      assert(isNonUnitValueType(b), "a is !isNonUnitValueType. " + msg)
+
       (a eq b) || (a match {
-        case BOOL | BYTE | SHORT | CHAR => b == INT || b == LONG
+        case BOOL | BYTE | SHORT | CHAR => b == INT || b == LONG // TODO Actually, does BOOL conform to LONG ? Even with adapt() it's a type error, right?.
         case _                          => a == b
       })
     }
@@ -467,7 +476,7 @@ trait BCodeTypes { _: GenBCode =>
   }
 
   /* Takes promotions of numeric primitives into account. */
-  def maxType(a: asm.Type, other: asm.Type): asm.Type = {
+  final def maxType(a: asm.Type, other: asm.Type): asm.Type = {
     if(isValueType(a)) { maxValueType(a, other) }
     else {
       if(isNothingType(a))     return other;
@@ -502,7 +511,7 @@ trait BCodeTypes { _: GenBCode =>
 
     @inline final def emit(opc: Int) { jmethod.visitInsn(opc) }
 
-    def genCallMethod(method:      Symbol, style: InvokeStyle,
+    final def genCallMethod(method:      Symbol, style: InvokeStyle,
                       jMethodName: String,
                       siteSymbol:  Symbol, hostSymbol: Symbol,
                       thisName:    String, isModuleInitialized0: Boolean): Boolean = {
@@ -571,10 +580,10 @@ trait BCodeTypes { _: GenBCode =>
 
     } // end of genCallMethod
 
-    def genPrimitiveNegation(kind: asm.Type) {
+    final def genPrimitiveNegation(kind: asm.Type) {
       neg(kind)
     }
-    def genPrimitiveArithmetic(op: icodes.ArithmeticOp, kind: asm.Type) {
+    final def genPrimitiveArithmetic(op: icodes.ArithmeticOp, kind: asm.Type) {
 
       import icodes.{ ADD, SUB, MUL, DIV, REM, NOT }
 
@@ -603,7 +612,7 @@ trait BCodeTypes { _: GenBCode =>
 
     } // end of method genPrimitiveArithmetic()
 
-    def genPrimitiveLogical(op: icodes.LogicalOp, kind: asm.Type) {
+    final def genPrimitiveLogical(op: icodes.LogicalOp, kind: asm.Type) {
 
       import icodes.{ AND, OR, XOR }
 
@@ -629,7 +638,7 @@ trait BCodeTypes { _: GenBCode =>
 
     } // end of method genPrimitiveLogical()
 
-    def genPrimitiveShift(op: icodes.ShiftOp, kind: asm.Type) {
+    final def genPrimitiveShift(op: icodes.ShiftOp, kind: asm.Type) {
 
       import icodes.{ LSL, ASR, LSR }
 
@@ -655,7 +664,7 @@ trait BCodeTypes { _: GenBCode =>
 
     } // end of method genPrimitiveShift()
 
-    def genPrimitiveComparison(op: icodes.ComparisonOp, kind: asm.Type) {
+    final def genPrimitiveComparison(op: icodes.ComparisonOp, kind: asm.Type) {
 
       import icodes.{ CMPL, CMP, CMPG }
 
@@ -669,12 +678,12 @@ trait BCodeTypes { _: GenBCode =>
 
     } // end of method genPrimitiveComparison()
 
-    def genPrimitiveConversion(src: asm.Type, dst: asm.Type, pos: Position) {
+    final def genPrimitiveConversion(src: asm.Type, dst: asm.Type, pos: Position) {
       if (dst == BOOL) { println("Illegal conversion at: " + pos.source + ":" + pos.line) }
       else { emitT2T(src, dst) }
     }
 
-    def genStartConcat {
+    final def genStartConcat {
       jmethod.visitTypeInsn(Opcodes.NEW, StringBuilderClassName)
       jmethod.visitInsn(Opcodes.DUP)
       invokespecial(
@@ -684,7 +693,7 @@ trait BCodeTypes { _: GenBCode =>
       )
     }
 
-    def genStringConcat(el: asm.Type) {
+    final def genStringConcat(el: asm.Type) {
       val jtype =
         if(isArrayType(el) || isNonBoxedReferenceType(el)) JAVA_LANG_OBJECT
         else el;
@@ -696,7 +705,7 @@ trait BCodeTypes { _: GenBCode =>
       )
     }
 
-    def genEndConcat {
+    final def genEndConcat {
       invokevirtual(StringBuilderClassName, "toString", mdesc_toString)
     }
 
@@ -706,7 +715,7 @@ trait BCodeTypes { _: GenBCode =>
      * @param from The type of the value to be converted into another type.
      * @param to   The type the value will be converted into.
      */
-    def emitT2T(from: asm.Type, to: asm.Type) {
+    final def emitT2T(from: asm.Type, to: asm.Type) {
 
         def msg = "(from: " + from + ", to: " + to + ")"
 
@@ -776,7 +785,7 @@ trait BCodeTypes { _: GenBCode =>
       }
     } // end of emitT2T()
 
-    def genConstant(const: Constant) {
+    final def genConstant(const: Constant) {
       const.tag match {
 
         case BooleanTag => boolconst(const.booleanValue)
@@ -818,14 +827,14 @@ trait BCodeTypes { _: GenBCode =>
       }
     }
 
-    def aconst(cst: AnyRef) {
+    final def aconst(cst: AnyRef) {
       if (cst == null) { emit(Opcodes.ACONST_NULL) }
       else             { jmethod.visitLdcInsn(cst) }
     }
 
-    @inline final def boolconst(b: Boolean) { iconst(if(b) 1 else 0) }
+    final def boolconst(b: Boolean) { iconst(if(b) 1 else 0) }
 
-    def iconst(cst: Int) {
+    final def iconst(cst: Int) {
       if (cst >= -1 && cst <= 5) {
         emit(Opcodes.ICONST_0 + cst)
       } else if (cst >= java.lang.Byte.MIN_VALUE && cst <= java.lang.Byte.MAX_VALUE) {
@@ -837,7 +846,7 @@ trait BCodeTypes { _: GenBCode =>
       }
     }
 
-    def lconst(cst: Long) {
+    final def lconst(cst: Long) {
       if (cst == 0L || cst == 1L) {
         emit(Opcodes.LCONST_0 + cst.asInstanceOf[Int])
       } else {
@@ -845,7 +854,7 @@ trait BCodeTypes { _: GenBCode =>
       }
     }
 
-    def fconst(cst: Float) {
+    final def fconst(cst: Float) {
       val bits: Int = java.lang.Float.floatToIntBits(cst)
       if (bits == 0L || bits == 0x3f800000 || bits == 0x40000000) { // 0..2
         emit(Opcodes.FCONST_0 + cst.asInstanceOf[Int])
@@ -854,7 +863,7 @@ trait BCodeTypes { _: GenBCode =>
       }
     }
 
-    def dconst(cst: Double) {
+    final def dconst(cst: Double) {
       val bits: Long = java.lang.Double.doubleToLongBits(cst)
       if (bits == 0L || bits == 0x3ff0000000000000L) { // +0.0d and 1.0d
         emit(Opcodes.DCONST_0 + cst.asInstanceOf[Int])
@@ -863,7 +872,7 @@ trait BCodeTypes { _: GenBCode =>
       }
     }
 
-    def newarray(elem: asm.Type) { // TODO switch on elem.getSort
+    final def newarray(elem: asm.Type) { // TODO switch on elem.getSort
       if(isRefOrArrayType(elem)) {
         jmethod.visitTypeInsn(Opcodes.ANEWARRAY, elem.getInternalName)
       } else {
@@ -889,50 +898,50 @@ trait BCodeTypes { _: GenBCode =>
     }
 
 
-    @inline def load( idx: Int, tk: asm.Type) { emitVarInsn(Opcodes.ILOAD,  idx, tk) }
-    @inline def store(idx: Int, tk: asm.Type) { emitVarInsn(Opcodes.ISTORE, idx, tk) }
+    final def load( idx: Int, tk: asm.Type) { emitVarInsn(Opcodes.ILOAD,  idx, tk) }
+    final def store(idx: Int, tk: asm.Type) { emitVarInsn(Opcodes.ISTORE, idx, tk) }
 
-    @inline def aload( tk: asm.Type) { emitTypeBased(aloadOpcodes,  tk) }
-    @inline def astore(tk: asm.Type) { emitTypeBased(astoreOpcodes, tk) }
+    final def aload( tk: asm.Type) { emitTypeBased(aloadOpcodes,  tk) }
+    final def astore(tk: asm.Type) { emitTypeBased(astoreOpcodes, tk) }
 
-    @inline def neg(tk: asm.Type) { emitPrimitive(negOpcodes, tk) }
-    @inline def add(tk: asm.Type) { emitPrimitive(addOpcodes, tk) }
-    @inline def sub(tk: asm.Type) { emitPrimitive(subOpcodes, tk) }
-    @inline def mul(tk: asm.Type) { emitPrimitive(mulOpcodes, tk) }
-    @inline def div(tk: asm.Type) { emitPrimitive(divOpcodes, tk) }
-    @inline def rem(tk: asm.Type) { emitPrimitive(remOpcodes, tk) }
+    final def neg(tk: asm.Type) { emitPrimitive(negOpcodes, tk) }
+    final def add(tk: asm.Type) { emitPrimitive(addOpcodes, tk) }
+    final def sub(tk: asm.Type) { emitPrimitive(subOpcodes, tk) }
+    final def mul(tk: asm.Type) { emitPrimitive(mulOpcodes, tk) }
+    final def div(tk: asm.Type) { emitPrimitive(divOpcodes, tk) }
+    final def rem(tk: asm.Type) { emitPrimitive(remOpcodes, tk) }
 
-    @inline def invokespecial(owner: String, name: String, desc: String) {
+    final def invokespecial(owner: String, name: String, desc: String) {
       jmethod.visitMethodInsn(Opcodes.INVOKESPECIAL, owner, name, desc)
     }
-    @inline def invokestatic(owner: String, name: String, desc: String) {
+    final def invokestatic(owner: String, name: String, desc: String) {
       jmethod.visitMethodInsn(Opcodes.INVOKESTATIC, owner, name, desc)
     }
-    @inline def invokeinterface(owner: String, name: String, desc: String) {
+    final def invokeinterface(owner: String, name: String, desc: String) {
       jmethod.visitMethodInsn(Opcodes.INVOKEINTERFACE, owner, name, desc)
     }
-    @inline def invokevirtual(owner: String, name: String, desc: String) {
+    final def invokevirtual(owner: String, name: String, desc: String) {
       jmethod.visitMethodInsn(Opcodes.INVOKEVIRTUAL, owner, name, desc)
     }
 
-    @inline def goTo(label: asm.Label) { jmethod.visitJumpInsn(Opcodes.GOTO, label) }
-    @inline def emitIF(cond: icodes.TestOp, label: asm.Label)      { jmethod.visitJumpInsn(cond.opcodeIF,     label) }
-    @inline def emitIF_ICMP(cond: icodes.TestOp, label: asm.Label) { jmethod.visitJumpInsn(cond.opcodeIFICMP, label) }
-    @inline def emitIF_ACMP(cond: icodes.TestOp, label: asm.Label) {
+    final def goTo(label: asm.Label) { jmethod.visitJumpInsn(Opcodes.GOTO, label) }
+    final def emitIF(cond: icodes.TestOp, label: asm.Label)      { jmethod.visitJumpInsn(cond.opcodeIF,     label) }
+    final def emitIF_ICMP(cond: icodes.TestOp, label: asm.Label) { jmethod.visitJumpInsn(cond.opcodeIFICMP, label) }
+    final def emitIF_ACMP(cond: icodes.TestOp, label: asm.Label) {
       assert((cond == icodes.EQ) || (cond == icodes.NE), cond)
       val opc = (if(cond == icodes.EQ) Opcodes.IF_ACMPEQ else Opcodes.IF_ACMPNE)
       jmethod.visitJumpInsn(opc, label)
     }
-    @inline def emitIFNONNULL(label: asm.Label) { jmethod.visitJumpInsn(Opcodes.IFNONNULL, label) }
-    @inline def emitIFNULL   (label: asm.Label) { jmethod.visitJumpInsn(Opcodes.IFNULL,    label) }
+    final def emitIFNONNULL(label: asm.Label) { jmethod.visitJumpInsn(Opcodes.IFNONNULL, label) }
+    final def emitIFNULL   (label: asm.Label) { jmethod.visitJumpInsn(Opcodes.IFNULL,    label) }
 
-    @inline def emitRETURN(tk: asm.Type) {
+    final def emitRETURN(tk: asm.Type) {
       if(tk == UNIT) { emit(Opcodes.RETURN) }
       else           { emitTypeBased(returnOpcodes, tk)      }
     }
 
     /** Emits one of tableswitch or lookoupswitch. */
-    def emitSWITCH(keys: Array[Int], branches: Array[asm.Label], defaultBranch: asm.Label, minDensity: Double) {
+    final def emitSWITCH(keys: Array[Int], branches: Array[asm.Label], defaultBranch: asm.Label, minDensity: Double) {
       assert(keys.length == branches.length)
 
       // For empty keys, it makes sense emitting LOOKUPSWITCH with defaultBranch only.
@@ -973,7 +982,7 @@ trait BCodeTypes { _: GenBCode =>
       val keyMax = keys(keys.length - 1)
 
       val isDenseEnough: Boolean = {
-        /** Calculate in long to guard against overflow. TODO what overflow??? */
+        /** Calculate in long to guard against overflow. TODO what overflow? */
         val keyRangeD: Double = (keyMax.asInstanceOf[Long] - keyMin + 1).asInstanceOf[Double]
         val klenD:     Double = keys.length
         val kdensity:  Double = (klenD / keyRangeD)
@@ -1007,7 +1016,7 @@ trait BCodeTypes { _: GenBCode =>
     // internal helpers -- not part of the public API of `jcode`
     // don't make private otherwise inlining will suffer
 
-    def emitVarInsn(opc: Int, idx: Int, tk: asm.Type) {
+    final def emitVarInsn(opc: Int, idx: Int, tk: asm.Type) {
       assert((opc == Opcodes.ILOAD) || (opc == Opcodes.ISTORE), opc)
       jmethod.visitVarInsn(tk.getOpcode(opc), idx)
     }
@@ -1019,7 +1028,7 @@ trait BCodeTypes { _: GenBCode =>
 
     val returnOpcodes = { import Opcodes._; Array(ARETURN, IRETURN, IRETURN, IRETURN, IRETURN, LRETURN, FRETURN, DRETURN) }
 
-    def emitTypeBased(opcs: Array[Int], tk: asm.Type) { // TODO switch on tk.getSort
+    final def emitTypeBased(opcs: Array[Int], tk: asm.Type) { // TODO switch on tk.getSort
       assert(tk != UNIT, tk)
       val opc = {
         if(isRefOrArrayType(tk)) {  opcs(0) }
@@ -1050,7 +1059,7 @@ trait BCodeTypes { _: GenBCode =>
     val divOpcodes: Array[Int] = { import Opcodes._; Array(IDIV, LDIV, FDIV, DDIV) }
     val remOpcodes: Array[Int] = { import Opcodes._; Array(IREM, LREM, FREM, DREM) }
 
-    def emitPrimitive(opcs: Array[Int], tk: asm.Type) { // TODO index on tk.getSort
+    final def emitPrimitive(opcs: Array[Int], tk: asm.Type) { // TODO index on tk.getSort
       val opc = {
         if(isIntSizedType(tk)) { opcs(0) }
         else {
@@ -1064,16 +1073,16 @@ trait BCodeTypes { _: GenBCode =>
       emit(opc)
     }
 
-    def drop(tk: asm.Type) { emit(if(isWideType(tk)) Opcodes.POP2 else Opcodes.POP) }
+    final def drop(tk: asm.Type) { emit(if(isWideType(tk)) Opcodes.POP2 else Opcodes.POP) }
 
-    def dup(tk: asm.Type)  { emit(if(isWideType(tk)) Opcodes.DUP2 else Opcodes.DUP) }
+    final def dup(tk: asm.Type)  { emit(if(isWideType(tk)) Opcodes.DUP2 else Opcodes.DUP) }
 
     // ---------------- field load and store ----------------
 
-    def fieldLoad( field: Symbol, hostClass: Symbol = null) { // TODO GenASM could use this method
+    final def fieldLoad( field: Symbol, hostClass: Symbol = null) { // TODO GenASM could use this method
       fieldOp(field, isLoad = true,  hostClass)
     }
-    def fieldStore(field: Symbol, hostClass: Symbol = null) { // TODO GenASM could use this method
+    final def fieldStore(field: Symbol, hostClass: Symbol = null) { // TODO GenASM could use this method
       fieldOp(field, isLoad = false, hostClass)
     }
 
@@ -1094,11 +1103,11 @@ trait BCodeTypes { _: GenBCode =>
 
     // ---------------- type checks and casts ----------------
 
-    def isInstance(tk: asm.Type) {
+    final def isInstance(tk: asm.Type) {
       jmethod.visitTypeInsn(Opcodes.INSTANCEOF, tk.getInternalName)
     }
 
-    def checkCast(tk: asm.Type) { // TODO GenASM could use this method
+    final def checkCast(tk: asm.Type) { // TODO GenASM could use this method
       assert(isRefOrArrayType(tk), "checkcast on primitive type: " + tk)
       assert(!isBoxedType(tk),     "checkcast on boxed type: " + tk) // TODO this is backwards compatible with ICode, but is it correct?
       jmethod.visitTypeInsn(Opcodes.CHECKCAST, tk.getInternalName)
@@ -1126,7 +1135,6 @@ trait BCodeTypes { _: GenBCode =>
     /** If code is a coercion primitive, the result type */
     final def coercionTo(code: Int): asm.Type = {
       import scalaPrimitives._
-
       (code: @scala.annotation.switch) match {
         case B2B | C2B | S2B | I2B | L2B | F2B | D2B => BYTE
         case B2C | C2C | S2C | I2C | L2C | F2C | D2C => CHAR
@@ -1140,7 +1148,6 @@ trait BCodeTypes { _: GenBCode =>
 
     final val typeOfArrayOp: Map[Int, asm.Type] = {
       import scalaPrimitives._
-
       Map(
         (List(ZARRAY_LENGTH, ZARRAY_GET, ZARRAY_SET) map (_ -> BOOL)) ++
         (List(BARRAY_LENGTH, BARRAY_GET, BARRAY_SET) map (_ -> BYTE)) ++

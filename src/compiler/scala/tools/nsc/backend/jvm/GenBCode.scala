@@ -618,7 +618,7 @@ abstract class GenBCode extends BCodeUtils with BCodeTypes {
       lineNumber(expr)
       emit(asm.Opcodes.ATHROW) // ICode enters here into enterIgnoreMode, we'll rely instead on DCE at ClassNode level.
 
-      NothingReference // always returns the same, the invoker should know :)
+      RT_NOTHING // always returns the same, the invoker should know :)
     }
 
     /** Generate code for primitive arithmetic operations. */
@@ -1130,7 +1130,7 @@ abstract class GenBCode extends BCodeUtils with BCodeTypes {
           if (value.tag != UnitTag) (value.tag, expectedType) match {
             case (IntTag,   LONG  ) => bc.lconst(value.longValue);       generatedType = LONG
             case (FloatTag, DOUBLE) => bc.dconst(value.doubleValue);     generatedType = DOUBLE
-            case (NullTag,  _     ) => bc.emit(asm.Opcodes.ACONST_NULL); generatedType = NullReference
+            case (NullTag,  _     ) => bc.emit(asm.Opcodes.ACONST_NULL); generatedType = RT_NULL
             case _                  => bc.genConstant(value);            generatedType = toTypeKind(tree.tpe)
           }
 
@@ -1522,7 +1522,7 @@ abstract class GenBCode extends BCodeUtils with BCodeTypes {
     }
 
     def adapt(from: asm.Type, to: asm.Type): Unit = {
-      if (!(<:<(from, to)) && !(isNullType(from) && isNothingType(to))) {
+      if (!(conforms(from, to)) && !(isNullType(from) && isNothingType(to))) {
         to match {
           case UNIT => bc drop from
           case _    => bc.emitT2T(from, to)
@@ -1533,7 +1533,7 @@ abstract class GenBCode extends BCodeUtils with BCodeTypes {
         bc drop from
         mnode.visitInsn(asm.Opcodes.ACONST_NULL)
       }
-      else if (from == ThrowableReference && !(ThrowableClass.tpe <:< toType(to))) {
+      else if (from == ThrowableReference && !conforms(ThrowableReference, to)) {
         bc checkCast to
       }
       else (from, to) match  {
