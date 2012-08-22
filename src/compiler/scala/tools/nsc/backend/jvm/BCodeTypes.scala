@@ -47,7 +47,7 @@ trait BCodeTypes { _: GenBCode =>
   val StringReference    = asm.Type.getObjectType("java/lang/String")
   val ThrowableReference = asm.Type.getObjectType("java/lang/Throwable")
 
-  // TODO rather than lazy, have an init() method that populates mutable collections. Spees up each access afterwards.
+  // TODO rather than lazy, have an init() method that populates mutable collections. That would speed up accesses from then on.
 
   /** A map from scala primitive Types to asm.Type */
   lazy val primitiveTypeMap: Map[Symbol, asm.Type] = {
@@ -183,24 +183,6 @@ trait BCodeTypes { _: GenBCode =>
   final def isNullType   (t: asm.Type) = { (t == RT_NULL)    || (t == CT_NULL)    }
   final def isUnitType   (t: asm.Type) = { t == UNIT }
 
-  /*
-   * For use only within BCodeTypes trait.
-   *
-   *   (1) The canonical way to obtain an asm.Type from GenBCode is via `toTypeKind()`.
-   *
-   *   (2) From within `BCodeTypes`, two other helpers should be preferred (`primitiveOrRefType()` and `primitiveOrClassType`)
-   *       because they handle primitives and arrays, which `asmType()` doesn't.
-   *       `asmType()` is just a shortcut for `asm.Type.getObjectType()`, as the preconditions listed below make clear.
-   *   (3) However asmRefType also handles the phantom types (Null, Nothing)
-   **/
-  final def asmRefType(sym: Symbol): asm.Type = {
-    assert(!primitiveTypeMap.contains(sym), "Use primitiveTypeMap instead.")
-    assert(sym != definitions.ArrayClass,   "Use primitiveOrArrayOrRefType() instead.")
-    assert(hasInternalName(sym),            "Invoked for a symbol lacking JVM internal name: " + sym.fullName)
-
-    phantomTypeMap.getOrElse(sym, asm.Type.getObjectType(sym.javaBinaryName.toString))
-  }
-
   final def asmMethodType(s: Symbol): asm.Type = {
     assert(s.isMethod, "not a method-symbol: " + s)
     val resT: asm.Type = if (s.isClassConstructor) asm.Type.VOID_TYPE else toTypeKind(s.tpe.resultType);
@@ -292,82 +274,92 @@ trait BCodeTypes { _: GenBCode =>
   }
 
   /** Returns the asm.Type for the given type
-   *
-   *  Call to .normalize fixes #3003 (follow type aliases).
-   *  Otherwise, primitiveOrArrayOrRefType() would return ObjectReference.
    **/
   final def toTypeKind(t: Type): asm.Type = {
+
+        /** Interfaces have to be handled delicately to avoid introducing spurious errors,
+         *  but if we treat them all as AnyRef we lose too much information.
+         **/
+        def newReference(sym: Symbol): asm.Type = {
+          assert(!primitiveTypeMap.contains(sym), "Use primitiveTypeMap instead.")
+          assert(sym != definitions.ArrayClass,   "Use arrayOf() instead.")
+
+          if(sym == definitions.NullClass)    return RT_NULL;
+          if(sym == definitions.NothingClass) return RT_NOTHING;
+
+          // Can't call .toInterface (at this phase) or we trip an assertion.
+          // See PackratParser#grow for a method which fails with an apparent mismatch
+          // between "object PackratParsers$class" and "trait PackratParsers"
+          if (sym.isImplClass) {
+            // pos/spec-List.scala is the sole failure if we don't check for NoSymbol
+            val traitSym = sym.owner.info.decl(tpnme.interfaceName(sym.name))
+            if (traitSym != NoSymbol)
+              return asm.Type.getObjectType(traitSym.javaBinaryName.toString)
+          }
+
+          assert(hasInternalName(sym), "Invoked for a symbol lacking JVM internal name: " + sym.fullName)
+          asm.Type.getObjectType(sym.javaBinaryName.toString)
+
+        }
+
+        def primitiveOrRefType(sym: Symbol): asm.Type = {
+          assert(sym != definitions.ArrayClass, "Use primitiveOrArrayOrRefType() instead.")
+
+          primitiveTypeMap.getOrElse(sym, newReference(sym))
+        }
+
+        def primitiveOrRefType2(sym: Symbol): asm.Type = {
+          primitiveTypeMap.get(sym) match {
+            case Some(pt) => pt
+            case None =>
+              sym match {
+                case definitions.NullClass    => RT_NULL
+                case definitions.NothingClass => RT_NOTHING
+                case _ if sym.isClass         => newReference(sym)
+                case _ =>
+                  assert(sym.isType, sym) // it must be compiling Array[a]
+                  ObjectReference
+              }
+          }
+        }
+
+    import definitions.ArrayClass
+
+    // Call to .normalize fixes #3003 (follow type aliases). Otherwise, primitiveOrArrayOrRefType() would return ObjectReference.
     t.normalize match {
-      case ThisType(sym)            =>
-        if(sym == definitions.ArrayClass) ObjectReference
-        else asmRefType(sym)
-      case SingleType(_, sym)       => primitiveOrRefType(sym)
-      case ConstantType(_)          => toTypeKind(t.underlying)
-      case TypeRef(_, sym, args)    => primitiveOrArrayOrRefType(sym, if(args.isEmpty) null else args.head)
+
+      case ThisType(sym) =>
+        if(sym == ArrayClass) ObjectReference
+        else                  phantomTypeMap.getOrElse(sym, asm.Type.getObjectType(sym.javaBinaryName.toString))
+
+      case SingleType(_, sym) => primitiveOrRefType(sym)
+
+      case _: ConstantType    => toTypeKind(t.underlying)
+
+      case TypeRef(_, sym, args) =>
+        if(sym == ArrayClass) arrayOf(toTypeKind(args.head))
+        else                  primitiveOrRefType2(sym)
+
       case ClassInfoType(_, _, sym) =>
-        if(sym == definitions.ArrayClass) abort("ClassInfoType to ArrayClass!")
-        else primitiveOrRefType(sym)
+        assert(sym != ArrayClass, "ClassInfoType to ArrayClass!")
+        primitiveOrRefType(sym)
 
-      // !!! Iulian says types which make no sense after erasure should not reach here,
-      // which includes the ExistentialType, AnnotatedType, RefinedType.  I don't know
-      // if the first two cases exist because they do or as a defensive measure, but
-      // at the time I added it, RefinedTypes were indeed reaching here.
-      case ExistentialType(_, t1)  => abort("ExistentialType reached GenBCode: " + t)
-      case AnnotatedType(_, t1, _) => abort("AnnotatedType reached GenBCode: "   + t)
-      case RefinedType(parents, _) => abort("RefinedType reached GenBCode: "     + t) // defensive: parents map toTypeKind reduceLeft lub
+      // !!! Iulian says types which make no sense after erasure should not reach here, which includes the ExistentialType, AnnotatedType, RefinedType.
+      // I don't know if the first two cases exist because they do or as a defensive measure, but at the time I added it, RefinedTypes were indeed reaching here.
+      case _: ExistentialType => abort("ExistentialType reached GenBCode: " + t)
+      case _: AnnotatedType   => abort("AnnotatedType reached GenBCode: "   + t)
+      case _: RefinedType     => abort("RefinedType reached GenBCode: "     + t) // defensive: parents map toTypeKind reduceLeft lub
 
-      // For sure WildcardTypes shouldn't reach here either, but when
-      // debugging such situations this may come in handy.
-      // case WildcardType                    => REFERENCE(ObjectClass)
+      // For sure WildcardTypes shouldn't reach here either, but when debugging such situations this may come in handy.
+      // case WildcardType    => REFERENCE(ObjectClass)
       case norm => abort(
         "Unknown type: %s, %s [%s, %s] TypeRef? %s".format(
           t, norm, t.getClass, norm.getClass, t.isInstanceOf[TypeRef]
         )
       )
     }
-  }
 
-  /** Interfaces have to be handled delicately to avoid introducing spurious errors,
-   *  but if we treat them all as AnyRef we lose too much information.
-   **/
-  private def newReference(sym: Symbol): asm.Type = {
-    assert(!primitiveTypeMap.contains(sym), "Use primitiveTypeMap instead.")
-    assert(sym != definitions.ArrayClass,   "Use primitiveOrArrayOrRefType() instead.")
-
-    // Can't call .toInterface (at this phase) or we trip an assertion.
-    // See PackratParser#grow for a method which fails with an apparent mismatch
-    // between "object PackratParsers$class" and "trait PackratParsers"
-    if (sym.isImplClass) {
-      // pos/spec-List.scala is the sole failure if we don't check for NoSymbol
-      val traitSym = sym.owner.info.decl(tpnme.interfaceName(sym.name))
-      if (traitSym != NoSymbol)
-        return asmRefType(traitSym)
-    }
-
-    asmRefType(sym)
-  }
-
-  private def primitiveOrRefType(sym: Symbol): asm.Type = {
-    assert(sym != definitions.ArrayClass, "Use primitiveOrArrayOrRefType() instead.")
-
-    primitiveTypeMap.getOrElse(sym, newReference(sym))
-  }
-
-  private def primitiveOrArrayOrRefType(sym: Symbol, arrtarg: Type = null): asm.Type = {
-    primitiveTypeMap.get(sym) match {
-      case Some(pt) => pt
-      case None =>
-        sym match {
-          case definitions.ArrayClass   => arrayOf(toTypeKind(arrtarg))
-          case definitions.NullClass    => RT_NULL
-          case definitions.NothingClass => RT_NOTHING
-          case _ if sym.isClass         => newReference(sym)
-          case _ =>
-            assert(sym.isType, sym) // it must be compiling Array[a]
-            ObjectReference
-        }
-    }
-  }
+  } // end of method toTypeKind()
 
   /** Subtype check `a <:< b` on asm.Types. It used to be called TypeKind.<:<() */
   final def conforms(a: asm.Type, b: asm.Type): Boolean = {
@@ -390,7 +382,7 @@ trait BCodeTypes { _: GenBCode =>
     else if(isNothingType(a)) { // known to be Nothing
       true
     }
-    else if(isUnitType(a)) { // known to be Nothing
+    else if(isUnitType(a)) {
       isUnitType(b)
     }
     else if(isReferenceType(a)) { // may be null
