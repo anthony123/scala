@@ -195,6 +195,7 @@ trait BCodeTypes { _: GenBCode =>
 
   final def isNothingType(t: asm.Type) = { (t == RT_NOTHING) || (t == CT_NOTHING) }
   final def isNullType   (t: asm.Type) = { (t == RT_NULL)    || (t == CT_NULL)    }
+  final def isPhantomType(t: asm.Type) = { isNothingType(t)  || isNullType(t)     }
   final def isUnitType   (t: asm.Type) = { t == UNIT }
 
   final def asmMethodType(s: Symbol): asm.Type = {
@@ -275,14 +276,16 @@ trait BCodeTypes { _: GenBCode =>
 
   /* the type of 1-dimensional arrays of `elem` type. */
   final def arrayOf(elem: asm.Type): asm.Type = {
-    assert(!isUnitType(elem), "The element type of an array type is necessarily either a primitive type, or a class type, or an interface type.")
+    assert(!isUnitType(elem) && !isPhantomType(elem),
+           "The element type of an array type is necessarily either a primitive type, or a class type, or an interface type.")
     asm.Type.getObjectType("[" + elem.getDescriptor)
   }
 
   /* the type of N-dimensional arrays of `elem` type. */
   final def arrayN(elem: asm.Type, dims: Int): asm.Type = {
     assert(dims > 0)
-    assert(!isUnitType(elem), "The element type of an array type is necessarily either a primitive type, or a class type, or an interface type.")
+    assert(!isUnitType(elem) && !isPhantomType(elem),
+           "The element type of an array type is necessarily either a primitive type, or a class type, or an interface type.")
     val desc = ("[" * dims) + elem.getDescriptor
     asm.Type.getObjectType(desc)
   }
@@ -1155,13 +1158,13 @@ trait BCodeTypes { _: GenBCode =>
     final val typeOfArrayOp: Map[Int, asm.Type] = {
       import scalaPrimitives._
       Map(
-        (List(ZARRAY_LENGTH, ZARRAY_GET, ZARRAY_SET) map (_ -> BOOL)) ++
-        (List(BARRAY_LENGTH, BARRAY_GET, BARRAY_SET) map (_ -> BYTE)) ++
-        (List(SARRAY_LENGTH, SARRAY_GET, SARRAY_SET) map (_ -> SHORT)) ++
-        (List(CARRAY_LENGTH, CARRAY_GET, CARRAY_SET) map (_ -> CHAR)) ++
-        (List(IARRAY_LENGTH, IARRAY_GET, IARRAY_SET) map (_ -> INT)) ++
-        (List(LARRAY_LENGTH, LARRAY_GET, LARRAY_SET) map (_ -> LONG)) ++
-        (List(FARRAY_LENGTH, FARRAY_GET, FARRAY_SET) map (_ -> FLOAT)) ++
+        (List(ZARRAY_LENGTH, ZARRAY_GET, ZARRAY_SET) map (_ -> BOOL))   ++
+        (List(BARRAY_LENGTH, BARRAY_GET, BARRAY_SET) map (_ -> BYTE))   ++
+        (List(SARRAY_LENGTH, SARRAY_GET, SARRAY_SET) map (_ -> SHORT))  ++
+        (List(CARRAY_LENGTH, CARRAY_GET, CARRAY_SET) map (_ -> CHAR))   ++
+        (List(IARRAY_LENGTH, IARRAY_GET, IARRAY_SET) map (_ -> INT))    ++
+        (List(LARRAY_LENGTH, LARRAY_GET, LARRAY_SET) map (_ -> LONG))   ++
+        (List(FARRAY_LENGTH, FARRAY_GET, FARRAY_SET) map (_ -> FLOAT))  ++
         (List(DARRAY_LENGTH, DARRAY_GET, DARRAY_SET) map (_ -> DOUBLE)) ++
         (List(OARRAY_LENGTH, OARRAY_GET, OARRAY_SET) map (_ -> ObjectReference)) : _*
       )
