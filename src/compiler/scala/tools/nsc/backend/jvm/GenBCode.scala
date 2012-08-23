@@ -61,7 +61,6 @@ abstract class GenBCode extends BCodeUtils with BCodeTypes {
     private var shouldEmitCleanup          = false
     // used in connection with cleanups
     private var returnType: asm.Type       = null
-    private var returnTpe:  Type           = null
     // line numbers
     private var lastEmittedLineNr          = -1
 
@@ -92,20 +91,16 @@ abstract class GenBCode extends BCodeUtils with BCodeTypes {
     // bookkeeping for method-local vars and params
     private val locals = mutable.Map.empty[Symbol, Local] // (local-or-param-sym -> Local(TypeKind, name, idx))
     private var nxtIdx = -1 // next available index for local-var
-    def index(sym: Symbol): Int = {
-      locals.getOrElseUpdate(sym, makeLocal(sym)).idx
-    }
     /** Make a fresh local variable, ensuring a unique name.
      *  The invoker must make sure inner classes are tracked for the sym's tpe. */
-    def makeLocal(tpe: Type, name: String): Symbol = {
-      val sym = methSymbol.newVariable(cunit.freshTermName(name), NoPosition, Flags.SYNTHETIC) setInfo tpe
-      makeLocal(sym)
+    def makeLocal(tk: asm.Type, name: String): Symbol = {
+      val sym = methSymbol.newVariable(cunit.freshTermName(name), NoPosition, Flags.SYNTHETIC) // setInfo tpe
+      makeLocal(sym, tk)
       sym
     }
-    def makeLocal(sym: Symbol): Local = {
+    def makeLocal(sym: Symbol, tk: asm.Type): Local = {
       assert(!locals.contains(sym), "attempt to create duplicate local var.")
       assert(nxtIdx != -1, "not a valid start index")
-      val tk  = toTypeKind(sym.info)
       val loc = Local(tk, sym.javaSimpleName.toString, nxtIdx)
       locals += (sym -> loc)
       assert(tk.getSize > 0, "makeLocal called for a symbol whose type is Unit.")
@@ -183,14 +178,9 @@ abstract class GenBCode extends BCodeUtils with BCodeTypes {
       earlyReturnVar      = null
       shouldEmitCleanup   = false
       // used in connection with cleanups
-      if (dd.symbol.isConstructor) {
-        returnTpe  = null // not needed in this case
-        returnType = UNIT
-      }
-      else {
-        returnTpe  = dd.symbol.info.resultType
-        returnType = toTypeKind(returnTpe)
-      }
+      returnType =
+        if (dd.symbol.isConstructor) UNIT
+        else toTypeKind(dd.symbol.info.resultType)
       lastEmittedLineNr = -1
     }
 
@@ -407,19 +397,21 @@ abstract class GenBCode extends BCodeUtils with BCodeTypes {
 
       val params      = if(vparamss.isEmpty) Nil else vparamss.head
       methSymbol      = msym
+
+      // add method-local vars for params
+      nxtIdx = if (msym.isStaticMember) 0 else 1;
+      for (p <- params) { makeLocal(p.symbol, toTypeKind(p.symbol.info)) }
+
       val Pair(flags, jmethod0) = initJMethod(
         cnode,
         msym, isNative,
         claszSymbol,  claszSymbol.isInterface,
-        params.map(p => toTypeKind(p.symbol.info)),
+        params.map(p => locals(p.symbol).tk),
         params.map(p => p.symbol.annotations)
       )
       mnode       = jmethod0.asInstanceOf[asm.tree.MethodNode]
       jMethodName = msym.javaSimpleName.toString
 
-      // add method-local vars for params
-      nxtIdx = if (msym.isStaticMember) 0 else 1;
-      for (p <- params) { makeLocal(p.symbol) }
       /* Add method-local vars for LabelDef-params.
        *
        * This makes sure that:
@@ -433,7 +425,7 @@ abstract class GenBCode extends BCodeUtils with BCodeTypes {
        */
       for(ld <- labelDefsAtOrUnder(dd.rhs); p <- ld.params; if !locals.contains(p.symbol)) {
         // the tail-calls xform results in symbols shared btw method-params and labelDef-params, thus the guard above.
-        makeLocal(p.symbol)
+        makeLocal(p.symbol, toTypeKind(p.symbol.info))
       }
 
             def emitBodyOfStaticAccessor() {
@@ -600,10 +592,11 @@ abstract class GenBCode extends BCodeUtils with BCodeTypes {
           bc fieldStore lhs.symbol
 
         case Assign(lhs, rhs) =>
-          val tk = toTypeKind(lhs.symbol.info)
+          val s = lhs.symbol
+          val Local(tk, _, idx) = locals.getOrElse(s, makeLocal(s, toTypeKind(s.info)))
           genLoad(rhs, tk)
           lineNumber(tree)
-          bc.store(index(lhs.symbol), tk)
+          bc.store(idx, tk)
 
         case _ =>
           genLoad(tree, UNIT)
@@ -713,13 +706,13 @@ abstract class GenBCode extends BCodeUtils with BCodeTypes {
 
     def genSynchronized(tree: Apply, expectedType: asm.Type): asm.Type = {
       val Apply(fun, args) = tree
-      val monitor = makeLocal(ObjectClass.tpe, "monitor")
+      val monitor = makeLocal(ObjectReference, "monitor")
       val monCleanup = new asm.Label
 
       // if the synchronized block returns a result, store it in a local variable.
       // Just leaving it on the stack is not valid in MSIL (stack is cleaned when leaving try-blocks).
       val hasResult = (expectedType != UNIT)
-      val monitorResult: Symbol = if(hasResult) makeLocal(args.head.tpe, "monitorResult") else null;
+      val monitorResult: Symbol = if(hasResult) makeLocal(toTypeKind(args.head.tpe), "monitorResult") else null;
 
       /* ------ (1) pushing and entering the monitor, also keeping a reference to it in a local var. ------ */
       genLoadQualifier(fun)
@@ -845,7 +838,7 @@ abstract class GenBCode extends BCodeUtils with BCodeTypes {
       // used in the finally-clause reached via fall-through from try-catch, if any.
       val guardResult  = hasFinally && (kind != UNIT) && mayCleanStack(finalizer)
       // please notice `tmp` has type tree.tpe, while `earlyReturnVar` has the method return type. Because those two types can be different, dedicated vars are needed.
-      val tmp          = if(guardResult) makeLocal(tree.tpe, "tmp") else null;
+      val tmp          = if(guardResult) makeLocal(toTypeKind(tree.tpe), "tmp") else null;
       // upon early return from the try-body or one of its EHs (but not the EH-version of the finally-clause) AND hasFinally, a cleanup is needed.
       val finCleanup   = if(hasFinally) new asm.Label else null
 
@@ -888,15 +881,15 @@ abstract class GenBCode extends BCodeUtils with BCodeTypes {
             excType = typeToDrop
 
           case BoundEH   (patSymbol,      caseBody) =>
-            if(!locals.contains(patSymbol)) { // test\files\run\contrib674.scala , a local-var already exists for patSymbol.
-              makeLocal(patSymbol) // rather than creating on first-access, we do it right away to emit debug-info for the created local var.
-            }
-            store(patSymbol)
+            // test/files/run/contrib674.scala , a local-var already exists for patSymbol.
+            // rather than creating on first-access, we do it right away to emit debug-info for the created local var.
+            val Local(patTK, _, patIdx) = locals.getOrElse(patSymbol, makeLocal(patSymbol, toTypeKind(patSymbol.info)))
+            bc.store(patIdx, patTK)
             genLoad(caseBody, kind)
             nopIfNeeded(startHandler)
             endHandler = currProgramPoint()
             emitLocalVarScope(patSymbol, startHandler, endHandler)
-            excType = toTypeKind(patSymbol.tpe)
+            excType = patTK
         }
         unregisterCleanup(finCleanup)
         // (2.b)  mark the try-body as protected by this case clause.
@@ -918,7 +911,7 @@ abstract class GenBCode extends BCodeUtils with BCodeTypes {
         nopIfNeeded(startTryBody)
         val finalHandler = currProgramPoint() // version of the finally-clause reached via unhandled exception.
         protect(startTryBody, finalHandler, finalHandler, null)
-        val Local(eTK, _, eIdx) = locals(makeLocal(ThrowableClass.tpe, "exc"))
+        val Local(eTK, _, eIdx) = locals(makeLocal(ThrowableReference, "exc"))
         bc.store(eIdx, eTK)
         emitFinalizer(finalizer, null, true)
         bc.load(eIdx, eTK)
@@ -1056,7 +1049,7 @@ abstract class GenBCode extends BCodeUtils with BCodeTypes {
           val sym = tree.symbol
           /* most of the time, !locals.contains(sym), unless the current activation of genLoad() is being called
              while duplicating a finalizer that contains this ValDef. */
-          val Local(tk, _, idx) = locals.getOrElseUpdate(sym, makeLocal(sym))
+          val Local(tk, _, idx) = locals.getOrElseUpdate(sym, makeLocal(sym, toTypeKind(sym.info)))
           if (rhs == EmptyTree) { bc.genConstant(getZeroOf(tk)) }
           else { genLoad(rhs, tk) }
           bc.store(idx, tk)
@@ -1190,7 +1183,7 @@ abstract class GenBCode extends BCodeUtils with BCodeTypes {
             } else {
               // regarding return value, the protocol is: in place of a `return-stmt`, a sequence of `adapt, store, jump` are inserted.
               if(earlyReturnVar == null) {
-                earlyReturnVar = makeLocal(returnTpe, "earlyReturnVar")
+                earlyReturnVar = makeLocal(returnType, "earlyReturnVar")
               }
               store(earlyReturnVar)
             }
@@ -1304,7 +1297,7 @@ abstract class GenBCode extends BCodeUtils with BCodeTypes {
             // we store this boxed value to a local, even if not really needed.
             // boxing optimization might use it, and dead code elimination will
             // take care of unnecessary stores
-            val loc1 = makeLocal(expr.tpe, "boxed")
+            val loc1 = makeLocal(nativeKind, "boxed")
             store(loc1)
             load(loc1)
           }
@@ -1314,6 +1307,7 @@ abstract class GenBCode extends BCodeUtils with BCodeTypes {
 
         case Apply(fun @ _, List(expr)) if (definitions.isUnbox(fun.symbol)) =>
           genLoad(expr, toTypeKind(expr.tpe))
+          // TODO !!!!!!!!!!!!!! isn't there a less typer-intensive way? boxType is determined by fun.symbol alone.
           val boxType = toTypeKind(fun.symbol.owner.linkedClassOfClass.tpe)
           generatedType = boxType
           val MethodNameAndType(mname, mdesc) = asmUnboxTo(boxType)
@@ -1522,7 +1516,7 @@ abstract class GenBCode extends BCodeUtils with BCodeTypes {
     }
 
     def adapt(from: asm.Type, to: asm.Type): Unit = {
-      if (!(conforms(from, to)) && !(isNullType(from) && isNothingType(to))) {
+      if (!conforms(from, to) && !(isNullType(from) && isNothingType(to))) {
         to match {
           case UNIT => bc drop from
           case _    => bc.emitT2T(from, to)
@@ -1566,14 +1560,14 @@ abstract class GenBCode extends BCodeUtils with BCodeTypes {
       val aps = ((args zip params) filterNot isTrivial)
 
       // first push *all* arguments. This makes sure any labelDef-var will use the previous value.
-      aps foreach { case (arg, param) => genLoad(arg, locals(param).tk) }
+      aps foreach { case (arg, param) => genLoad(arg, locals(param).tk) } // locals.contains(param) because genDefDef visited labelDefsAtOrUnder
 
       // second assign one by one to the LabelDef's variables.
       aps.reverse foreach {
         case (_, param) =>
           // TODO FIXME a "this" param results from tail-call xform. If so, the `else` branch seems perfectly fine. And the `then` branch must be wrong.
           if (param.name == nme.THIS) mnode.visitVarInsn(asm.Opcodes.ASTORE, 0)
-          else bc.store(index(param), locals(param).tk)
+          else store(param)
       }
 
     }
@@ -1838,6 +1832,7 @@ abstract class GenBCode extends BCodeUtils with BCodeTypes {
             case ZAND   => genZandOrZor(and = true)
             case ZOR    => genZandOrZor(and = false)
             case code   =>
+              // TODO !!!!!!!!!! isReferenceType, in the sense of TypeKind? (ie non-array, non-boxed, non-nothing, may be null, may be Nothing)
               if (scalaPrimitives.isUniversalEqualityOp(code) && isReferenceType(toTypeKind(lhs.tpe))) {
                 // `lhs` has reference type
                 if (code == EQ) genEqEqPrimitive(lhs, rhs, success, failure)
@@ -1906,7 +1901,7 @@ abstract class GenBCode extends BCodeUtils with BCodeTypes {
           genCZJUMP(success, failure, EQ, ObjectReference)
         } else {
           // l == r -> if (l eq null) r eq null else l.equals(r)
-          val eqEqTempLocal = makeLocal(AnyRefClass.tpe, nme.EQEQ_LOCAL_VAR)
+          val eqEqTempLocal = makeLocal(AnyRefReference, nme.EQEQ_LOCAL_VAR)
           val lNull    = new asm.Label
           val lNonNull = new asm.Label
 

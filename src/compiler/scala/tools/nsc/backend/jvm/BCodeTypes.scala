@@ -661,7 +661,7 @@ trait BCodeTypes { _: GenBCode =>
       import icodes.{ CMPL, CMP, CMPG }
 
       ((op, kind): @unchecked) match {
-        case (CMP, LONG)    => emit(Opcodes.LCMP)
+        case (CMP,  LONG)   => emit(Opcodes.LCMP)
         case (CMPL, FLOAT)  => emit(Opcodes.FCMPL)
         case (CMPG, FLOAT)  => emit(Opcodes.FCMPG)
         case (CMPL, DOUBLE) => emit(Opcodes.DCMPL)
@@ -709,7 +709,7 @@ trait BCodeTypes { _: GenBCode =>
      */
     final def emitT2T(from: asm.Type, to: asm.Type) {
 
-        def msg = "(from: " + from + ", to: " + to + ")"
+          def msg = "(from: " + from + ", to: " + to + ")"
 
       assert(isNonUnitValueType(from), "from is !isNonUnitValueType. " + msg)
       assert(isNonUnitValueType(to),   "to is !isNonUnitValueType. " + msg)
