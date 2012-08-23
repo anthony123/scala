@@ -8,7 +8,7 @@ package backend.jvm
 
 import scala.tools.asm
 import scala.annotation.switch
-import scala.collection.immutable
+import scala.collection.{ immutable, mutable }
 
 /**
  *  Utilities to mediate between types as represented in Scala ASTs and ASM trees.
@@ -44,8 +44,11 @@ trait BCodeTypes { _: GenBCode =>
 
   val ObjectReference    = asm.Type.getObjectType("java/lang/Object")
   val AnyRefReference    = ObjectReference // In tandem, javaName(definitions.AnyRefClass) == ObjectReference. Otherwise every `t1 == t2` requires special-casing.
-  val StringReference    = asm.Type.getObjectType("java/lang/String")
-  val ThrowableReference = asm.Type.getObjectType("java/lang/Throwable")
+  // special names
+  val StringReference          = asm.Type.getObjectType("java/lang/String")
+  val ThrowableReference       = asm.Type.getObjectType("java/lang/Throwable")
+  val jlCloneableReference     = asm.Type.getObjectType("java/lang/Cloneable")
+  val jioSerializableReference = asm.Type.getObjectType("java/io/Serializable")
 
   // TODO rather than lazy, have an init() method that populates mutable collections. That would speed up accesses from then on.
 
@@ -107,7 +110,7 @@ trait BCodeTypes { _: GenBCode =>
     // CT_NULL    -> definitions.NullClass.tpe
   )
 
-  lazy val seenRefTypes = scala.collection.mutable.Map.empty[asm.Type, Type] ++= phantomRefTypes
+  lazy val seenRefTypes = mutable.Map.empty[asm.Type, Type] ++= phantomRefTypes
 
   val classLiteral = immutable.Map[asm.Type, asm.Type](
     UNIT   -> BOXED_UNIT,
@@ -378,12 +381,18 @@ trait BCodeTypes { _: GenBCode =>
 
   } // end of method toTypeKind()
 
-  /** Subtype check `a <:< b` on asm.Types. It used to be called TypeKind.<:<() */
+  /**
+   * Subtype check `a <:< b` on asm.Types that takes into account the JVM built-in numeric promotions (e.g. BYTE to INT).
+   * Its operation can be visualized more easily in terms of the Java bytecode type hierarchy.
+   * This method used to be called, in the ICode world, TypeKind.<:<()
+   **/
   final def conforms(a: asm.Type, b: asm.Type): Boolean = {
     if(isArrayType(a)) { // may be null
-      /* Array subtyping is covariant here, as in Java. Necessary for checking code that interacts with Java. */
-      if(isArrayType(b))            { conforms(componentType(a), componentType(b)) }
-      else if(b == AnyRefReference) { true  }
+      /* Array subtyping is covariant here, as in Java bytecode. Also necessary for Java interop. */
+      if((b == jlCloneableReference)     ||
+         (b == jioSerializableReference) ||
+         (b == AnyRefReference))    { true  }
+      else if(isArrayType(b))       { conforms(componentType(a), componentType(b)) }
       else                          { false }
     }
     else if(isBoxedType(a)) { // may be null
@@ -1169,5 +1178,137 @@ trait BCodeTypes { _: GenBCode =>
         (List(OARRAY_LENGTH, OARRAY_GET, OARRAY_SET) map (_ -> ObjectReference)) : _*
       )
     }
+
+  /** Infrastructure for BCodePhase. */
+  abstract class BCPhaseGen {
+
+    val EMPTY_JTYPE_ARRAY  = Array.empty[asm.Type]
+    val EMPTY_STRING_ARRAY = Array.empty[String]
+
+    val mdesc_arglessvoid = "()V"
+
+    val CLASS_CONSTRUCTOR_NAME    = "<clinit>"
+    val INSTANCE_CONSTRUCTOR_NAME = "<init>"
+
+    val INNER_CLASSES_FLAGS =
+      (asm.Opcodes.ACC_PUBLIC | asm.Opcodes.ACC_PRIVATE   | asm.Opcodes.ACC_PROTECTED |
+       asm.Opcodes.ACC_STATIC | asm.Opcodes.ACC_INTERFACE | asm.Opcodes.ACC_ABSTRACT)
+
+    val PublicStatic      = asm.Opcodes.ACC_PUBLIC | asm.Opcodes.ACC_STATIC
+    val PublicStaticFinal = asm.Opcodes.ACC_PUBLIC | asm.Opcodes.ACC_STATIC | asm.Opcodes.ACC_FINAL
+
+    val strMODULE_INSTANCE_FIELD = nme.MODULE_INSTANCE_FIELD.toString
+
+    def debugLevel = settings.debuginfo.indexOfChoice
+
+    val emitSource = debugLevel >= 1
+    val emitLines  = debugLevel >= 2
+    val emitVars   = debugLevel >= 3
+
+    case class InnerClassEntry(name: String, outerName: String, innerName: String, access: Int) {
+      assert(name != null, "Null is not good as class name in an InnerClassEntry.")
+    }
+
+    /** For given symbol return a symbol corresponding to a class that should be declared as inner class.
+     *
+     *  For example:
+     *  class A {
+     *    class B
+     *    object C
+     *  }
+     *
+     *  then method will return:
+     *    NoSymbol for A,
+     *    the same symbol for A.B (corresponding to A$B class), and
+     *    A$C$ symbol for A.C.
+     */
+    private def innerClassSymbolFor(s: Symbol): Symbol =
+      if (s.isClass) s else if (s.isModule) s.moduleClass else NoSymbol
+
+    /**
+      * Used to build the InnerClasses attribute (JVMS 4.7.6).
+      *
+      * Checks if given symbol corresponds to inner class/object.
+      *   If so, add it to the result, along with all other inner classes over the owner-chain for that symbol
+      *   Otherwise returns Nil.
+      *
+      * This method also adds as member classes those inner classes that have been declared, but otherwise not referred in instructions.
+      *
+      * TODO the invoker is responsible to sort them so inner classes succeed their enclosing class to satisfy the Eclipse Java compiler
+      * TODO the invoker is responsible to add member classes not referred in instructions.
+      * TODO remove duplicate entries.
+      *
+      * TODO: some beforeFlatten { ... } which accounts for being nested in parameterized classes (if we're going to selectively flatten.)
+      *
+      * TODO assert (JVMS 4.7.6 The InnerClasses attribute)
+      * If a class file has a version number that is greater than or equal to 51.0, and has an InnerClasses attribute in its attributes table,
+      * then for all entries in the classes array of the InnerClasses attribute,
+      * the value of the outer_class_info_index item must be zero if the value of the inner_name_index item is zero.
+      */
+    final def innerClassesChain(csym: Symbol): List[InnerClassEntry] = {
+      var chain: List[Symbol] = Nil
+
+      var x = innerClassSymbolFor(csym)
+      while(x ne NoSymbol) {
+        assert(x.isClass, "not an inner-class symbol")
+        val isInner = !x.rawowner.isPackageClass
+        if (isInner) {
+          chain ::= x
+          x = innerClassSymbolFor(x.rawowner)
+        }
+      }
+
+      chain map toInnerClassEntry
+    }
+
+    def isDeprecated(sym: Symbol): Boolean = { sym.annotations exists (_ matches definitions.DeprecatedAttr) }
+
+    def toInnerClassEntry(innerSym: Symbol): InnerClassEntry = {
+
+          /** The outer name for this inner class. Note that it returns null
+           *  when the inner class should not get an index in the constant pool.
+           *  That means non-member classes (anonymous). See Section 4.7.5 in the JVMS.
+           */
+          def outerName(innerSym: Symbol): String = {
+            if (innerSym.originalEnclosingMethod != NoSymbol)
+              null
+            else {
+              val outerName = innerSym.rawowner.javaBinaryName.toString
+              if (isTopLevelModule(innerSym.rawowner)) "" + nme.stripModuleSuffix(newTermName(outerName))
+              else outerName
+            }
+          }
+
+          def innerName(innerSym: Symbol): String = {
+            if (innerSym.isAnonymousClass || innerSym.isAnonymousFunction)
+              null
+            else
+              innerSym.rawname + innerSym.moduleSuffix
+          }
+
+      val access = mkFlags(
+        if (innerSym.rawowner.hasModuleFlag) asm.Opcodes.ACC_STATIC else 0,
+        javaFlags(innerSym),
+        if(isDeprecated(innerSym)) asm.Opcodes.ACC_DEPRECATED else 0 // ASM pseudo-access flag
+      ) & (INNER_CLASSES_FLAGS | asm.Opcodes.ACC_DEPRECATED)
+
+      val jname = innerSym.javaBinaryName.toString  // never null
+      val oname = outerName(innerSym) // null when method-enclosed
+      val iname = innerName(innerSym) // null for anonymous inner class
+
+      InnerClassEntry(jname, oname, iname, access)
+    }
+
+    /**
+     * Records in accessory maps the isInterface, innerClasses, superClass, and supportedInterfaces relations,
+     * so that afterwards queries can be answered without resorting to typer.
+     */
+    def track(csym: Symbol) {
+      assert(hasInternalName(csym), "Not a class to track: " + csym.fullName)
+
+
+    }
+
+  }
 
 }
