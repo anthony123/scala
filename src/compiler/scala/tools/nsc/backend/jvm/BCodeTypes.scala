@@ -75,6 +75,20 @@ trait BCodeTypes { _: GenBCode =>
     )
   }
 
+  /** Maps the method symbol for a box method to the boxed type of the result.
+   *  For example, the method symbol for `Byte.box()`) is mapped to the asm.Type `Ljava/lang/Integer;`. */
+  lazy val boxResultType: Map[Symbol, asm.Type] = {
+    for(Pair(csym, msym) <- definitions.boxMethod)
+    yield (msym -> primitiveTypeMap(csym))
+  }
+
+  /** Maps the method symbol for an unbox method to the primitive type of the result.
+   *  For example, the method symbol for `Byte.unbox()`) is mapped to the asm.Type BYTE. */
+  lazy val unboxResultType: Map[Symbol, asm.Type] = {
+    for(Pair(csym, msym) <- definitions.unboxMethod)
+    yield (msym -> primitiveTypeMap(csym))
+  }
+
   // in keeping with ICode's tradition of calling out boxed types.
   val BOXED_UNIT    = asm.Type.getObjectType("java/lang/Void")
   val BOXED_BOOLEAN = asm.Type.getObjectType("java/lang/Boolean")
