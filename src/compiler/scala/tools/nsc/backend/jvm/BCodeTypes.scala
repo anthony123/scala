@@ -79,7 +79,7 @@ trait BCodeTypes { _: GenBCode =>
    *  For example, the method symbol for `Byte.box()`) is mapped to the asm.Type `Ljava/lang/Integer;`. */
   lazy val boxResultType: Map[Symbol, asm.Type] = {
     for(Pair(csym, msym) <- definitions.boxMethod)
-    yield (msym -> primitiveTypeMap(csym))
+    yield (msym -> primitiveTypeMap(msym.tpe.resultType.typeSymbol))
   }
 
   /** Maps the method symbol for an unbox method to the primitive type of the result.
