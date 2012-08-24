@@ -18,7 +18,7 @@ import scala.tools.asm
  *  @author  Miguel Garcia, http://lamp.epfl.ch/~magarcia/ScalaCompilerCornerReloaded/
  *  @version 1.0
  */
-abstract class GenBCode extends BCodeUtils with BCodeTypes {
+abstract class GenBCode extends BCodeTypes {
   import global._
   import icodes._
   import icodes.opcodes._

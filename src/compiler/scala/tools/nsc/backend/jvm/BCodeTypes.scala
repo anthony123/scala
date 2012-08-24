@@ -16,7 +16,7 @@ import scala.collection.{ immutable, mutable }
  *  @author  Miguel Garcia, http://lamp.epfl.ch/~magarcia/ScalaCompilerCornerReloaded
  *
  */
-trait BCodeTypes { _: GenBCode =>
+abstract class BCodeTypes extends BCodeUtils {
 
   import global._
 
