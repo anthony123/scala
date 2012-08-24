@@ -165,8 +165,9 @@ trait BCodeTypes { _: GenBCode =>
 
     assert(
       !isSpecialType(c) &&
-      ((sc == null && c == ObjectReference) ||
-       (!isSpecialType(sc.c) && c != ObjectReference && !sc.isInterface)) &&
+      ( if(sc == null) { (c == ObjectReference) || isInterface     }
+        else           { (c != ObjectReference) && !sc.isInterface }
+      ) &&
       (ifaces.forall(i => !isSpecialType(i.c) && i.isInterface)),
       "non well-formed plain-type: " + this
     )
@@ -187,10 +188,28 @@ trait BCodeTypes { _: GenBCode =>
     }
 
     def isSubtypeOf(other: asm.Type): Boolean = {
-      assert(exemplars.contains(other))
       assert(!isSpecialType(other), "so called special cases have to be handled in BCodeTypes.conforms()")
 
-      ???
+      if(c == other) return true;
+
+      val otherIsIface = exemplars(other).isInterface
+
+      if(this.isInterface) {
+        if(!otherIsIface) return false;
+      }
+      else {
+        if(sc != null && sc.isSubtypeOf(other)) return true;
+        if(!otherIsIface) return false;
+      }
+
+      var rest = ifaces
+      while(!rest.isEmpty) {
+        if(rest.head.isSubtypeOf(other)) return true;
+        rest = rest.tail
+      }
+
+      false
+
     }
 
   }
