@@ -161,7 +161,7 @@ abstract class BCodeTypes extends BCodeUtils {
    // allowing answering `conforms()` resorting to typer.
    // ------------------------------------------------
 
-  case class Tracked(c: asm.Type, flags: Int, sc: Tracked, ifaces: List[Tracked]) {
+  case class Tracked(c: asm.Type, flags: Int, sc: Tracked, ifaces: Array[Tracked]) {
 
     assert(
       !isSpecialType(c) &&
@@ -202,10 +202,10 @@ abstract class BCodeTypes extends BCodeUtils {
         if(!otherIsIface) return false;
       }
 
-      var rest = ifaces
-      while(!rest.isEmpty) {
-        if(rest.head.isSubtypeOf(other)) return true;
-        rest = rest.tail
+      var idx = 0
+      while(idx < ifaces.length) {
+        if(ifaces(idx).isSubtypeOf(other)) return true;
+        idx += 1
       }
 
       false
@@ -1444,7 +1444,9 @@ abstract class BCodeTypes extends BCodeUtils {
           (sc != NoSymbol) && !sc.isInterface && !sc.isTrait,
         ""
       )
-      val ifaces = getSuperInterfaces(csym)
+      val ifaces    = getSuperInterfaces(csym) map exemplar;
+      val ifacesArr = new Array[Tracked](ifaces.size)
+      ifaces.copyToArray(ifacesArr)
 
       val flags = mkFlags(
         javaFlags(csym),
@@ -1453,7 +1455,7 @@ abstract class BCodeTypes extends BCodeUtils {
 
       val c   = asm.Type.getObjectType(csym.javaBinaryName.toString)
       val tsc = if(sc == NoSymbol) null else exemplar(sc)
-      Tracked(c, flags, tsc, ifaces map exemplar)
+      Tracked(c, flags, tsc, ifacesArr)
     }
 
   }
