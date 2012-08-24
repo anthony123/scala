@@ -171,14 +171,20 @@ trait BCodeTypes { _: GenBCode =>
       "non well-formed plain-type: " + this
     )
 
-    def isPrivate    = (flags & asm.Opcodes.ACC_PRIVATE)    != 0
-    def isPublic     = (flags & asm.Opcodes.ACC_PUBLIC)     != 0
-    def isAbstract   = (flags & asm.Opcodes.ACC_ABSTRACT)   != 0
-    def isInterface  = (flags & asm.Opcodes.ACC_INTERFACE)  != 0
-    def isFinal      = (flags & asm.Opcodes.ACC_FINAL)      != 0
-    def isSynthetic  = (flags & asm.Opcodes.ACC_SYNTHETIC)  != 0
-    def isSuper      = (flags & asm.Opcodes.ACC_SUPER)      != 0
-    def isDeprecated = (flags & asm.Opcodes.ACC_DEPRECATED) != 0
+    import asm.Opcodes._
+    def hasFlags(mask: Int) = (flags & mask) != 0
+    def isPrivate    = hasFlags(ACC_PRIVATE)
+    def isPublic     = hasFlags(ACC_PUBLIC)
+    def isAbstract   = hasFlags(ACC_ABSTRACT)
+    def isInterface  = hasFlags(ACC_INTERFACE)
+    def isFinal      = hasFlags(ACC_FINAL)
+    def isSynthetic  = hasFlags(ACC_SYNTHETIC)
+    def isSuper      = hasFlags(ACC_SUPER)
+    def isDeprecated = hasFlags(ACC_DEPRECATED)
+
+    def superClasses: List[Tracked] = {
+      if(sc == null) Nil else sc :: sc.superClasses
+    }
 
     def isSubtypeOf(other: asm.Type): Boolean = {
       assert(exemplars.contains(other))
@@ -189,7 +195,7 @@ trait BCodeTypes { _: GenBCode =>
 
   }
 
-  val exemplars = mutable.Map.empty[asm.Type, Tracked] // maps internal names to (
+  val exemplars = mutable.Map.empty[asm.Type, Tracked]
 
   // ---------------- inspector methods on asm.Type  ----------------
 
@@ -398,7 +404,7 @@ trait BCodeTypes { _: GenBCode =>
 
       case _: ConstantType    => toTypeKind(t.underlying)
 
-      case TypeRef(_, sym, args) =>
+      case TypeRef(_, sym, args)    =>
         if(sym == ArrayClass) arrayOf(toTypeKind(args.head))
         else                  primitiveOrRefType2(sym)
 
