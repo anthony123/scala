@@ -161,13 +161,32 @@ trait BCodeTypes { _: GenBCode =>
    // allowing answering `conforms()` resorting to typer.
    // ------------------------------------------------
 
-  case class Tracked(c: asm.Type, sc: Tracked, ifaces: List[Tracked]) {
+  case class Tracked(c: asm.Type, flags: Int, sc: Tracked, ifaces: List[Tracked]) {
+
+    assert(
+      !isSpecialType(c) &&
+      ((sc == null && c == ObjectReference) ||
+       (!isSpecialType(sc.c) && c != ObjectReference && !sc.isInterface)) &&
+      (ifaces.forall(i => !isSpecialType(i.c) && i.isInterface)),
+      "non well-formed plain-type: " + this
+    )
+
+    def isPrivate    = (flags & asm.Opcodes.ACC_PRIVATE)    != 0
+    def isPublic     = (flags & asm.Opcodes.ACC_PUBLIC)     != 0
+    def isAbstract   = (flags & asm.Opcodes.ACC_ABSTRACT)   != 0
+    def isInterface  = (flags & asm.Opcodes.ACC_INTERFACE)  != 0
+    def isFinal      = (flags & asm.Opcodes.ACC_FINAL)      != 0
+    def isSynthetic  = (flags & asm.Opcodes.ACC_SYNTHETIC)  != 0
+    def isSuper      = (flags & asm.Opcodes.ACC_SUPER)      != 0
+    def isDeprecated = (flags & asm.Opcodes.ACC_DEPRECATED) != 0
+
     def isSubtypeOf(other: asm.Type): Boolean = {
       assert(exemplars.contains(other))
       assert(!isSpecialType(other), "so called special cases have to be handled in BCodeTypes.conforms()")
 
       ???
     }
+
   }
 
   val exemplars = mutable.Map.empty[asm.Type, Tracked] // maps internal names to (
@@ -179,9 +198,9 @@ trait BCodeTypes { _: GenBCode =>
    * Also, `isReferenceType(RT_NOTHING) == true` , similarly for RT_NULL.
    * Use isNullType() , isNothingType() to detect Nothing and Null.
    */
-  final def isReferenceType(t: asm.Type) = (t.getSort == asm.Type.OBJECT)
+  final def hasObjectSort(t: asm.Type) = (t.getSort == asm.Type.OBJECT)
 
-  final def isNonBoxedReferenceType(t: asm.Type) = isReferenceType(t) && !isBoxedType(t)
+  final def isNonBoxedReferenceType(t: asm.Type) = hasObjectSort(t) && !isBoxedType(t)
 
   final def isSpecialType(t: asm.Type): Boolean = {
     isValueType(t)   ||
@@ -217,7 +236,7 @@ trait BCodeTypes { _: GenBCode =>
   }
 
 
-  final def isRefOrArrayType(t: asm.Type) = isReferenceType(t)  || isArrayType(t)
+  final def isRefOrArrayType(t: asm.Type) = hasObjectSort(t)  || isArrayType(t)
 
   final def isNothingType(t: asm.Type) = { (t == RT_NOTHING) || (t == CT_NOTHING) }
   final def isNullType   (t: asm.Type) = { (t == RT_NULL)    || (t == CT_NULL)    }
@@ -434,9 +453,9 @@ trait BCodeTypes { _: GenBCode =>
     else if(isUnitType(a)) {
       isUnitType(b)
     }
-    else if(isReferenceType(a)) { // may be null
+    else if(hasObjectSort(a)) { // may be null
       if(isNothingType(a))        { true  }
-      else if(isReferenceType(b)) { exemplars(a).isSubtypeOf(b) }
+      else if(hasObjectSort(b))   { exemplars(a).isSubtypeOf(b) }
       else if(isArrayType(b))     { isNullType(a) }
       else                        { false }
     }
@@ -525,7 +544,7 @@ trait BCodeTypes { _: GenBCode =>
       if(a == other)           return a;
        // Approximate `lub`. The common type of two references is always AnyRef.
        // For 'real' least upper bound wrt to subclassing use method 'lub'.
-      assert(isArrayType(a) || isBoxedType(a) || isReferenceType(a), "This is not a valuetype and it's not something else, what is it? " + a)
+      assert(isArrayType(a) || isBoxedType(a) || hasObjectSort(a), "This is not a valuetype and it's not something else, what is it? " + a)
       // TODO For some reason, ICode thinks `REFERENCE(...).maxType(BOXED(whatever))` is `uncomparable`. Here, that has maxType AnyRefReference.
       //      BTW, when swapping arguments, ICode says BOXED(whatever).maxType(REFERENCE(...)) == AnyRefReference, so I guess the above was an oversight in REFERENCE.maxType()
       if(isRefOrArrayType(other)) { AnyRefReference }
@@ -1402,9 +1421,14 @@ trait BCodeTypes { _: GenBCode =>
       )
       val ifaces = getSuperInterfaces(csym)
 
+      val flags = mkFlags(
+        javaFlags(csym),
+        if(isDeprecated(csym)) asm.Opcodes.ACC_DEPRECATED else 0 // ASM pseudo access flag
+      )
+
       val tc  = asm.Type.getObjectType(csym.javaBinaryName.toString)
       val tsc = if(sc == NoSymbol) null else exemplar(sc)
-      Tracked(tc, tsc, ifaces map exemplar)
+      Tracked(tc, flags, tsc, ifaces map exemplar)
     }
 
   }
