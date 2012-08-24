@@ -1451,9 +1451,9 @@ trait BCodeTypes { _: GenBCode =>
         if(isDeprecated(csym)) asm.Opcodes.ACC_DEPRECATED else 0 // ASM pseudo access flag
       )
 
-      val tc  = asm.Type.getObjectType(csym.javaBinaryName.toString)
+      val c   = asm.Type.getObjectType(csym.javaBinaryName.toString)
       val tsc = if(sc == NoSymbol) null else exemplar(sc)
-      Tracked(tc, flags, tsc, ifaces map exemplar)
+      Tracked(c, flags, tsc, ifaces map exemplar)
     }
 
   }
