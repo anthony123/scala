@@ -1837,7 +1837,7 @@ abstract class GenBCode extends BCodeUtils with BCodeTypes {
             case ZAND   => genZandOrZor(and = true)
             case ZOR    => genZandOrZor(and = false)
             case code   =>
-              // TODO !!!!!!!!!! isReferenceType, in the sense of TypeKind? (ie non-array, non-boxed, non-nothing, may be null, may be Nothing)
+              // TODO !!!!!!!!!! isReferenceType, in the sense of TypeKind? (ie non-array, non-boxed, non-nothing, may be null)
               if (scalaPrimitives.isUniversalEqualityOp(code) && isReferenceType(toTypeKind(lhs.tpe))) {
                 // `lhs` has reference type
                 if (code == EQ) genEqEqPrimitive(lhs, rhs, success, failure)

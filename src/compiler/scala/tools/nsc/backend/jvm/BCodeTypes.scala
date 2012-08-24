@@ -156,6 +156,22 @@ trait BCodeTypes { _: GenBCode =>
 
   final def hasInternalName(sym: Symbol) = { sym.isClass || (sym.isModule && !sym.isMethod) }
 
+   // ------------------------------------------------
+   // accessory maps tracking the isInterface, innerClasses, superClass, and supportedInterfaces relations,
+   // allowing answering `conforms()` resorting to typer.
+   // ------------------------------------------------
+
+  case class Tracked(c: asm.Type, sc: Tracked, ifaces: List[Tracked]) {
+    def isSubtypeOf(other: asm.Type): Boolean = {
+      assert(exemplars.contains(other))
+      assert(!isSpecialType(other), "so called special cases have to be handled in BCodeTypes.conforms()")
+
+      ???
+    }
+  }
+
+  val exemplars = mutable.Map.empty[asm.Type, Tracked] // maps internal names to (
+
   // ---------------- inspector methods on asm.Type  ----------------
 
   /*
@@ -166,6 +182,13 @@ trait BCodeTypes { _: GenBCode =>
   final def isReferenceType(t: asm.Type) = (t.getSort == asm.Type.OBJECT)
 
   final def isNonBoxedReferenceType(t: asm.Type) = isReferenceType(t) && !isBoxedType(t)
+
+  final def isSpecialType(t: asm.Type): Boolean = {
+    isValueType(t)   ||
+    isArrayType(t)   ||
+    isPhantomType(t) ||
+    isBoxedType(t)
+  }
 
   final def isArrayType(t: asm.Type) = (t.getSort == asm.Type.ARRAY)
 
@@ -413,7 +436,7 @@ trait BCodeTypes { _: GenBCode =>
     }
     else if(isReferenceType(a)) { // may be null
       if(isNothingType(a))        { true  }
-      else if(isReferenceType(b)) { ??? }
+      else if(isReferenceType(b)) { exemplars(a).isSubtypeOf(b) }
       else if(isArrayType(b))     { isNullType(a) }
       else                        { false }
     }
@@ -804,7 +827,7 @@ trait BCodeTypes { _: GenBCode =>
     } // end of emitT2T()
 
     final def genConstant(const: Constant) {
-      const.tag match {
+      (const.tag: @switch) match {
 
         case BooleanTag => boolconst(const.booleanValue)
 
@@ -1127,7 +1150,7 @@ trait BCodeTypes { _: GenBCode =>
 
     final def checkCast(tk: asm.Type) { // TODO GenASM could use this method
       assert(isRefOrArrayType(tk), "checkcast on primitive type: " + tk)
-      assert(!isBoxedType(tk),     "checkcast on boxed type: " + tk) // TODO this is backwards compatible with ICode, but is it correct?
+      assert(!isBoxedType(tk),     "checkcast on boxed type: " + tk) // TODO ICode also requires: but that's too much, right?
       jmethod.visitTypeInsn(Opcodes.CHECKCAST, tk.getInternalName)
     }
 
@@ -1299,14 +1322,89 @@ trait BCodeTypes { _: GenBCode =>
       InnerClassEntry(jname, oname, iname, access)
     }
 
+    private def getSuperInterfaces(csym: Symbol): List[Symbol] = {
+
+        // Additional interface parents based on annotations and other cues
+        def newParentForAttr(attr: Symbol): Option[Symbol] = attr match {
+          case definitions.SerializableAttr => Some(definitions.SerializableClass)
+          case definitions.CloneableAttr    => Some(definitions.CloneableClass)
+          case definitions.RemoteAttr       => Some(definitions.RemoteInterfaceClass)
+          case _                => None
+        }
+
+        /** Drop redundant interfaces (ones which are implemented by some other parent) from the immediate parents.
+         *  This is important on Android because there is otherwise an interface explosion.
+         */
+        def minimizeInterfaces(lstIfaces: List[Symbol]): List[Symbol] = {
+          var rest   = lstIfaces
+          var leaves = List.empty[Symbol]
+          while(!rest.isEmpty) {
+            val candidate = rest.head
+            val nonLeaf = leaves exists { lsym => lsym isSubClass candidate }
+            if(!nonLeaf) {
+              leaves = candidate :: (leaves filterNot { lsym => candidate isSubClass lsym })
+            }
+            rest = rest.tail
+          }
+
+          leaves
+        }
+
+      val superInterfaces0: List[Symbol] = csym.mixinClasses
+      val superInterfaces:  List[Symbol] = superInterfaces0 ++ csym.annotations.flatMap(ann => newParentForAttr(ann.symbol)) distinct;
+
+      assert(!superInterfaces.contains(NoSymbol), "found NoSymbol among: " + superInterfaces.mkString)
+      assert(superInterfaces.forall(s => !s.isInterface && !s.isTrait), "found non-interface among: " + superInterfaces.mkString)
+
+      minimizeInterfaces(superInterfaces)
+    }
+
+    private def trackedSymbol(sym: Symbol): Symbol = {
+      if(sym.isJavaDefined && sym.isModuleClass) sym.linkedClassOfClass
+      else if(sym.isModule) sym.moduleClass
+      else sym // we track only module-classes and plain-classes
+    }
+
+    final def exemplar(csym0: Symbol): Tracked = {
+      assert(csym0 != NoSymbol, "NoSymbol can't be tracked")
+
+      val csym = trackedSymbol(csym0)
+      if(csym0 != csym) {
+        Console.println("[BCodeTypes.exemplar()] Tracking different symbol. \n\tWas: " + csym0.fullName.toString + "\n\tNow: " + csym.fullName.toString)
+      }
+      assert(!primitiveTypeMap.contains(csym), "primitive types not tracked here: " + csym.fullName)
+      assert(!phantomTypeMap.contains(csym),   "phantom types not tracked here: " + csym.fullName)
+
+      val key = asm.Type.getObjectType(csym.javaBinaryName.toString)
+      assert(!isSpecialType(key), "Not a class to track: " + csym.fullName)
+
+      exemplars.get(key) match {
+        case Some(tr) => tr
+        case _ =>
+          val tr = buildExemplar(csym)
+          exemplars.put(tr.c, tr) // tr.c is the hash-consed, internalized, canonical representative for csym's key.
+          tr
+      }
+    }
+
     /**
      * Records in accessory maps the isInterface, innerClasses, superClass, and supportedInterfaces relations,
      * so that afterwards queries can be answered without resorting to typer.
      */
-    def track(csym: Symbol) {
-      assert(hasInternalName(csym), "Not a class to track: " + csym.fullName)
+    private def buildExemplar(csym: Symbol): Tracked = {
+      val sc = csym.superClass // NoSymbol for csym isInterface or csym == ObjectClass
+      assert(
+        if(csym.isInterface || (csym == definitions.ObjectClass))
+          sc == NoSymbol
+        else
+          (sc != NoSymbol) && !sc.isInterface && !sc.isTrait,
+        ""
+      )
+      val ifaces = getSuperInterfaces(csym)
 
-
+      val tc  = asm.Type.getObjectType(csym.javaBinaryName.toString)
+      val tsc = if(sc == NoSymbol) null else exemplar(sc)
+      Tracked(tc, tsc, ifaces map exemplar)
     }
 
   }
