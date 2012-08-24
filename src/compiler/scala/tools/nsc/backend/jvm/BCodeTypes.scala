@@ -261,7 +261,7 @@ abstract class BCodeTypes extends BCodeUtils {
   }
 
 
-  final def isRefOrArrayType(t: asm.Type) = hasObjectSort(t)  || isArrayType(t)
+  final def isRefOrArrayType(t: asm.Type) = hasObjectSort(t) || isArrayType(t)
 
   final def isNothingType(t: asm.Type) = { (t == RT_NOTHING) || (t == CT_NOTHING) }
   final def isNullType   (t: asm.Type) = { (t == RT_NULL)    || (t == CT_NULL)    }
@@ -306,7 +306,7 @@ abstract class BCodeTypes extends BCodeUtils {
     (t.getSort == asm.Type.DOUBLE)
   }
 
-  final def isNumericType(t: asm.Type) = isIntegralType(t) | isRealType(t)
+  final def isNumericType(t: asm.Type) = isIntegralType(t) || isRealType(t)
 
   /** Is this type a category 2 type in JVM terms? (ie, is it LONG or DOUBLE?) */
   final def isWideType(t: asm.Type) = (t.getSize == 2)
