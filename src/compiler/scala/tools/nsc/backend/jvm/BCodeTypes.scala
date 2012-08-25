@@ -43,7 +43,7 @@ abstract class BCodeTypes extends BCodeUtils {
   val CT_NULL       = asm.Type.getObjectType("scala.Null")    // TODO needed?
 
   val ObjectReference    = asm.Type.getObjectType("java/lang/Object")
-  val AnyRefReference    = ObjectReference // In tandem, javaName(definitions.AnyRefClass) == ObjectReference. Otherwise every `t1 == t2` requires special-casing.
+  val AnyRefReference    = ObjectReference // In tandem, javaNameASM(definitions.AnyRefClass) == ObjectReference. Otherwise every `t1 == t2` requires special-casing.
   // special names
   val StringReference          = asm.Type.getObjectType("java/lang/String")
   val ThrowableReference       = asm.Type.getObjectType("java/lang/Throwable")
@@ -728,7 +728,7 @@ abstract class BCodeTypes extends BCodeUtils {
         || hostSymbol.isBottomClass
       )
       val receiver = if (useMethodOwner) methodOwner else hostSymbol
-      val jowner   = javaName(receiver)
+      val jowner   = javaNameASM(receiver).getInternalName
       val jname    = method.javaSimpleName.toString
       val jtype    = asmMethodType(method).getDescriptor()
 
@@ -1005,7 +1005,7 @@ abstract class BCodeTypes extends BCodeUtils {
           val sym = const.symbolValue
           jmethod.visitFieldInsn(
             asm.Opcodes.GETSTATIC,
-            javaName(sym.owner),
+            javaNameASM(sym.owner).getInternalName,
             sym.javaSimpleName.toString,
             toTypeKind(sym.tpe.underlying).getDescriptor()
           )
@@ -1276,8 +1276,8 @@ abstract class BCodeTypes extends BCodeUtils {
     private def fieldOp(field: Symbol, isLoad: Boolean, hostClass: Symbol = null) {
       // LOAD_FIELD.hostClass , CALL_METHOD.hostClass , and #4283
       val owner      =
-        if(hostClass == null) javaName(field.owner)
-        else                  javaName(hostClass)
+        if(hostClass == null) javaNameASM(field.owner).getInternalName
+        else                  javaNameASM(hostClass).getInternalName
       val fieldJName = field.javaSimpleName.toString
       val fieldDescr = toTypeKind(field.tpe).getDescriptor
       val isStatic   = field.isStaticMember
@@ -1302,51 +1302,55 @@ abstract class BCodeTypes extends BCodeUtils {
 
   } // end of class JCodeMethodN
 
-    // ---------------- adapted from scalaPrimitives ----------------
+  // ---------------- adapted from scalaPrimitives ----------------
 
-    /* Given `code` reports the src TypeKind of the coercion indicated by `code`.
-     * To find the dst TypeKind, `ScalaPrimitives.generatedKind(code)` can be used. */
-    final def coercionFrom(code: Int): asm.Type = {
-      import scalaPrimitives._
-      (code: @switch) match {
-        case B2B | B2C | B2S | B2I | B2L | B2F | B2D => BYTE
-        case S2B | S2S | S2C | S2I | S2L | S2F | S2D => SHORT
-        case C2B | C2S | C2C | C2I | C2L | C2F | C2D => CHAR
-        case I2B | I2S | I2C | I2I | I2L | I2F | I2D => INT
-        case L2B | L2S | L2C | L2I | L2L | L2F | L2D => LONG
-        case F2B | F2S | F2C | F2I | F2L | F2F | F2D => FLOAT
-        case D2B | D2S | D2C | D2I | D2L | D2F | D2D => DOUBLE
-      }
+  /* Given `code` reports the src TypeKind of the coercion indicated by `code`.
+   * To find the dst TypeKind, `ScalaPrimitives.generatedKind(code)` can be used. */
+  final def coercionFrom(code: Int): asm.Type = {
+    import scalaPrimitives._
+    (code: @switch) match {
+      case B2B | B2C | B2S | B2I | B2L | B2F | B2D => BYTE
+      case S2B | S2S | S2C | S2I | S2L | S2F | S2D => SHORT
+      case C2B | C2S | C2C | C2I | C2L | C2F | C2D => CHAR
+      case I2B | I2S | I2C | I2I | I2L | I2F | I2D => INT
+      case L2B | L2S | L2C | L2I | L2L | L2F | L2D => LONG
+      case F2B | F2S | F2C | F2I | F2L | F2F | F2D => FLOAT
+      case D2B | D2S | D2C | D2I | D2L | D2F | D2D => DOUBLE
     }
+  }
 
-    /** If code is a coercion primitive, the result type */
-    final def coercionTo(code: Int): asm.Type = {
-      import scalaPrimitives._
-      (code: @scala.annotation.switch) match {
-        case B2B | C2B | S2B | I2B | L2B | F2B | D2B => BYTE
-        case B2C | C2C | S2C | I2C | L2C | F2C | D2C => CHAR
-        case B2S | C2S | S2S | I2S | L2S | F2S | D2S => SHORT
-        case B2I | C2I | S2I | I2I | L2I | F2I | D2I => INT
-        case B2L | C2L | S2L | I2L | L2L | F2L | D2L => LONG
-        case B2F | C2F | S2F | I2F | L2F | F2F | D2F => FLOAT
-        case B2D | C2D | S2D | I2D | L2D | F2D | D2D => DOUBLE
-      }
+  /** If code is a coercion primitive, the result type */
+  final def coercionTo(code: Int): asm.Type = {
+    import scalaPrimitives._
+    (code: @scala.annotation.switch) match {
+      case B2B | C2B | S2B | I2B | L2B | F2B | D2B => BYTE
+      case B2C | C2C | S2C | I2C | L2C | F2C | D2C => CHAR
+      case B2S | C2S | S2S | I2S | L2S | F2S | D2S => SHORT
+      case B2I | C2I | S2I | I2I | L2I | F2I | D2I => INT
+      case B2L | C2L | S2L | I2L | L2L | F2L | D2L => LONG
+      case B2F | C2F | S2F | I2F | L2F | F2F | D2F => FLOAT
+      case B2D | C2D | S2D | I2D | L2D | F2D | D2D => DOUBLE
     }
+  }
 
-    final val typeOfArrayOp: Map[Int, asm.Type] = {
-      import scalaPrimitives._
-      Map(
-        (List(ZARRAY_LENGTH, ZARRAY_GET, ZARRAY_SET) map (_ -> BOOL))   ++
-        (List(BARRAY_LENGTH, BARRAY_GET, BARRAY_SET) map (_ -> BYTE))   ++
-        (List(SARRAY_LENGTH, SARRAY_GET, SARRAY_SET) map (_ -> SHORT))  ++
-        (List(CARRAY_LENGTH, CARRAY_GET, CARRAY_SET) map (_ -> CHAR))   ++
-        (List(IARRAY_LENGTH, IARRAY_GET, IARRAY_SET) map (_ -> INT))    ++
-        (List(LARRAY_LENGTH, LARRAY_GET, LARRAY_SET) map (_ -> LONG))   ++
-        (List(FARRAY_LENGTH, FARRAY_GET, FARRAY_SET) map (_ -> FLOAT))  ++
-        (List(DARRAY_LENGTH, DARRAY_GET, DARRAY_SET) map (_ -> DOUBLE)) ++
-        (List(OARRAY_LENGTH, OARRAY_GET, OARRAY_SET) map (_ -> ObjectReference)) : _*
-      )
-    }
+  final val typeOfArrayOp: Map[Int, asm.Type] = {
+    import scalaPrimitives._
+    Map(
+      (List(ZARRAY_LENGTH, ZARRAY_GET, ZARRAY_SET) map (_ -> BOOL))   ++
+      (List(BARRAY_LENGTH, BARRAY_GET, BARRAY_SET) map (_ -> BYTE))   ++
+      (List(SARRAY_LENGTH, SARRAY_GET, SARRAY_SET) map (_ -> SHORT))  ++
+      (List(CARRAY_LENGTH, CARRAY_GET, CARRAY_SET) map (_ -> CHAR))   ++
+      (List(IARRAY_LENGTH, IARRAY_GET, IARRAY_SET) map (_ -> INT))    ++
+      (List(LARRAY_LENGTH, LARRAY_GET, LARRAY_SET) map (_ -> LONG))   ++
+      (List(FARRAY_LENGTH, FARRAY_GET, FARRAY_SET) map (_ -> FLOAT))  ++
+      (List(DARRAY_LENGTH, DARRAY_GET, DARRAY_SET) map (_ -> DOUBLE)) ++
+      (List(OARRAY_LENGTH, OARRAY_GET, OARRAY_SET) map (_ -> ObjectReference)) : _*
+    )
+  }
+
+  val INNER_CLASSES_FLAGS =
+    (asm.Opcodes.ACC_PUBLIC | asm.Opcodes.ACC_PRIVATE   | asm.Opcodes.ACC_PROTECTED |
+     asm.Opcodes.ACC_STATIC | asm.Opcodes.ACC_INTERFACE | asm.Opcodes.ACC_ABSTRACT)
 
   /** Infrastructure for BCodePhase. */
   abstract class BCPhaseGen {
@@ -1359,10 +1363,6 @@ abstract class BCodeTypes extends BCodeUtils {
     val CLASS_CONSTRUCTOR_NAME    = "<clinit>"
     val INSTANCE_CONSTRUCTOR_NAME = "<init>"
 
-    val INNER_CLASSES_FLAGS =
-      (asm.Opcodes.ACC_PUBLIC | asm.Opcodes.ACC_PRIVATE   | asm.Opcodes.ACC_PROTECTED |
-       asm.Opcodes.ACC_STATIC | asm.Opcodes.ACC_INTERFACE | asm.Opcodes.ACC_ABSTRACT)
-
     val PublicStatic      = asm.Opcodes.ACC_PUBLIC | asm.Opcodes.ACC_STATIC
     val PublicStaticFinal = asm.Opcodes.ACC_PUBLIC | asm.Opcodes.ACC_STATIC | asm.Opcodes.ACC_FINAL
 
@@ -1374,96 +1374,163 @@ abstract class BCodeTypes extends BCodeUtils {
     val emitLines  = debugLevel >= 2
     val emitVars   = debugLevel >= 3
 
-    case class InnerClassEntry(name: String, outerName: String, innerName: String, access: Int) {
-      assert(name != null, "Null is not good as class name in an InnerClassEntry.")
-    }
+  }
 
-    /** For given symbol return a symbol corresponding to a class that should be declared as inner class.
-     *
-     *  For example:
-     *  class A {
-     *    class B
-     *    object C
-     *  }
-     *
-     *  then method will return:
-     *    NoSymbol for A,
-     *    the same symbol for A.B (corresponding to A$B class), and
-     *    A$C$ symbol for A.C.
-     */
-    private def innerClassSymbolFor(s: Symbol): Symbol =
-      if (s.isClass) s else if (s.isModule) s.moduleClass else NoSymbol
+  // ---------------- InnerClasses attribute (JVMS 4.7.6) ----------------
 
-    /**
-      * Used to build the InnerClasses attribute (JVMS 4.7.6).
-      *
-      * Checks if given symbol corresponds to inner class/object.
-      *   If so, add it to the result, along with all other inner classes over the owner-chain for that symbol
-      *   Otherwise returns Nil.
-      *
-      * This method also adds as member classes those inner classes that have been declared, but otherwise not referred in instructions.
-      *
-      * TODO the invoker is responsible to sort them so inner classes succeed their enclosing class to satisfy the Eclipse Java compiler
-      * TODO the invoker is responsible to add member classes not referred in instructions.
-      * TODO remove duplicate entries.
-      *
-      * TODO: some beforeFlatten { ... } which accounts for being nested in parameterized classes (if we're going to selectively flatten.)
-      *
-      * TODO assert (JVMS 4.7.6 The InnerClasses attribute)
-      * If a class file has a version number that is greater than or equal to 51.0, and has an InnerClasses attribute in its attributes table,
-      * then for all entries in the classes array of the InnerClasses attribute,
-      * the value of the outer_class_info_index item must be zero if the value of the inner_name_index item is zero.
-      */
-    final def innerClassesChain(csym: Symbol): List[InnerClassEntry] = {
-      var chain: List[Symbol] = Nil
+  /**
+   *
+   * Checks if given symbol corresponds to inner class/object.
+   *   If so, add it to the result, along with all other inner classes over the owner-chain for that symbol
+   *   Otherwise returns Nil.
+   *
+   * This method also adds as member classes those inner classes that have been declared, but otherwise not referred in instructions.
+   *
+   * TODO the invoker is responsible to sort them so inner classes succeed their enclosing class to satisfy the Eclipse Java compiler
+   * TODO the invoker is responsible to add member classes not referred in instructions.
+   * TODO remove duplicate entries.
+   *
+   * TODO: some beforeFlatten { ... } which accounts for being nested in parameterized classes (if we're going to selectively flatten.)
+   *
+   * TODO assert (JVMS 4.7.6 The InnerClasses attribute)
+   * If a class file has a version number that is greater than or equal to 51.0, and has an InnerClasses attribute in its attributes table,
+   * then for all entries in the classes array of the InnerClasses attribute,
+   * the value of the outer_class_info_index item must be zero if the value of the inner_name_index item is zero.
+   */
 
-      var x = innerClassSymbolFor(csym)
-      while(x ne NoSymbol) {
-        assert(x.isClass, "not an inner-class symbol")
-        val isInner = !x.rawowner.isPackageClass
-        if (isInner) {
-          chain ::= x
-          x = innerClassSymbolFor(x.rawowner)
-        }
-      }
+  case class InnerClassEntry(name: String, outerName: String, innerName: String, access: Int) {
+    assert(name != null, "Null isn't good as class name in an InnerClassEntry.")
+  }
 
-      chain map toInnerClassEntry
-    }
+  /** For given symbol return a symbol corresponding to a class that should be declared as inner class.
+   *
+   *  For example:
+   *  class A {
+   *    class B
+   *    object C
+   *  }
+   *
+   *  then method will return:
+   *    NoSymbol for A,
+   *    the same symbol for A.B (corresponding to A$B class), and
+   *    A$C$ symbol for A.C.
+   */
+  private def innerClassSymbolFor(s: Symbol): Symbol =
+    if (s.isClass) s else if (s.isModule) s.moduleClass else NoSymbol
 
-    def toInnerClassEntry(innerSym: Symbol): InnerClassEntry = {
+  private val EMPTY_INNERCLASSENTRY_ARRAY = Array.empty[InnerClassEntry]
 
-          /** The outer name for this inner class. Note that it returns null
-           *  when the inner class should not get an index in the constant pool.
-           *  That means non-member classes (anonymous). See Section 4.7.5 in the JVMS.
-           */
-          def outerName(innerSym: Symbol): String = {
-            if (innerSym.originalEnclosingMethod != NoSymbol)
-              null
-            else {
-              val outerName = innerSym.rawowner.javaBinaryName.toString
-              if (isTopLevelModule(innerSym.rawowner)) "" + nme.stripModuleSuffix(newTermName(outerName))
-              else outerName
+  private val innerChainsMap = mutable.Map.empty[/* class */ Symbol, Array[InnerClassEntry]]
+
+  final def innerClassesChain(csym: Symbol): Array[InnerClassEntry] = {
+    val ics = innerClassSymbolFor(csym)
+    if(ics == NoSymbol) return EMPTY_INNERCLASSENTRY_ARRAY
+
+        def buildInnerClassesChain: Array[InnerClassEntry] = {
+          var chain: List[Symbol] = Nil
+
+          var x = ics
+          while(x ne NoSymbol) {
+            assert(x.isClass, "not an inner-class symbol")
+            val isInner = !x.rawowner.isPackageClass
+            if (isInner) {
+              chain ::= x
+              x = innerClassSymbolFor(x.rawowner)
             }
           }
 
-          def innerName(innerSym: Symbol): String = {
-            if (innerSym.isAnonymousClass || innerSym.isAnonymousFunction)
-              null
-            else
-              innerSym.rawname + innerSym.moduleSuffix
+          if(chain.isEmpty) EMPTY_INNERCLASSENTRY_ARRAY
+          else {
+            val arr = new Array[InnerClassEntry](chain.size)
+            (chain map toInnerClassEntry).copyToArray(arr)
+            arr
           }
+        }
 
-      val access = mkFlags(
-        if (innerSym.rawowner.hasModuleFlag) asm.Opcodes.ACC_STATIC else 0,
-        javaFlags(innerSym),
-        if(isDeprecated(innerSym)) asm.Opcodes.ACC_DEPRECATED else 0 // ASM pseudo-access flag
-      ) & (INNER_CLASSES_FLAGS | asm.Opcodes.ACC_DEPRECATED)
+    innerChainsMap.getOrElseUpdate(ics, buildInnerClassesChain)
+  }
 
-      val jname = innerSym.javaBinaryName.toString  // never null
-      val oname = outerName(innerSym) // null when method-enclosed
-      val iname = innerName(innerSym) // null for anonymous inner class
+  private def toInnerClassEntry(innerSym: Symbol): InnerClassEntry = {
 
-      InnerClassEntry(jname, oname, iname, access)
+        /** The outer name for this inner class. Note that it returns null
+         *  when the inner class should not get an index in the constant pool.
+         *  That means non-member classes (anonymous). See Section 4.7.5 in the JVMS.
+         */
+        def outerName(innerSym: Symbol): String = {
+          if (innerSym.originalEnclosingMethod != NoSymbol)
+            null
+          else {
+            val outerName = innerSym.rawowner.javaBinaryName.toString
+            if (isTopLevelModule(innerSym.rawowner)) "" + nme.stripModuleSuffix(newTermName(outerName))
+            else outerName
+          }
+        }
+
+        def innerName(innerSym: Symbol): String = {
+          if (innerSym.isAnonymousClass || innerSym.isAnonymousFunction)
+            null
+          else
+            innerSym.rawname + innerSym.moduleSuffix
+        }
+
+    val access = mkFlags(
+      if (innerSym.rawowner.hasModuleFlag) asm.Opcodes.ACC_STATIC else 0,
+      javaFlags(innerSym),
+      if(isDeprecated(innerSym)) asm.Opcodes.ACC_DEPRECATED else 0 // ASM pseudo-access flag
+    ) & (INNER_CLASSES_FLAGS | asm.Opcodes.ACC_DEPRECATED)
+
+    val jname = innerSym.javaBinaryName.toString  // never null
+    val oname = outerName(innerSym) // null when method-enclosed
+    val iname = innerName(innerSym) // null for anonymous inner class
+
+    InnerClassEntry(jname, oname, iname, access)
+  }
+
+  val innerClassBufferASM = mutable.LinkedHashSet[Symbol]()
+
+  final def javaNameASM(sym: Symbol): asm.Type = {
+
+    assert(hasInternalName(sym), "doesn't have internal name: " + sym.fullName)
+
+    innerClassBufferASM += sym
+
+    phantomTypeMap.getOrElse(sym, exemplar(sym).c)
+  }
+
+  def addInnerClassesASM(csym: Symbol, jclass: asm.ClassVisitor) {
+    // used to detect duplicates.
+    val seen = mutable.Map.empty[String, String]
+    // result without duplicates, not yet sorted.
+    val result = mutable.Set.empty[InnerClassEntry]
+
+      // add inner classes which might not have been referenced yet
+    afterErasure {
+      for (sym <- List(csym, csym.linkedClassOfClass); m <- sym.info.decls.map(innerClassSymbolFor) if m.isClass)
+        innerClassBufferASM += m
+    }
+
+    for(s <- innerClassBufferASM; e <- innerClassesChain(s)) {
+
+      assert(e.name != null, "javaName is broken.") // documentation
+      val doAdd = seen.get(e.name) match {
+        // TODO is it ok for prevOName to be null? (Someone should really document the invariants of the InnerClasses bytecode attribute)
+        case Some(prevOName) =>
+          // this occurs e.g. when innerClassBuffer contains both class Thread$State, object Thread$State,
+          // i.e. for them it must be the case that oname == java/lang/Thread
+          assert(prevOName == e.outerName, "duplicate")
+          false
+        case None => true
+      }
+
+      if(doAdd) {
+        seen   += (e.name -> e.outerName)
+        result += e
+      }
+
+    }
+    // sort them so inner classes succeed their enclosing class to satisfy the Eclipse Java compiler
+    for(e <- result.toList sortBy (_.name.length)) {
+      jclass.visitInnerClass(e.name, e.outerName, e.innerName, e.access)
     }
 
   }

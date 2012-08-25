@@ -282,11 +282,10 @@ abstract class GenBCode extends BCodeTypes {
 
     def genPlainClass(cd: ClassDef) {
       assert(cnode == null, "GenBCode detected nested methods.")
-      innerClassBuffer.clear()
+      innerClassBufferASM.clear()
 
       val csym = cd.symbol
-      exemplar(csym) // this inits
-      thisName = javaName(csym)
+      thisName = javaNameASM(csym).getInternalName
       cnode = new asm.tree.ClassNode()
       initJClass(cnode, csym, thisName, getGenericSignature(csym, csym.owner), cunit)
 
@@ -301,7 +300,7 @@ abstract class GenBCode extends BCodeTypes {
       addSerialVUID(csym, cnode)
       addClassFields(csym)
       gen(cd.impl)
-      addInnerClasses(csym, cnode)
+      addInnerClassesASM(csym, cnode)
 
       /*
        * TODO this is a good time to collapse jump-chains, perform dce and remove unused locals, on the asm.tree.ClassNode.
@@ -441,7 +440,7 @@ abstract class GenBCode extends BCodeTypes {
                 // GETSTATIC `hostClass`.`accessed`
                 emit(
                   new asm.tree.FieldInsnNode(asm.Opcodes.GETSTATIC,
-                                             javaName(hostClass),
+                                             javaNameASM(hostClass).getInternalName,
                                              fieldName.toString,
                                              fieldDescr)
                 )
@@ -453,7 +452,7 @@ abstract class GenBCode extends BCodeTypes {
                 // GETSTATIC `hostClass`.`accessed`
                 emit(
                   new asm.tree.FieldInsnNode(asm.Opcodes.PUTSTATIC,
-                                             javaName(hostClass),
+                                             javaNameASM(hostClass).getInternalName,
                                              fieldName.toString,
                                              fieldDescr)
                 )
@@ -526,7 +525,7 @@ abstract class GenBCode extends BCodeTypes {
         // add a static field ("CREATOR") to this class to cache android.os.Parcelable$Creator
         andrFieldName = newTermName(androidFieldName)
         val fieldAccess    = asm.Opcodes.ACC_STATIC | asm.Opcodes.ACC_FINAL
-        val fieldType      = javaName(AndroidCreatorClass) // tracks inner classes if any.
+        val fieldType      = javaNameASM(AndroidCreatorClass).getInternalName // tracks inner classes if any.
         val andrFieldDescr = toTypeKind(AndroidCreatorClass.tpe).getDescriptor
         cnode.visitField(fieldAccess, andrFieldName, andrFieldDescr, null, null)
       }
@@ -537,13 +536,13 @@ abstract class GenBCode extends BCodeTypes {
         if (isStaticModule(claszSymbol)) { // call object's private ctor from static ctor
 
           // NEW `moduleName`
-          val className = javaName(methSymbol.enclClass)
+          val className = javaNameASM(methSymbol.enclClass).getInternalName
           val i0 = new asm.tree.TypeInsnNode(asm.Opcodes.NEW, className)
 
           // INVOKESPECIAL <init>
           val callee = methSymbol.enclClass.primaryConstructor
           val jname  = callee.javaSimpleName.toString
-          val jowner = javaName(callee.owner)
+          val jowner = javaNameASM(callee.owner).getInternalName
           val jtype  = asmMethodType(callee).getDescriptor()
           val i1 = new asm.tree.MethodInsnNode(asm.Opcodes.INVOKESPECIAL, jowner, jname, jtype)
 
@@ -554,7 +553,7 @@ abstract class GenBCode extends BCodeTypes {
 
           // INVOKESTATIC CREATOR(): android.os.Parcelable$Creator; -- TODO where does this Android method come from?
           val callee = definitions.getMember(claszSymbol.companionModule, androidFieldName)
-          val jowner = javaName(callee.owner)
+          val jowner = javaNameASM(callee.owner).getInternalName
           val jname  = callee.javaSimpleName.toString
           val jtype  = asmMethodType(callee).getDescriptor()
           val i0 = new asm.tree.MethodInsnNode(asm.Opcodes.INVOKESTATIC, jowner, jname, jtype)
@@ -1087,7 +1086,7 @@ abstract class GenBCode extends BCodeTypes {
                  "tree.symbol = " + tree.symbol + ", class symbol = " + claszSymbol + " compilation unit:"+ cunit)
           if (tree.symbol.isModuleClass && tree.symbol != claszSymbol) {
             genLoadModule(tree)
-            generatedType = asm.Type.getObjectType(javaName(tree.symbol))
+            generatedType = javaNameASM(tree.symbol)
           }
           else {
             mnode.visitVarInsn(asm.Opcodes.ALOAD, 0)
@@ -1218,7 +1217,7 @@ abstract class GenBCode extends BCodeTypes {
           else if (isValueType(l)) {
             bc drop l
             if (cast) {
-              mnode.visitTypeInsn(asm.Opcodes.NEW, javaName(definitions.ClassCastExceptionClass))
+              mnode.visitTypeInsn(asm.Opcodes.NEW, javaNameASM(definitions.ClassCastExceptionClass).getInternalName)
               bc dup ObjectReference
               emit(asm.Opcodes.ATHROW)
             } else {
@@ -1353,7 +1352,7 @@ abstract class GenBCode extends BCodeTypes {
             // GETSTATIC `hostClass`.`accessed`
             emit(
               new asm.tree.FieldInsnNode(asm.Opcodes.GETSTATIC,
-                                         javaName(hostClass),
+                                         javaNameASM(hostClass).getInternalName,
                                          fieldName,
                                          fieldDescr)
             )
@@ -1363,7 +1362,7 @@ abstract class GenBCode extends BCodeTypes {
             // GETSTATIC `hostClass`.`accessed`
             emit(
               new asm.tree.FieldInsnNode(asm.Opcodes.PUTSTATIC,
-                                         javaName(hostClass),
+                                         javaNameASM(hostClass).getInternalName,
                                          fieldName,
                                          fieldDescr)
             )
@@ -1601,7 +1600,7 @@ abstract class GenBCode extends BCodeTypes {
       } else {
         mnode.visitFieldInsn(
           asm.Opcodes.GETSTATIC,
-          javaName(module) /* + "$" */ ,
+          javaNameASM(module).getInternalName /* + "$" */ ,
           strMODULE_INSTANCE_FIELD,
           toTypeKind(module.tpe).getDescriptor
         )
