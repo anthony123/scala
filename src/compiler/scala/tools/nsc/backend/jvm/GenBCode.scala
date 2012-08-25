@@ -285,6 +285,7 @@ abstract class GenBCode extends BCodeTypes {
       innerClassBuffer.clear()
 
       val csym = cd.symbol
+      exemplar(csym) // this inits
       thisName = javaName(csym)
       cnode = new asm.tree.ClassNode()
       initJClass(cnode, csym, thisName, getGenericSignature(csym, csym.owner), cunit)

@@ -82,7 +82,7 @@ abstract class BCodeTypes extends BCodeUtils {
    *  For example, the method symbol for `Byte.box()`) is mapped to the asm.Type `Ljava/lang/Integer;`. */
   lazy val boxResultType: Map[Symbol, asm.Type] = {
     for(Pair(csym, msym) <- definitions.boxMethod)
-    yield (msym -> primitiveTypeMap(msym.tpe.resultType.typeSymbol))
+    yield (msym -> classLiteral(primitiveTypeMap(csym)))
   }
 
   /** Maps the method symbol for an unbox method to the primitive type of the result.
@@ -197,6 +197,7 @@ abstract class BCodeTypes extends BCodeUtils {
       val otherIsIface = exemplars(other).isInterface
 
       if(this.isInterface) {
+        if(other == ObjectReference) return true;
         if(!otherIsIface) return false;
       }
       else {
@@ -589,8 +590,8 @@ abstract class BCodeTypes extends BCodeUtils {
 
         def msg = "(a: " + a + ", b: " + b + ")"
 
-      assert(isNonUnitValueType(a), "a is !isNonUnitValueType. " + msg)
-      assert(isNonUnitValueType(b), "a is !isNonUnitValueType. " + msg)
+      assert(isNonUnitValueType(a), "a isn't a non-Unit value type. " + msg)
+      assert(isValueType(b), "b isn't a value type. " + msg)
 
       (a eq b) || (a match {
         case BOOL | BYTE | SHORT | CHAR => b == INT || b == LONG // TODO Actually, does BOOL conform to LONG ? Even with adapt() it's a type error, right?.
