@@ -1302,17 +1302,11 @@ abstract class GenBCode extends BCodeTypes {
           }
           val MethodNameAndType(mname, mdesc) = asmBoxTo(nativeKind)
           bc.invokestatic(BoxesRunTime, mname, mdesc)
-          // TODO !!!!!!!!!!!!!! isn't there a less typer-intensive way? generatedType is determined by fun.symbol alone.
-          generatedType = toTypeKind(fun.symbol.tpe.resultType)
-          val fasterWayBox = boxResultType(fun.symbol)
-          assert(generatedType == fasterWayBox, "can't replace generatedType with fasterWayBox")
+          generatedType = boxResultType(fun.symbol) // was toTypeKind(fun.symbol.tpe.resultType)
 
         case Apply(fun @ _, List(expr)) if (definitions.isUnbox(fun.symbol)) =>
           genLoad(expr, toTypeKind(expr.tpe))
-          // TODO !!!!!!!!!!!!!! isn't there a less typer-intensive way? boxType is determined by fun.symbol alone.
-          val boxType = toTypeKind(fun.symbol.owner.linkedClassOfClass.tpe)
-          val fasterWayUnbox = unboxResultType(fun.symbol)
-          assert(boxType == fasterWayUnbox, "can't replace boxType with fasterWay")
+          val boxType = unboxResultType(fun.symbol) // was toTypeKind(fun.symbol.owner.linkedClassOfClass.tpe)
           generatedType = boxType
           val MethodNameAndType(mname, mdesc) = asmUnboxTo(boxType)
           bc.invokestatic(BoxesRunTime, mname, mdesc)
@@ -1946,8 +1940,8 @@ abstract class GenBCode extends BCodeTypes {
     case class Local(tk: asm.Type, name: String, idx: Int)
 
     trait EHClause
-    case class NamelessEH(typeToDrop: asm.Type,   caseBody: Tree) extends EHClause
-    case class BoundEH    (patSymbol:     Symbol, caseBody: Tree) extends EHClause
+    case class NamelessEH(typeToDrop: asm.Type, caseBody: Tree) extends EHClause
+    case class BoundEH    (patSymbol:   Symbol, caseBody: Tree) extends EHClause
 
   } // end of class BCodePhase
 

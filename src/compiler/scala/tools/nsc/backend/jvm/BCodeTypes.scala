@@ -103,15 +103,6 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
   val BOXED_FLOAT   = asm.Type.getObjectType("java/lang/Float")
   val BOXED_DOUBLE  = asm.Type.getObjectType("java/lang/Double")
 
-  val phantomRefTypes: Map[asm.Type, Type] = scala.collection.immutable.Map(
-    RT_NOTHING -> definitions.NothingClass.tpe,
-    CT_NOTHING -> definitions.NothingClass.tpe
-    // RT_NULL    -> definitions.NullClass.tpe,
-    // CT_NULL    -> definitions.NullClass.tpe
-  )
-
-  lazy val seenRefTypes = mutable.Map.empty[asm.Type, Type] ++= phantomRefTypes
-
   /** Map from type kinds to the Java reference types.
    *  It is used to push class literals onto the operand stack.
    *  @see Predef.classOf
@@ -233,7 +224,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
         case definitions.SerializableAttr => Some(definitions.SerializableClass)
         case definitions.CloneableAttr    => Some(definitions.CloneableClass)
         case definitions.RemoteAttr       => Some(definitions.RemoteInterfaceClass)
-        case _                => None
+        case _ => None
       }
 
       /** Drop redundant interfaces (ones which are implemented by some other parent) from the immediate parents.
@@ -264,8 +255,9 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
   }
 
   /**
-   * Records in accessory maps the isInterface, innerClasses, superClass, and supportedInterfaces relations,
+   * Records in accessory maps the superClass and supportedInterfaces relations,
    * so that afterwards queries can be answered without resorting to typer.
+   * This method does not add to `innerClassesBuffer`, use `asmType()` or `toTypeKind()` for that.
    */
   final def exemplar(csym0: Symbol): Tracked = {
     assert(csym0 != NoSymbol, "NoSymbol can't be tracked")
@@ -497,7 +489,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
           assert(hasInternalName(sym), "Invoked for a symbol lacking JVM internal name: " + sym.fullName)
           assert(!phantomTypeMap.contains(sym), "phantom types not supposed to reach here.")
 
-          innerClassBufferASM += sym
+          bufferIfInner(sym)
 
           exemplar(sym).c
 
@@ -1483,13 +1475,16 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
   final def internalName(sym: Symbol): String = { asmClassType(sym).getInternalName }
 
   final def asmClassType(sym: Symbol): asm.Type = {
-
     assert(hasInternalName(sym), "doesn't have internal name: " + sym.fullName)
-
-    /* Adding to `innerClassBufferASM` here guarantees all of the inner-classes referred by the class being emitted are accounted for.  */
-    innerClassBufferASM += sym
-
+    bufferIfInner(sym)
     phantomTypeMap.getOrElse(sym, exemplar(sym).c)
+  }
+
+  def bufferIfInner(sym: Symbol) {
+    val ics = innerClassSymbolFor(sym)
+    if(ics != NoSymbol) {
+      innerClassBufferASM += ics
+    }
   }
 
   def addInnerClassesASM(csym: Symbol, jclass: asm.ClassVisitor) {
@@ -1500,8 +1495,9 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
     // add inner classes which might not have been referenced yet TODO this should be done in genPlainClass()
     afterErasure {
-      for (sym <- List(csym, csym.linkedClassOfClass); m <- sym.info.decls.map(innerClassSymbolFor) if m.isClass)
-        innerClassBufferASM += m
+      for (sym <- List(csym, csym.linkedClassOfClass); memberc <- sym.info.decls.map(innerClassSymbolFor) if memberc.isClass) {
+        innerClassBufferASM += memberc
+      }
     }
 
     for(s <- innerClassBufferASM; e <- innerClassesChain(s)) {
@@ -1910,7 +1906,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     val emitLines  = debugLevel >= 2
     val emitVars   = debugLevel >= 3
 
-    // TODO here's where innerClasses-related stuff should go , as well as javaNameASM , and the helpers they invoke.
+    // TODO here's where innerClasses-related stuff should go , as well as javaName , and the helpers they invoke.
 
     /** Specialized array conversion to prevent calling
      *  java.lang.reflect.Array.newInstance via TraversableOnce.toArray
@@ -1919,7 +1915,6 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     def mkArray(xs: Traversable[String]):    Array[String]    = { val a = new Array[String](xs.size);   xs.copyToArray(a); a }
 
     def descriptor(t: Type):     String = { toTypeKind(t).getDescriptor }
-    def descriptor(k: asm.Type): String = { k.getDescriptor }
     def descriptor(s: Symbol):   String = { asmClassType(s).getDescriptor }
 
     /**
@@ -2430,7 +2425,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
       val ps = csym.info.parents
       val superClass: String = if(ps.isEmpty) JAVA_LANG_OBJECT.getInternalName else internalName(ps.head.typeSymbol);
-      val ifaces = getSuperInterfaces(csym) map internalName
+      val ifaces = getSuperInterfaces(csym) map internalName // `internalName()` tracks inner classes.
 
       val flags = mkFlags(
         javaFlags(csym),
