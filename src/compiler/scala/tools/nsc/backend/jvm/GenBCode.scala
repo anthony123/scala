@@ -645,21 +645,21 @@ abstract class GenBCode extends BCodeTypes {
                   if (scalaPrimitives.isShiftOp(code)) INT else resKind)
 
           (code: @switch) match {
-            case scalaPrimitives.ADD    => bc add resKind
-            case scalaPrimitives.SUB    => bc sub resKind
-            case scalaPrimitives.MUL    => bc mul resKind
-            case scalaPrimitives.DIV    => bc div resKind
-            case scalaPrimitives.MOD    => bc rem resKind
+            case scalaPrimitives.ADD => bc add resKind
+            case scalaPrimitives.SUB => bc sub resKind
+            case scalaPrimitives.MUL => bc mul resKind
+            case scalaPrimitives.DIV => bc div resKind
+            case scalaPrimitives.MOD => bc rem resKind
 
             case scalaPrimitives.OR  |
                  scalaPrimitives.XOR |
-                 scalaPrimitives.AND    => bc.genPrimitiveLogical(code, resKind)
+                 scalaPrimitives.AND => bc.genPrimitiveLogical(code, resKind)
 
             case scalaPrimitives.LSL |
                  scalaPrimitives.LSR |
-                 scalaPrimitives.ASR    => bc.genPrimitiveShift(code, resKind)
+                 scalaPrimitives.ASR => bc.genPrimitiveShift(code, resKind)
 
-            case _                      => abort("Unknown primitive: " + fun.symbol + "[" + code + "]")
+            case _                   => abort("Unknown primitive: " + fun.symbol + "[" + code + "]")
           }
 
         case _ =>
