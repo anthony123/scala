@@ -199,7 +199,6 @@ abstract class GenBCode extends BCodeTypes {
       beanInfoCodeGen = new JBeanInfoBuilder(bytecodeWriter)
       super.run()
       bytecodeWriter.close()
-      reverseJavaName.clear()
     }
 
     override def apply(unit: CompilationUnit): Unit = {
@@ -285,7 +284,7 @@ abstract class GenBCode extends BCodeTypes {
       innerClassBufferASM.clear()
 
       val csym = cd.symbol
-      thisName = javaNameASM(csym).getInternalName
+      thisName = internalName(csym)
       cnode = new asm.tree.ClassNode()
       initJClass(cnode, csym, thisName, getGenericSignature(csym, csym.owner), cunit)
 
@@ -440,7 +439,7 @@ abstract class GenBCode extends BCodeTypes {
                 // GETSTATIC `hostClass`.`accessed`
                 emit(
                   new asm.tree.FieldInsnNode(asm.Opcodes.GETSTATIC,
-                                             javaNameASM(hostClass).getInternalName,
+                                             internalName(hostClass),
                                              fieldName.toString,
                                              fieldDescr)
                 )
@@ -452,7 +451,7 @@ abstract class GenBCode extends BCodeTypes {
                 // GETSTATIC `hostClass`.`accessed`
                 emit(
                   new asm.tree.FieldInsnNode(asm.Opcodes.PUTSTATIC,
-                                             javaNameASM(hostClass).getInternalName,
+                                             internalName(hostClass),
                                              fieldName.toString,
                                              fieldDescr)
                 )
@@ -525,7 +524,7 @@ abstract class GenBCode extends BCodeTypes {
         // add a static field ("CREATOR") to this class to cache android.os.Parcelable$Creator
         andrFieldName = newTermName(androidFieldName)
         val fieldAccess    = asm.Opcodes.ACC_STATIC | asm.Opcodes.ACC_FINAL
-        val fieldType      = javaNameASM(AndroidCreatorClass).getInternalName // tracks inner classes if any.
+        val fieldType      = internalName(AndroidCreatorClass) // tracks inner classes if any.
         val andrFieldDescr = toTypeKind(AndroidCreatorClass.tpe).getDescriptor
         cnode.visitField(fieldAccess, andrFieldName, andrFieldDescr, null, null)
       }
@@ -536,13 +535,13 @@ abstract class GenBCode extends BCodeTypes {
         if (isStaticModule(claszSymbol)) { // call object's private ctor from static ctor
 
           // NEW `moduleName`
-          val className = javaNameASM(methSymbol.enclClass).getInternalName
+          val className = internalName(methSymbol.enclClass)
           val i0 = new asm.tree.TypeInsnNode(asm.Opcodes.NEW, className)
 
           // INVOKESPECIAL <init>
           val callee = methSymbol.enclClass.primaryConstructor
           val jname  = callee.javaSimpleName.toString
-          val jowner = javaNameASM(callee.owner).getInternalName
+          val jowner = internalName(callee.owner)
           val jtype  = asmMethodType(callee).getDescriptor()
           val i1 = new asm.tree.MethodInsnNode(asm.Opcodes.INVOKESPECIAL, jowner, jname, jtype)
 
@@ -553,7 +552,7 @@ abstract class GenBCode extends BCodeTypes {
 
           // INVOKESTATIC CREATOR(): android.os.Parcelable$Creator; -- TODO where does this Android method come from?
           val callee = definitions.getMember(claszSymbol.companionModule, androidFieldName)
-          val jowner = javaNameASM(callee.owner).getInternalName
+          val jowner = internalName(callee.owner)
           val jname  = callee.javaSimpleName.toString
           val jtype  = asmMethodType(callee).getDescriptor()
           val i0 = new asm.tree.MethodInsnNode(asm.Opcodes.INVOKESTATIC, jowner, jname, jtype)
@@ -1086,7 +1085,7 @@ abstract class GenBCode extends BCodeTypes {
                  "tree.symbol = " + tree.symbol + ", class symbol = " + claszSymbol + " compilation unit:"+ cunit)
           if (tree.symbol.isModuleClass && tree.symbol != claszSymbol) {
             genLoadModule(tree)
-            generatedType = javaNameASM(tree.symbol)
+            generatedType = asmClassType(tree.symbol)
           }
           else {
             mnode.visitVarInsn(asm.Opcodes.ALOAD, 0)
@@ -1217,7 +1216,7 @@ abstract class GenBCode extends BCodeTypes {
           else if (isValueType(l)) {
             bc drop l
             if (cast) {
-              mnode.visitTypeInsn(asm.Opcodes.NEW, javaNameASM(definitions.ClassCastExceptionClass).getInternalName)
+              mnode.visitTypeInsn(asm.Opcodes.NEW, internalName(definitions.ClassCastExceptionClass))
               bc dup ObjectReference
               emit(asm.Opcodes.ATHROW)
             } else {
@@ -1352,7 +1351,7 @@ abstract class GenBCode extends BCodeTypes {
             // GETSTATIC `hostClass`.`accessed`
             emit(
               new asm.tree.FieldInsnNode(asm.Opcodes.GETSTATIC,
-                                         javaNameASM(hostClass).getInternalName,
+                                         internalName(hostClass),
                                          fieldName,
                                          fieldDescr)
             )
@@ -1362,7 +1361,7 @@ abstract class GenBCode extends BCodeTypes {
             // GETSTATIC `hostClass`.`accessed`
             emit(
               new asm.tree.FieldInsnNode(asm.Opcodes.PUTSTATIC,
-                                         javaNameASM(hostClass).getInternalName,
+                                         internalName(hostClass),
                                          fieldName,
                                          fieldDescr)
             )
@@ -1600,7 +1599,7 @@ abstract class GenBCode extends BCodeTypes {
       } else {
         mnode.visitFieldInsn(
           asm.Opcodes.GETSTATIC,
-          javaNameASM(module).getInternalName /* + "$" */ ,
+          internalName(module) /* + "$" */ ,
           strMODULE_INSTANCE_FIELD,
           toTypeKind(module.tpe).getDescriptor
         )
