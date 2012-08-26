@@ -803,9 +803,9 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
     } // end of method genPrimitiveArithmetic()
 
-    final def genPrimitiveLogical(op: icodes.LogicalOp, kind: asm.Type) {
+    final def genPrimitiveLogical(op: /* LogicalOp */ Int, kind: asm.Type) {
 
-      import icodes.{ AND, OR, XOR }
+      import scalaPrimitives.{ AND, OR, XOR }
 
       ((op, kind): @unchecked) match {
         case (AND, LONG) => emit(Opcodes.LAND)
@@ -829,9 +829,9 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
     } // end of method genPrimitiveLogical()
 
-    final def genPrimitiveShift(op: icodes.ShiftOp, kind: asm.Type) {
+    final def genPrimitiveShift(op: /* ShiftOp */ Int, kind: asm.Type) {
 
-      import icodes.{ LSL, ASR, LSR }
+      import scalaPrimitives.{ LSL, ASR, LSR }
 
       ((op, kind): @unchecked) match {
         case (LSL, LONG) => emit(Opcodes.LSHL)
@@ -1300,7 +1300,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
     final def checkCast(tk: asm.Type) { // TODO GenASM could use this method
       assert(isRefOrArrayType(tk), "checkcast on primitive type: " + tk)
-      assert(!isBoxedType(tk),     "checkcast on boxed type: " + tk) // TODO ICode also requires: but that's too much, right?
+      // TODO ICode also requires: but that's too much, right? assert(!isBoxedType(tk),     "checkcast on boxed type: " + tk)
       jmethod.visitTypeInsn(Opcodes.CHECKCAST, tk.getInternalName)
     }
 

@@ -193,6 +193,7 @@ abstract class GenBCode extends BCodeTypes {
     def isStaticField(fsym: Symbol) = {  fsym.owner.isModuleClass && fsym.hasStaticAnnotation }
 
     override def run() {
+
       scalaPrimitives.init
       bytecodeWriter  = initBytecodeWriter(cleanup.getEntryPoints)
       mirrorCodeGen   = new JMirrorBuilder(bytecodeWriter)
@@ -644,20 +645,21 @@ abstract class GenBCode extends BCodeTypes {
           genLoad(rarg, // check .NET size of shift arguments!
                   if (scalaPrimitives.isShiftOp(code)) INT else resKind)
 
-          code match {
-            case scalaPrimitives.ADD    => bc.genPrimitiveArithmetic(ADD, resKind)
-            case scalaPrimitives.SUB    => bc.genPrimitiveArithmetic(SUB, resKind)
-            case scalaPrimitives.MUL    => bc.genPrimitiveArithmetic(MUL, resKind)
-            case scalaPrimitives.DIV    => bc.genPrimitiveArithmetic(DIV, resKind)
-            case scalaPrimitives.MOD    => bc.genPrimitiveArithmetic(REM, resKind)
+          (code: @switch) match {
+            case scalaPrimitives.ADD    => bc add resKind
+            case scalaPrimitives.SUB    => bc sub resKind
+            case scalaPrimitives.MUL    => bc mul resKind
+            case scalaPrimitives.DIV    => bc div resKind
+            case scalaPrimitives.MOD    => bc rem resKind
 
-            case scalaPrimitives.OR     => bc.genPrimitiveLogical(OR,  resKind)
-            case scalaPrimitives.XOR    => bc.genPrimitiveLogical(XOR, resKind)
-            case scalaPrimitives.AND    => bc.genPrimitiveLogical(AND, resKind)
+            case scalaPrimitives.OR  |
+                 scalaPrimitives.XOR |
+                 scalaPrimitives.AND    => bc.genPrimitiveLogical(code, resKind)
 
-            case scalaPrimitives.LSL    => bc.genPrimitiveShift(LSL, resKind)
-            case scalaPrimitives.LSR    => bc.genPrimitiveShift(LSR, resKind)
-            case scalaPrimitives.ASR    => bc.genPrimitiveShift(ASR, resKind)
+            case scalaPrimitives.LSL |
+                 scalaPrimitives.LSR |
+                 scalaPrimitives.ASR    => bc.genPrimitiveShift(code, resKind)
+
             case _                      => abort("Unknown primitive: " + fun.symbol + "[" + code + "]")
           }
 
