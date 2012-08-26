@@ -193,7 +193,6 @@ abstract class GenBCode extends BCodeTypes {
     def isStaticField(fsym: Symbol) = {  fsym.owner.isModuleClass && fsym.hasStaticAnnotation }
 
     override def run() {
-
       scalaPrimitives.init
       bytecodeWriter  = initBytecodeWriter(cleanup.getEntryPoints)
       mirrorCodeGen   = new JMirrorBuilder(bytecodeWriter)
@@ -1769,6 +1768,8 @@ abstract class GenBCode extends BCodeTypes {
       bc goTo failure
     }
 
+    val testOpForPrimitive: Array[TestOp] = Array(EQ, NE, EQ, NE, LT, LE, GE, GT)
+
     /**
      * Generate code for conditional expressions.
      * The jump targets success/failure of the test are `then-target` and `else-target` resp.
@@ -1776,20 +1777,12 @@ abstract class GenBCode extends BCodeTypes {
     private def genCond(tree: Tree, success: asm.Label, failure: asm.Label) {
 
           def genComparisonOp(l: Tree, r: Tree, code: Int) {
-            val op: TestOp = (code: @switch) match {
-              case scalaPrimitives.LT => LT
-              case scalaPrimitives.LE => LE
-              case scalaPrimitives.GT => GT
-              case scalaPrimitives.GE => GE
-              case scalaPrimitives.ID | scalaPrimitives.EQ => EQ
-              case scalaPrimitives.NI | scalaPrimitives.NE => NE
-
-              case _ => abort("Unknown comparison primitive: " + code)
-            }
-
+            val op: TestOp = testOpForPrimitive(code - scalaPrimitives.ID)
             // special-case reference (in)equality test for null (null eq x, x eq null)
-            lazy val nonNullSide = ifOneIsNull(l, r)
-            if (scalaPrimitives.isReferenceEqualityOp(code) && nonNullSide != null) {
+            var nonNullSide: Tree = null
+            if (scalaPrimitives.isReferenceEqualityOp(code) &&
+                { nonNullSide = ifOneIsNull(l, r); nonNullSide != null }
+            ) {
               genLoad(nonNullSide, ObjectReference)
               genCZJUMP(success, failure, op, ObjectReference)
             }

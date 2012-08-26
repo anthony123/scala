@@ -1378,7 +1378,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
    * the value of the outer_class_info_index item must be zero if the value of the inner_name_index item is zero.
    */
 
-  case class InnerClassEntry(name: String, outerName: String, innerName: String, access: Int) {
+  case class InnerClassEntry(name: Name, outerName: Name, innerName: String, access: Int) {
     assert(name != null, "Null isn't good as class name in an InnerClassEntry.")
   }
 
@@ -1438,12 +1438,12 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
          *  when the inner class should not get an index in the constant pool.
          *  That means non-member classes (anonymous). See Section 4.7.5 in the JVMS.
          */
-        def outerName(innerSym: Symbol): String = {
+        def outerName(innerSym: Symbol): Name = {
           if (innerSym.originalEnclosingMethod != NoSymbol)
             null
           else {
-            val outerName = innerSym.rawowner.javaBinaryName.toString
-            if (isTopLevelModule(innerSym.rawowner)) "" + nme.stripModuleSuffix(newTermName(outerName))
+            val outerName = innerSym.rawowner.javaBinaryName
+            if (isTopLevelModule(innerSym.rawowner)) nme.stripModuleSuffix(outerName)
             else outerName
           }
         }
@@ -1461,9 +1461,9 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       if(isDeprecated(innerSym)) asm.Opcodes.ACC_DEPRECATED else 0 // ASM pseudo-access flag
     ) & (INNER_CLASSES_FLAGS | asm.Opcodes.ACC_DEPRECATED)
 
-    val jname = innerSym.javaBinaryName.toString  // never null
-    val oname = outerName(innerSym) // null when method-enclosed
-    val iname = innerName(innerSym) // null for anonymous inner class
+    val jname = innerSym.javaBinaryName // never null
+    val oname = outerName(innerSym)     // null when method-enclosed
+    val iname = innerName(innerSym)     // null for anonymous inner class
 
     InnerClassEntry(jname, oname, iname, access)
   }
@@ -1489,7 +1489,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
   def addInnerClassesASM(csym: Symbol, jclass: asm.ClassVisitor) {
     // used to detect duplicates.
-    val seen = mutable.Map.empty[String, String]
+    val seen = mutable.Map.empty[Name, Name]
     // result without duplicates, not yet sorted.
     val result = mutable.Set.empty[InnerClassEntry]
 
@@ -1521,7 +1521,11 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     }
     // sort them so inner classes succeed their enclosing class to satisfy the Eclipse Java compiler
     for(e <- result.toList sortBy (_.name.length)) {
-      jclass.visitInnerClass(e.name, e.outerName, e.innerName, e.access)
+      jclass.visitInnerClass(
+        e.name.toString,
+        if(e.outerName != null) e.outerName.toString else null,
+        e.innerName,
+        e.access)
     }
 
   }
