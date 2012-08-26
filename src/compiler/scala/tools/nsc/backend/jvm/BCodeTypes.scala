@@ -92,6 +92,16 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     yield (msym -> primitiveTypeMap(csym))
   }
 
+  def initBCodeTypes() { // boxed classes are looked up in the `exemplars` map by jvmWiseLUB(). Otherwise they aren't needed there (e.g., `isSubtypeOf()` special-cases boxed classes, similarly for others).
+    import definitions._
+    val boxedClasses = List(BoxedBooleanClass, BoxedCharacterClass, BoxedByteClass, BoxedShortClass, BoxedIntClass, BoxedLongClass, BoxedFloatClass, BoxedDoubleClass)
+    for(csym <- boxedClasses) {
+      val key = asm.Type.getObjectType(csym.javaBinaryName.toString)
+      val tr  = buildExemplar(key, csym)
+      exemplars.put(tr.c, tr)
+    }
+  }
+
   // in keeping with ICode's tradition of calling out boxed types.
   val BOXED_UNIT    = asm.Type.getObjectType("java/lang/Void")
   val BOXED_BOOLEAN = asm.Type.getObjectType("java/lang/Boolean")

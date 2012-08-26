@@ -194,6 +194,7 @@ abstract class GenBCode extends BCodeTypes {
 
     override def run() {
       scalaPrimitives.init
+      initBCodeTypes()
       bytecodeWriter  = initBytecodeWriter(cleanup.getEntryPoints)
       mirrorCodeGen   = new JMirrorBuilder(bytecodeWriter)
       beanInfoCodeGen = new JBeanInfoBuilder(bytecodeWriter)
