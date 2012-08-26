@@ -39,8 +39,8 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
    */
   val RT_NOTHING = asm.Type.getObjectType("scala/runtime/Nothing$")
   val RT_NULL    = asm.Type.getObjectType("scala/runtime/Null$")
-  val CT_NOTHING = asm.Type.getObjectType("scala.Nothing") // TODO needed?
-  val CT_NULL    = asm.Type.getObjectType("scala.Null")    // TODO needed?
+  val CT_NOTHING = asm.Type.getObjectType("scala/Nothing") // TODO needed?
+  val CT_NULL    = asm.Type.getObjectType("scala/Null")    // TODO needed?
 
   val ObjectReference = asm.Type.getObjectType("java/lang/Object")
   val AnyRefReference = ObjectReference // In tandem, javaNameASM(definitions.AnyRefClass) == ObjectReference. Otherwise every `t1 == t2` requires special-casing.
@@ -52,54 +52,62 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
   // TODO rather than lazy, have an init() method that populates mutable collections. That would speed up accesses from then on.
 
-  /** A map from scala primitive Types to asm.Type */
-  lazy val primitiveTypeMap: Map[Symbol, asm.Type] = {
-    import definitions._
-    Map(
-      UnitClass     -> UNIT,
-      BooleanClass  -> BOOL,
-      CharClass     -> CHAR,
-      ByteClass     -> BYTE,
-      ShortClass    -> SHORT,
-      IntClass      -> INT,
-      LongClass     -> LONG,
-      FloatClass    -> FLOAT,
-      DoubleClass   -> DOUBLE
-    )
-  }
+  /** A map from scala primitive type-symbols to asm.Types */
+  var primitiveTypeMap: Map[Symbol, asm.Type] = null
 
-  lazy val phantomTypeMap: Map[Symbol, asm.Type] = {
-    import definitions._
-    Map(
-      NothingClass -> RT_NOTHING,
-      NullClass    -> RT_NULL,
-      NothingClass -> RT_NOTHING, // we map on purpose to RT_NOTHING, getting rid of the distinction compile-time vs. runtime for NullClass.
-      NullClass    -> RT_NULL     // ditto.
-    )
-  }
+  var phantomTypeMap:   Map[Symbol, asm.Type] = null
 
   /** Maps the method symbol for a box method to the boxed type of the result.
    *  For example, the method symbol for `Byte.box()`) is mapped to the asm.Type `Ljava/lang/Integer;`. */
-  lazy val boxResultType: Map[Symbol, asm.Type] = {
-    for(Pair(csym, msym) <- definitions.boxMethod)
-    yield (msym -> classLiteral(primitiveTypeMap(csym)))
-  }
-
+  var boxResultType:    Map[Symbol, asm.Type] = null
   /** Maps the method symbol for an unbox method to the primitive type of the result.
    *  For example, the method symbol for `Byte.unbox()`) is mapped to the asm.Type BYTE. */
-  lazy val unboxResultType: Map[Symbol, asm.Type] = {
-    for(Pair(csym, msym) <- definitions.unboxMethod)
-    yield (msym -> primitiveTypeMap(csym))
-  }
+  var unboxResultType:  Map[Symbol, asm.Type] = null
 
-  def initBCodeTypes() { // boxed classes are looked up in the `exemplars` map by jvmWiseLUB(). Otherwise they aren't needed there (e.g., `isSubtypeOf()` special-cases boxed classes, similarly for others).
+  def initBCodeTypes() {
+
     import definitions._
+
+    primitiveTypeMap =
+      Map(
+        UnitClass     -> UNIT,
+        BooleanClass  -> BOOL,
+        CharClass     -> CHAR,
+        ByteClass     -> BYTE,
+        ShortClass    -> SHORT,
+        IntClass      -> INT,
+        LongClass     -> LONG,
+        FloatClass    -> FLOAT,
+        DoubleClass   -> DOUBLE
+      )
+
+    phantomTypeMap =
+      Map(
+        NothingClass -> RT_NOTHING,
+        NullClass    -> RT_NULL,
+        NothingClass -> RT_NOTHING, // we map on purpose to RT_NOTHING, getting rid of the distinction compile-time vs. runtime for NullClass.
+        NullClass    -> RT_NULL     // ditto.
+      )
+
+    boxResultType =
+      for(Pair(csym, msym) <- definitions.boxMethod)
+      yield (msym -> classLiteral(primitiveTypeMap(csym)))
+
+    unboxResultType =
+      for(Pair(csym, msym) <- definitions.unboxMethod)
+      yield (msym -> primitiveTypeMap(csym))
+
+    // boxed classes are looked up in the `exemplars` map by jvmWiseLUB().
+    // Other than that, they aren't needed there (e.g., `isSubtypeOf()` special-cases boxed classes, similarly for others).
     val boxedClasses = List(BoxedBooleanClass, BoxedCharacterClass, BoxedByteClass, BoxedShortClass, BoxedIntClass, BoxedLongClass, BoxedFloatClass, BoxedDoubleClass)
     for(csym <- boxedClasses) {
       val key = asm.Type.getObjectType(csym.javaBinaryName.toString)
       val tr  = buildExemplar(key, csym)
       exemplars.put(tr.c, tr)
     }
+
+    // reversePrimitiveMap = (primitiveTypeMap map { case (s, pt) => (s.tpe, pt) } map (_.swap)).toMap
+
   }
 
   // in keeping with ICode's tradition of calling out boxed types.
@@ -157,10 +165,6 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       DOUBLE -> MethodNameAndType("unboxToDouble",  "(Ljava/lang/Object;)D")
     )
   }
-
-  /** Reverse map for toType */
-  private lazy val reversePrimitiveMap: Map[asm.Type, Type] =
-    (primitiveTypeMap map { case (s, pt) => (s.tpe, pt) } map (_.swap)).toMap
 
   final def hasInternalName(sym: Symbol) = { sym.isClass || (sym.isModule && !sym.isMethod) }
 
