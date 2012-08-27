@@ -1516,14 +1516,14 @@ abstract class GenBCode extends BCodeTypes {
     }
 
     def adapt(from: BType, to: BType): Unit = {
-      if (!conforms(from, to) && !(isNullType(from) && isNothingType(to))) {
+      if (!conforms(from, to) && !(from.isNullType && to.isNothingType)) {
         to match {
           case UNIT => bc drop from
           case _    => bc.emitT2T(from, to)
         }
-      } else if(isNothingType(from)) {
+      } else if(from.isNothingType) {
         emit(asm.Opcodes.ATHROW) // ICode enters here into enterIgnoreMode, we'll rely instead on DCE at ClassNode level.
-      } else if (isNullType(from)) {
+      } else if (from.isNullType) {
         bc drop from
         mnode.visitInsn(asm.Opcodes.ACONST_NULL)
       }

@@ -327,7 +327,9 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
     def isNonUnitValueType = { isValueType && !isUnitType }
 
-    def isNonSpecial = { !isValueType && !isArray && !isPhantomType(this) }
+    def isNonSpecial  = { !isValueType && !isArray && !isPhantomType(this) }
+    def isNothingType = { (this == RT_NOTHING) || (this == CT_NOTHING) }
+    def isNullType    = { (this == RT_NULL)    || (this == CT_NULL)    }
 
     def isBoxed = {
       this match {
@@ -807,9 +809,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
   // ---------------- inspector methods on BType  ----------------
 
-  final def isNothingType(t: BType) = { (t == RT_NOTHING) || (t == CT_NOTHING) }
-  final def isNullType   (t: BType) = { (t == RT_NULL)    || (t == CT_NULL)    }
-  final def isPhantomType(t: BType) = { isNothingType(t)  || isNullType(t)     }
+  final def isPhantomType(t: BType) = { t.isNothingType   || t.isNullType     }
 
   final def asmMethodType(s: Symbol): BType = {
     assert(s.isMethod, "not a method-symbol: " + s)
@@ -1017,22 +1017,22 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       else if(b == AnyRefReference) { true  }
       else                          { false }
     }
-    else if(isNullType(a)) { // known to be null
-      if(isNothingType(b))          { false }
-      else if(b.isValueType)        { false }
-      else                          { true  }
+    else if(a.isNullType) { // known to be null
+      if(b.isNothingType)      { false }
+      else if(b.isValueType)   { false }
+      else                     { true  }
     }
-    else if(isNothingType(a)) { // known to be Nothing
+    else if(a.isNothingType) { // known to be Nothing
       true
     }
     else if(a.isUnitType) {
       b.isUnitType
     }
     else if(a.hasObjectSort) { // may be null
-      if(isNothingType(a))        { true  }
-      else if(b.hasObjectSort)    { exemplars(a).isSubtypeOf(b) }
-      else if(b.isArray)     { isNullType(a) }
-      else                        { false }
+      if(a.isNothingType)      { true  }
+      else if(b.hasObjectSort) { exemplars(a).isSubtypeOf(b) }
+      else if(b.isArray)       { a.isNullType }
+      else                     { false }
     }
     else {
 
@@ -1056,8 +1056,8 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
           abort("Uncomparable BTypes: " + a.toString + " with " + other.toString)
         }
 
-    if(isNothingType(a))     return other;
-    if(isNothingType(other)) return a;
+    if(a.isNothingType)      return other;
+    if(other.isNothingType)  return a;
     if(a == other)           return a;
 
     a match {
@@ -1114,9 +1114,9 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
   final def maxType(a: BType, other: BType): BType = {
     if(a.isValueType) { maxValueType(a, other) }
     else {
-      if(isNothingType(a))     return other;
-      if(isNothingType(other)) return a;
-      if(a == other)           return a;
+      if(a.isNothingType)     return other;
+      if(other.isNothingType) return a;
+      if(a == other)          return a;
        // Approximate `lub`. The common type of two references is always AnyRef.
        // For 'real' least upper bound wrt to subclassing use method 'lub'.
       assert(a.isArray || a.isBoxed || a.hasObjectSort, "This is not a valuetype and it's not something else, what is it? " + a)
