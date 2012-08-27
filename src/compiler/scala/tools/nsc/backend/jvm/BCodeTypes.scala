@@ -323,6 +323,9 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     def isPrimitiveOrVoid = (sort <  BType.ARRAY)
     def isValueType       = (sort <  BType.ARRAY)
     def isArray           = (sort == BType.ARRAY)
+    def isUnitType        = (sort == BType.VOID)
+
+    def isNonUnitValueType = { isValueType && !isUnitType }
 
     def isNonSpecial = { !isValueType && !isArray && !isPhantomType(this) }
 
@@ -792,8 +795,6 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
   // ---------------- inspector methods on BType  ----------------
 
-  final def isNonUnitValueType(t: BType): Boolean = { t.isValueType && !isUnitType(t) }
-
   final def isBoxedType(t: BType) = {
     t match {
       case BOXED_UNIT  | BOXED_BOOLEAN | BOXED_CHAR   |
@@ -810,7 +811,6 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
   final def isNothingType(t: BType) = { (t == RT_NOTHING) || (t == CT_NOTHING) }
   final def isNullType   (t: BType) = { (t == RT_NULL)    || (t == CT_NULL)    }
   final def isPhantomType(t: BType) = { isNothingType(t)  || isNullType(t)     }
-  final def isUnitType   (t: BType) = { t == UNIT }
 
   final def asmMethodType(s: Symbol): BType = {
     assert(s.isMethod, "not a method-symbol: " + s)
@@ -893,7 +893,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
   /* the type of 1-dimensional arrays of `elem` type. */
   final def arrayOf(elem: BType): BType = {
-    assert(!isUnitType(elem) && !isPhantomType(elem),
+    assert(!(elem.isUnitType) && !isPhantomType(elem),
            "The element type of an array type is necessarily either a primitive type, or a class type, or an interface type.")
     brefType("[" + elem.getDescriptor)
   }
@@ -901,7 +901,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
   /* the type of N-dimensional arrays of `elem` type. */
   final def arrayN(elem: BType, dims: Int): BType = {
     assert(dims > 0)
-    assert(!isUnitType(elem) && !isPhantomType(elem),
+    assert(!(elem.isUnitType) && !isPhantomType(elem),
            "The element type of an array type is necessarily either a primitive type, or a class type, or an interface type.")
     val desc = ("[" * dims) + elem.getDescriptor
     brefType(desc)
@@ -1026,8 +1026,8 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     else if(isNothingType(a)) { // known to be Nothing
       true
     }
-    else if(isUnitType(a)) {
-      isUnitType(b)
+    else if(a.isUnitType) {
+      b.isUnitType
     }
     else if(a.hasObjectSort) { // may be null
       if(isNothingType(a))        { true  }
@@ -1039,7 +1039,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
         def msg = "(a: " + a + ", b: " + b + ")"
 
-      assert(isNonUnitValueType(a), "a isn't a non-Unit value type. " + msg)
+      assert(a.isNonUnitValueType, "a isn't a non-Unit value type. " + msg)
       assert(b.isValueType, "b isn't a value type. " + msg)
 
       (a eq b) || (a match {
@@ -1355,8 +1355,8 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
           def msg = "(from: " + from + ", to: " + to + ")"
 
-      assert(isNonUnitValueType(from), "from is !isNonUnitValueType. " + msg)
-      assert(isNonUnitValueType(to),   "to is !isNonUnitValueType. " + msg)
+      assert(from.isNonUnitValueType, "from is !isNonUnitValueType. " + msg)
+      assert(to.isNonUnitValueType,   "to is !isNonUnitValueType. " + msg)
 
           def pickOne(opcs: Array[Int]) { // TODO index on to.sort
             val chosen = (to: @unchecked) match {
