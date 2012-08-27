@@ -20,16 +20,26 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
   import global._
 
+  def brefType(iname: String): BType = {
+    brefType(newTypeName(iname))
+  }
+  def brefType(iname: Name): BType = {
+    assert(iname.isInstanceOf[TypeName])
+    BType.getObjectType(iname.start, iname.length)
+  }
+
   // due to keyboard economy only
-  val UNIT   = asm.Type.VOID_TYPE
-  val BOOL   = asm.Type.BOOLEAN_TYPE
-  val CHAR   = asm.Type.CHAR_TYPE
-  val BYTE   = asm.Type.BYTE_TYPE
-  val SHORT  = asm.Type.SHORT_TYPE
-  val INT    = asm.Type.INT_TYPE
-  val LONG   = asm.Type.LONG_TYPE
-  val FLOAT  = asm.Type.FLOAT_TYPE
-  val DOUBLE = asm.Type.DOUBLE_TYPE
+  val UNIT   = BType.VOID_TYPE
+  val BOOL   = BType.BOOLEAN_TYPE
+  val CHAR   = BType.CHAR_TYPE
+  val BYTE   = BType.BYTE_TYPE
+  val SHORT  = BType.SHORT_TYPE
+  val INT    = BType.INT_TYPE
+  val LONG   = BType.LONG_TYPE
+  val FLOAT  = BType.FLOAT_TYPE
+  val DOUBLE = BType.DOUBLE_TYPE
+
+  BType.global = global
 
   /*
    * RT_NOTHING and RT_NULL exist at run-time only.
@@ -37,32 +47,32 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
    * Therefore, when RT_NOTHING or RT_NULL are to be emitted,
    * a mapping is needed: the internal names of NothingClass and NullClass can't be emitted as-is.
    */
-  val RT_NOTHING = asm.Type.getObjectType("scala/runtime/Nothing$")
-  val RT_NULL    = asm.Type.getObjectType("scala/runtime/Null$")
-  val CT_NOTHING = asm.Type.getObjectType("scala/Nothing") // TODO needed?
-  val CT_NULL    = asm.Type.getObjectType("scala/Null")    // TODO needed?
+  val RT_NOTHING = brefType("scala/runtime/Nothing$")
+  val RT_NULL    = brefType("scala/runtime/Null$")
+  val CT_NOTHING = brefType("scala/Nothing") // TODO needed?
+  val CT_NULL    = brefType("scala/Null")    // TODO needed?
 
-  val ObjectReference = asm.Type.getObjectType("java/lang/Object")
+  val ObjectReference = brefType("java/lang/Object")
   val AnyRefReference = ObjectReference // In tandem, javaNameASM(definitions.AnyRefClass) == ObjectReference. Otherwise every `t1 == t2` requires special-casing.
   // special names
-  val StringReference          = asm.Type.getObjectType("java/lang/String")
-  val ThrowableReference       = asm.Type.getObjectType("java/lang/Throwable")
-  val jlCloneableReference     = asm.Type.getObjectType("java/lang/Cloneable")
-  val jioSerializableReference = asm.Type.getObjectType("java/io/Serializable")
+  val StringReference          = brefType("java/lang/String")
+  val ThrowableReference       = brefType("java/lang/Throwable")
+  val jlCloneableReference     = brefType("java/lang/Cloneable")
+  val jioSerializableReference = brefType("java/io/Serializable")
 
   // TODO rather than lazy, have an init() method that populates mutable collections. That would speed up accesses from then on.
 
-  /** A map from scala primitive type-symbols to asm.Types */
-  var primitiveTypeMap: Map[Symbol, asm.Type] = null
+  /** A map from scala primitive type-symbols to BTypes */
+  var primitiveTypeMap: Map[Symbol, BType] = null
 
-  var phantomTypeMap:   Map[Symbol, asm.Type] = null
+  var phantomTypeMap:   Map[Symbol, BType] = null
 
   /** Maps the method symbol for a box method to the boxed type of the result.
-   *  For example, the method symbol for `Byte.box()`) is mapped to the asm.Type `Ljava/lang/Integer;`. */
-  var boxResultType:    Map[Symbol, asm.Type] = null
+   *  For example, the method symbol for `Byte.box()`) is mapped to the BType `Ljava/lang/Integer;`. */
+  var boxResultType:    Map[Symbol, BType] = null
   /** Maps the method symbol for an unbox method to the primitive type of the result.
-   *  For example, the method symbol for `Byte.unbox()`) is mapped to the asm.Type BYTE. */
-  var unboxResultType:  Map[Symbol, asm.Type] = null
+   *  For example, the method symbol for `Byte.unbox()`) is mapped to the BType BYTE. */
+  var unboxResultType:  Map[Symbol, BType] = null
 
   def initBCodeTypes() {
 
@@ -101,7 +111,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     // Other than that, they aren't needed there (e.g., `isSubtypeOf()` special-cases boxed classes, similarly for others).
     val boxedClasses = List(BoxedBooleanClass, BoxedCharacterClass, BoxedByteClass, BoxedShortClass, BoxedIntClass, BoxedLongClass, BoxedFloatClass, BoxedDoubleClass)
     for(csym <- boxedClasses) {
-      val key = asm.Type.getObjectType(csym.javaBinaryName.toString)
+      val key = brefType(csym.javaBinaryName)
       val tr  = buildExemplar(key, csym)
       exemplars.put(tr.c, tr)
     }
@@ -111,22 +121,22 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
   }
 
   // in keeping with ICode's tradition of calling out boxed types.
-  val BOXED_UNIT    = asm.Type.getObjectType("java/lang/Void")
-  val BOXED_BOOLEAN = asm.Type.getObjectType("java/lang/Boolean")
-  val BOXED_BYTE    = asm.Type.getObjectType("java/lang/Byte")
-  val BOXED_SHORT   = asm.Type.getObjectType("java/lang/Short")
-  val BOXED_CHAR    = asm.Type.getObjectType("java/lang/Character")
-  val BOXED_INT     = asm.Type.getObjectType("java/lang/Integer")
-  val BOXED_LONG    = asm.Type.getObjectType("java/lang/Long")
-  val BOXED_FLOAT   = asm.Type.getObjectType("java/lang/Float")
-  val BOXED_DOUBLE  = asm.Type.getObjectType("java/lang/Double")
+  val BOXED_UNIT    = brefType("java/lang/Void")
+  val BOXED_BOOLEAN = brefType("java/lang/Boolean")
+  val BOXED_BYTE    = brefType("java/lang/Byte")
+  val BOXED_SHORT   = brefType("java/lang/Short")
+  val BOXED_CHAR    = brefType("java/lang/Character")
+  val BOXED_INT     = brefType("java/lang/Integer")
+  val BOXED_LONG    = brefType("java/lang/Long")
+  val BOXED_FLOAT   = brefType("java/lang/Float")
+  val BOXED_DOUBLE  = brefType("java/lang/Double")
 
   /** Map from type kinds to the Java reference types.
    *  It is used to push class literals onto the operand stack.
    *  @see Predef.classOf
    *  @see genConstant()
    */
-  val classLiteral = immutable.Map[asm.Type, asm.Type](
+  val classLiteral = immutable.Map[BType, BType](
     UNIT   -> BOXED_UNIT,
     BOOL   -> BOXED_BOOLEAN,
     BYTE   -> BOXED_BYTE,
@@ -140,7 +150,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
   case class MethodNameAndType(mname: String, mdesc: String)
 
-  val asmBoxTo: Map[asm.Type, MethodNameAndType] = {
+  val asmBoxTo: Map[BType, MethodNameAndType] = {
     Map(
       BOOL   -> MethodNameAndType("boxToBoolean",   "(Z)Ljava/lang/Boolean;"  ) ,
       BYTE   -> MethodNameAndType("boxToByte",      "(B)Ljava/lang/Byte;"     ) ,
@@ -153,7 +163,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     )
   }
 
-  val asmUnboxTo: Map[asm.Type, MethodNameAndType] = {
+  val asmUnboxTo: Map[BType, MethodNameAndType] = {
     Map(
       BOOL   -> MethodNameAndType("unboxToBoolean", "(Ljava/lang/Object;)Z") ,
       BYTE   -> MethodNameAndType("unboxToByte",    "(Ljava/lang/Object;)B") ,
@@ -173,9 +183,9 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
    // allowing answering `conforms()` resorting to typer.
    // ------------------------------------------------
 
-  val exemplars = mutable.Map.empty[asm.Type, Tracked]
+  val exemplars = mutable.Map.empty[BType, Tracked]
 
-  case class Tracked(c: asm.Type, flags: Int, sc: Tracked, ifaces: Array[Tracked]) {
+  case class Tracked(c: BType, flags: Int, sc: Tracked, ifaces: Array[Tracked]) {
 
     assert(
       !isSpecialType(c) &&
@@ -201,7 +211,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       if(sc == null) Nil else sc :: sc.superClasses
     }
 
-    def isSubtypeOf(other: asm.Type): Boolean = {
+    def isSubtypeOf(other: BType): Boolean = {
       assert(!isSpecialType(other), "so called special cases have to be handled in BCodeTypes.conforms()")
 
       if(c == other) return true;
@@ -289,7 +299,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     assert(!primitiveTypeMap.contains(csym), "primitive types not tracked here: " + csym.fullName)
     assert(!phantomTypeMap.contains(csym),   "phantom types not tracked here: " + csym.fullName)
 
-    val key = asm.Type.getObjectType(csym.javaBinaryName.toString)
+    val key = brefType(csym.javaBinaryName)
     assert(!isSpecialType(key), "Not a class to track: " + csym.fullName)
 
     exemplars.get(key) match {
@@ -303,7 +313,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
   private val EMPTY_TRACKED_ARRAY  = Array.empty[Tracked]
 
-  private def buildExemplar(key: asm.Type, csym: Symbol): Tracked = {
+  private def buildExemplar(key: BType, csym: Symbol): Tracked = {
     val sc =
      if(csym.isImplClass) definitions.ObjectClass
      else csym.superClass
@@ -334,39 +344,39 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     Tracked(key, flags, tsc, ifacesArr)
   }
 
-  // ---------------- inspector methods on asm.Type  ----------------
+  // ---------------- inspector methods on BType  ----------------
 
   /*
    * Unlike for ICode's REFERENCE, isBoxedType(t) implies isReferenceType(t)
    * Also, `isReferenceType(RT_NOTHING) == true` , similarly for RT_NULL.
    * Use isNullType() , isNothingType() to detect Nothing and Null.
    */
-  final def hasObjectSort(t: asm.Type) = (t.getSort == asm.Type.OBJECT)
+  final def hasObjectSort(t: BType) = (t.sort == BType.OBJECT)
 
-  final def isNonBoxedReferenceType(t: asm.Type) = hasObjectSort(t) && !isBoxedType(t)
+  final def isNonBoxedReferenceType(t: BType) = hasObjectSort(t) && !isBoxedType(t)
 
-  final def isSpecialType(t: asm.Type): Boolean = {
+  final def isSpecialType(t: BType): Boolean = {
     isValueType(t)   ||
     isArrayType(t)   ||
     isPhantomType(t)
   }
 
-  final def isArrayType(t: asm.Type) = (t.getSort == asm.Type.ARRAY)
+  final def isArrayType(t: BType) = (t.sort == BType.ARRAY)
 
-  final def isValueType(t: asm.Type) = {
-    (t.getSort : @switch) match {
-      case asm.Type.VOID  | asm.Type.BOOLEAN | asm.Type.CHAR   |
-           asm.Type.BYTE  | asm.Type.SHORT   | asm.Type.INT    |
-           asm.Type.FLOAT | asm.Type.LONG    | asm.Type.DOUBLE
+  final def isValueType(t: BType) = {
+    (t.sort : @switch) match {
+      case BType.VOID  | BType.BOOLEAN | BType.CHAR   |
+           BType.BYTE  | BType.SHORT   | BType.INT    |
+           BType.FLOAT | BType.LONG    | BType.DOUBLE
         => true
       case _
         => false
     }
   }
 
-  final def isNonUnitValueType(t: asm.Type): Boolean = { isValueType(t) && !isUnitType(t) }
+  final def isNonUnitValueType(t: BType): Boolean = { isValueType(t) && !isUnitType(t) }
 
-  final def isBoxedType(t: asm.Type) = {
+  final def isBoxedType(t: BType) = {
     t match {
       case BOXED_UNIT  | BOXED_BOOLEAN | BOXED_CHAR   |
            BOXED_BYTE  | BOXED_SHORT   | BOXED_INT    |
@@ -377,27 +387,30 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     }
   }
 
-  final def isRefOrArrayType(t: asm.Type) = hasObjectSort(t) || isArrayType(t)
+  final def isRefOrArrayType(t: BType) = hasObjectSort(t) || isArrayType(t)
 
-  final def isNothingType(t: asm.Type) = { (t == RT_NOTHING) || (t == CT_NOTHING) }
-  final def isNullType   (t: asm.Type) = { (t == RT_NULL)    || (t == CT_NULL)    }
-  final def isPhantomType(t: asm.Type) = { isNothingType(t)  || isNullType(t)     }
-  final def isUnitType   (t: asm.Type) = { t == UNIT }
+  final def isNothingType(t: BType) = { (t == RT_NOTHING) || (t == CT_NOTHING) }
+  final def isNullType   (t: BType) = { (t == RT_NULL)    || (t == CT_NULL)    }
+  final def isPhantomType(t: BType) = { isNothingType(t)  || isNullType(t)     }
+  final def isUnitType   (t: BType) = { t == UNIT }
 
-  final def asmMethodType(s: Symbol): asm.Type = {
+  final def asmMethodType(s: Symbol): BType = {
     assert(s.isMethod, "not a method-symbol: " + s)
-    val resT: asm.Type = if (s.isClassConstructor) asm.Type.VOID_TYPE else toTypeKind(s.tpe.resultType);
-    asm.Type.getMethodType( resT, (s.tpe.paramTypes map toTypeKind): _* )
+    val resT: BType = if (s.isClassConstructor) BType.VOID_TYPE else toTypeKind(s.tpe.resultType);
+    BType.getMethodType( resT, mkArray(s.tpe.paramTypes map toTypeKind) )
   }
+
+  def mkArray(xs: Traversable[BType]): Array[BType] = { val a = new Array[BType](xs.size); xs.copyToArray(a); a }
+  def mkArray(xs: Traversable[String]):    Array[String]    = { val a = new Array[String](xs.size);    xs.copyToArray(a); a }
 
   /** On the JVM,
    *    BOOL, BYTE, CHAR, SHORT, and INT
    *  are like Ints for the purpose of lub calculation.
    **/
-  final def isIntSizedType(t: asm.Type): Boolean = {
-    (t.getSort : @switch) match {
-      case asm.Type.BOOLEAN | asm.Type.CHAR  |
-           asm.Type.BYTE    | asm.Type.SHORT | asm.Type.INT
+  final def isIntSizedType(t: BType): Boolean = {
+    (t.sort : @switch) match {
+      case BType.BOOLEAN | BType.CHAR  |
+           BType.BYTE    | BType.SHORT | BType.INT
         => true
       case _
         => false
@@ -405,11 +418,11 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
   }
 
   /** On the JVM, similar to isIntSizedType except that BOOL isn't integral while LONG is. */
-  final def isIntegralType(t: asm.Type): Boolean = {
-    (t.getSort : @switch) match {
-      case asm.Type.CHAR  |
-           asm.Type.BYTE  | asm.Type.SHORT | asm.Type.INT |
-           asm.Type.LONG
+  final def isIntegralType(t: BType): Boolean = {
+    (t.sort : @switch) match {
+      case BType.CHAR  |
+           BType.BYTE  | BType.SHORT | BType.INT |
+           BType.LONG
         => true
       case _
         => false
@@ -417,15 +430,15 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
   }
 
   /** On the JVM, FLOAT and DOUBLE. */
-  final def isRealType(t: asm.Type): Boolean = {
-    (t.getSort == asm.Type.FLOAT ) ||
-    (t.getSort == asm.Type.DOUBLE)
+  final def isRealType(t: BType): Boolean = {
+    (t.sort == BType.FLOAT ) ||
+    (t.sort == BType.DOUBLE)
   }
 
-  final def isNumericType(t: asm.Type) = isIntegralType(t) || isRealType(t)
+  final def isNumericType(t: BType) = isIntegralType(t) || isRealType(t)
 
   /** Is this type a category 2 type in JVM terms? (ie, is it LONG or DOUBLE?) */
-  final def isWideType(t: asm.Type) = (t.getSize == 2)
+  final def isWideType(t: BType) = (t.getSize == 2)
 
   /*
    * Quoting from the JVMS, Sec. 2.4 "Reference Types and Values"
@@ -441,13 +454,13 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
    **/
 
   /** The (ultimate) element type of this array. */
-  final def elementType(t: asm.Type): asm.Type = {
+  final def elementType(t: BType): BType = {
     assert(isArrayType(t), "Asked for the element type of a non-array type: " + t)
     t.getElementType
   }
 
   /** The type of items this array holds. */
-  final def componentType(t: asm.Type): asm.Type = {
+  final def componentType(t: BType): BType = {
     assert(isArrayType(t), "Asked for the component type of a non-array type: " + t)
     val reduced = t.getDimensions - 1
     if(reduced == 0) t.getElementType
@@ -455,35 +468,35 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
   }
 
   /** The number of dimensions for array types. */
-  final def dimensions(t: asm.Type): Int = {
+  final def dimensions(t: BType): Int = {
     assert(isArrayType(t), "Asked for the number of dimensions of a non-array type: " + t.toString)
-    t.getDimensions()
+    t.getDimensions
   }
 
   /* the type of 1-dimensional arrays of `elem` type. */
-  final def arrayOf(elem: asm.Type): asm.Type = {
+  final def arrayOf(elem: BType): BType = {
     assert(!isUnitType(elem) && !isPhantomType(elem),
            "The element type of an array type is necessarily either a primitive type, or a class type, or an interface type.")
-    asm.Type.getObjectType("[" + elem.getDescriptor)
+    brefType("[" + elem.getDescriptor)
   }
 
   /* the type of N-dimensional arrays of `elem` type. */
-  final def arrayN(elem: asm.Type, dims: Int): asm.Type = {
+  final def arrayN(elem: BType, dims: Int): BType = {
     assert(dims > 0)
     assert(!isUnitType(elem) && !isPhantomType(elem),
            "The element type of an array type is necessarily either a primitive type, or a class type, or an interface type.")
     val desc = ("[" * dims) + elem.getDescriptor
-    asm.Type.getObjectType(desc)
+    brefType(desc)
   }
 
-  /** Returns the asm.Type for the given type
+  /** Returns the BType for the given type
    **/
-  final def toTypeKind(t: Type): asm.Type = {
+  final def toTypeKind(t: Type): BType = {
 
         /** Interfaces have to be handled delicately to avoid introducing spurious errors,
          *  but if we treat them all as AnyRef we lose too much information.
          **/
-        def newReference(sym: Symbol): asm.Type = {
+        def newReference(sym: Symbol): BType = {
           assert(!primitiveTypeMap.contains(sym), "Use primitiveTypeMap instead.")
           assert(sym != definitions.ArrayClass,   "Use arrayOf() instead.")
 
@@ -509,13 +522,13 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
         }
 
-        def primitiveOrRefType(sym: Symbol): asm.Type = {
+        def primitiveOrRefType(sym: Symbol): BType = {
           assert(sym != definitions.ArrayClass, "Use primitiveOrArrayOrRefType() instead.")
 
           primitiveTypeMap.getOrElse(sym, newReference(sym))
         }
 
-        def primitiveOrRefType2(sym: Symbol): asm.Type = {
+        def primitiveOrRefType2(sym: Symbol): BType = {
           primitiveTypeMap.get(sym) match {
             case Some(pt) => pt
             case None =>
@@ -569,11 +582,11 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
   } // end of method toTypeKind()
 
   /**
-   * Subtype check `a <:< b` on asm.Types that takes into account the JVM built-in numeric promotions (e.g. BYTE to INT).
+   * Subtype check `a <:< b` on BTypes that takes into account the JVM built-in numeric promotions (e.g. BYTE to INT).
    * Its operation can be visualized more easily in terms of the Java bytecode type hierarchy.
    * This method used to be called, in the ICode world, TypeKind.<:<()
    **/
-  final def conforms(a: asm.Type, b: asm.Type): Boolean = {
+  final def conforms(a: BType, b: BType): Boolean = {
     if(isArrayType(a)) { // may be null
       /* Array subtyping is covariant here, as in Java bytecode. Also necessary for Java interop. */
       if((b == jlCloneableReference)     ||
@@ -619,11 +632,11 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
   }
 
   /** The maxValueType of (Char, Byte) and of (Char, Short) is Int, to encompass the negative values of Byte and Short. See ticket #2087. */
-  private def maxValueType(a: asm.Type, other: asm.Type): asm.Type = {
+  private def maxValueType(a: BType, other: BType): BType = {
     assert(isValueType(a), "maxValueType() is defined only for 1st arg valuetypes (2nd arg doesn't matter).")
 
         def uncomparable: Nothing = {
-          abort("Uncomparable asm.Types: " + a.toString + " with " + other.toString)
+          abort("Uncomparable BTypes: " + a.toString + " with " + other.toString)
         }
 
     if(isNothingType(a))     return other;
@@ -681,7 +694,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
   }
 
   /* Takes promotions of numeric primitives into account. */
-  final def maxType(a: asm.Type, other: asm.Type): asm.Type = {
+  final def maxType(a: BType, other: BType): BType = {
     if(isValueType(a)) { maxValueType(a, other) }
     else {
       if(isNothingType(a))     return other;
@@ -693,7 +706,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       // TODO For some reason, ICode thinks `REFERENCE(...).maxType(BOXED(whatever))` is `uncomparable`. Here, that has maxType AnyRefReference.
       //      BTW, when swapping arguments, ICode says BOXED(whatever).maxType(REFERENCE(...)) == AnyRefReference, so I guess the above was an oversight in REFERENCE.maxType()
       if(isRefOrArrayType(other)) { AnyRefReference }
-      else                        { abort("Uncomparable asm.Types: " + a.toString + " with " + other.toString) }
+      else                        { abort("Uncomparable BTypes: " + a.toString + " with " + other.toString) }
     }
   }
 
@@ -710,8 +723,8 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     import asm.Opcodes;
     import icodes.opcodes.{ InvokeStyle, Static, Dynamic,  SuperCall }
 
-    val StringBuilderClassName = definitions.StringBuilderClass.javaBinaryName.toString
-    val StringBuilderType      = asm.Type.getObjectType(StringBuilderClassName)
+    val StringBuilderClassName = definitions.StringBuilderClass.javaBinaryName
+    val StringBuilderType      = brefType(StringBuilderClassName)
     val mdesc_toString         = "()Ljava/lang/String;"
 
     @inline final def emit(opc: Int) { jmethod.visitInsn(opc) }
@@ -748,7 +761,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       val receiver = if (useMethodOwner) methodOwner else hostSymbol
       val jowner   = internalName(receiver)
       val jname    = method.javaSimpleName.toString
-      val jtype    = asmMethodType(method).getDescriptor()
+      val jtype    = asmMethodType(method).getDescriptor
 
           def dbg(invoke: String) {
             debuglog("%s %s %s.%s:%s".format(invoke, receiver.accessString, jowner, jname, jtype))
@@ -765,7 +778,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
                 asm.Opcodes.PUTSTATIC,
                 thisName,
                 strMODULE_INSTANCE_FIELD,
-                asm.Type.getObjectType(thisName).getDescriptor
+                "L" + thisName + ";"
               )
             }
           }
@@ -785,10 +798,10 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
     } // end of genCallMethod
 
-    final def genPrimitiveNegation(kind: asm.Type) {
+    final def genPrimitiveNegation(kind: BType) {
       neg(kind)
     }
-    final def genPrimitiveArithmetic(op: icodes.ArithmeticOp, kind: asm.Type) {
+    final def genPrimitiveArithmetic(op: icodes.ArithmeticOp, kind: BType) {
 
       import icodes.{ ADD, SUB, MUL, DIV, REM, NOT }
 
@@ -817,7 +830,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
     } // end of method genPrimitiveArithmetic()
 
-    final def genPrimitiveLogical(op: /* LogicalOp */ Int, kind: asm.Type) {
+    final def genPrimitiveLogical(op: /* LogicalOp */ Int, kind: BType) {
 
       import scalaPrimitives.{ AND, OR, XOR }
 
@@ -843,7 +856,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
     } // end of method genPrimitiveLogical()
 
-    final def genPrimitiveShift(op: /* ShiftOp */ Int, kind: asm.Type) {
+    final def genPrimitiveShift(op: /* ShiftOp */ Int, kind: BType) {
 
       import scalaPrimitives.{ LSL, ASR, LSR }
 
@@ -869,7 +882,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
     } // end of method genPrimitiveShift()
 
-    final def genPrimitiveComparison(op: icodes.ComparisonOp, kind: asm.Type) {
+    final def genPrimitiveComparison(op: icodes.ComparisonOp, kind: BType) {
 
       import icodes.{ CMPL, CMP, CMPG }
 
@@ -883,35 +896,35 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
     } // end of method genPrimitiveComparison()
 
-    final def genPrimitiveConversion(src: asm.Type, dst: asm.Type, pos: Position) {
+    final def genPrimitiveConversion(src: BType, dst: BType, pos: Position) {
       if (dst == BOOL) { println("Illegal conversion at: " + pos.source + ":" + pos.line) }
       else { emitT2T(src, dst) }
     }
 
     final def genStartConcat {
-      jmethod.visitTypeInsn(Opcodes.NEW, StringBuilderClassName)
+      jmethod.visitTypeInsn(Opcodes.NEW, StringBuilderClassName.toString)
       jmethod.visitInsn(Opcodes.DUP)
       invokespecial(
-        StringBuilderClassName,
+        StringBuilderClassName.toString,
         INSTANCE_CONSTRUCTOR_NAME,
         mdesc_arglessvoid
       )
     }
 
-    final def genStringConcat(el: asm.Type) {
+    final def genStringConcat(el: BType) {
       val jtype =
         if(isArrayType(el) || isNonBoxedReferenceType(el)) JAVA_LANG_OBJECT
         else el;
 
       invokevirtual(
-        StringBuilderClassName,
+        StringBuilderClassName.toString,
         "append",
-        asm.Type.getMethodDescriptor(StringBuilderType, Array(jtype): _*)
+        BType.getMethodDescriptor(StringBuilderType, Array(jtype))
       )
     }
 
     final def genEndConcat {
-      invokevirtual(StringBuilderClassName, "toString", mdesc_toString)
+      invokevirtual(StringBuilderClassName.toString, "toString", mdesc_toString)
     }
 
     /**
@@ -920,7 +933,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
      * @param from The type of the value to be converted into another type.
      * @param to   The type the value will be converted into.
      */
-    final def emitT2T(from: asm.Type, to: asm.Type) {
+    final def emitT2T(from: BType, to: BType) {
 
           def msg = "(from: " + from + ", to: " + to + ")"
 
@@ -1014,7 +1027,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
         case ClazzTag   =>
           val kind = toTypeKind(const.typeValue)
-          val toPush: asm.Type =
+          val toPush: BType =
             if (isValueType(kind)) classLiteral(kind)
             else kind;
           jmethod.visitLdcInsn(toPush)
@@ -1025,7 +1038,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
             asm.Opcodes.GETSTATIC,
             internalName(sym.owner),
             sym.javaSimpleName.toString,
-            toTypeKind(sym.tpe.underlying).getDescriptor()
+            toTypeKind(sym.tpe.underlying).getDescriptor
           )
 
         case _ => abort("Unknown constant value: " + const)
@@ -1077,7 +1090,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       }
     }
 
-    final def newarray(elem: asm.Type) { // TODO switch on elem.getSort
+    final def newarray(elem: BType) { // TODO switch on elem.getSort
       if(isRefOrArrayType(elem)) {
         jmethod.visitTypeInsn(Opcodes.ANEWARRAY, elem.getInternalName)
       } else {
@@ -1103,18 +1116,18 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     }
 
 
-    final def load( idx: Int, tk: asm.Type) { emitVarInsn(Opcodes.ILOAD,  idx, tk) }
-    final def store(idx: Int, tk: asm.Type) { emitVarInsn(Opcodes.ISTORE, idx, tk) }
+    final def load( idx: Int, tk: BType) { emitVarInsn(Opcodes.ILOAD,  idx, tk) }
+    final def store(idx: Int, tk: BType) { emitVarInsn(Opcodes.ISTORE, idx, tk) }
 
-    final def aload( tk: asm.Type) { emitTypeBased(aloadOpcodes,  tk) }
-    final def astore(tk: asm.Type) { emitTypeBased(astoreOpcodes, tk) }
+    final def aload( tk: BType) { emitTypeBased(aloadOpcodes,  tk) }
+    final def astore(tk: BType) { emitTypeBased(astoreOpcodes, tk) }
 
-    final def neg(tk: asm.Type) { emitPrimitive(negOpcodes, tk) }
-    final def add(tk: asm.Type) { emitPrimitive(addOpcodes, tk) }
-    final def sub(tk: asm.Type) { emitPrimitive(subOpcodes, tk) }
-    final def mul(tk: asm.Type) { emitPrimitive(mulOpcodes, tk) }
-    final def div(tk: asm.Type) { emitPrimitive(divOpcodes, tk) }
-    final def rem(tk: asm.Type) { emitPrimitive(remOpcodes, tk) }
+    final def neg(tk: BType) { emitPrimitive(negOpcodes, tk) }
+    final def add(tk: BType) { emitPrimitive(addOpcodes, tk) }
+    final def sub(tk: BType) { emitPrimitive(subOpcodes, tk) }
+    final def mul(tk: BType) { emitPrimitive(mulOpcodes, tk) }
+    final def div(tk: BType) { emitPrimitive(divOpcodes, tk) }
+    final def rem(tk: BType) { emitPrimitive(remOpcodes, tk) }
 
     final def invokespecial(owner: String, name: String, desc: String) {
       jmethod.visitMethodInsn(Opcodes.INVOKESPECIAL, owner, name, desc)
@@ -1140,7 +1153,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     final def emitIFNONNULL(label: asm.Label) { jmethod.visitJumpInsn(Opcodes.IFNONNULL, label) }
     final def emitIFNULL   (label: asm.Label) { jmethod.visitJumpInsn(Opcodes.IFNULL,    label) }
 
-    final def emitRETURN(tk: asm.Type) {
+    final def emitRETURN(tk: BType) {
       if(tk == UNIT) { emit(Opcodes.RETURN) }
       else           { emitTypeBased(returnOpcodes, tk)      }
     }
@@ -1221,7 +1234,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     // internal helpers -- not part of the public API of `jcode`
     // don't make private otherwise inlining will suffer
 
-    final def emitVarInsn(opc: Int, idx: Int, tk: asm.Type) {
+    final def emitVarInsn(opc: Int, idx: Int, tk: BType) {
       assert((opc == Opcodes.ILOAD) || (opc == Opcodes.ISTORE), opc)
       jmethod.visitVarInsn(tk.getOpcode(opc), idx)
     }
@@ -1233,7 +1246,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
     val returnOpcodes = { import Opcodes._; Array(ARETURN, IRETURN, IRETURN, IRETURN, IRETURN, LRETURN, FRETURN, DRETURN) }
 
-    final def emitTypeBased(opcs: Array[Int], tk: asm.Type) { // TODO switch on tk.getSort
+    final def emitTypeBased(opcs: Array[Int], tk: BType) { // TODO switch on tk.getSort
       assert(tk != UNIT, tk)
       val opc = {
         if(isRefOrArrayType(tk)) {  opcs(0) }
@@ -1264,7 +1277,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     val divOpcodes: Array[Int] = { import Opcodes._; Array(IDIV, LDIV, FDIV, DDIV) }
     val remOpcodes: Array[Int] = { import Opcodes._; Array(IREM, LREM, FREM, DREM) }
 
-    final def emitPrimitive(opcs: Array[Int], tk: asm.Type) { // TODO index on tk.getSort
+    final def emitPrimitive(opcs: Array[Int], tk: BType) { // TODO index on tk.getSort
       val opc = {
         if(isIntSizedType(tk)) { opcs(0) }
         else {
@@ -1278,9 +1291,9 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       emit(opc)
     }
 
-    final def drop(tk: asm.Type) { emit(if(isWideType(tk)) Opcodes.POP2 else Opcodes.POP) }
+    final def drop(tk: BType) { emit(if(isWideType(tk)) Opcodes.POP2 else Opcodes.POP) }
 
-    final def dup(tk: asm.Type)  { emit(if(isWideType(tk)) Opcodes.DUP2 else Opcodes.DUP) }
+    final def dup(tk: BType)  { emit(if(isWideType(tk)) Opcodes.DUP2 else Opcodes.DUP) }
 
     // ---------------- field load and store ----------------
 
@@ -1308,11 +1321,11 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
     // ---------------- type checks and casts ----------------
 
-    final def isInstance(tk: asm.Type) {
+    final def isInstance(tk: BType) {
       jmethod.visitTypeInsn(Opcodes.INSTANCEOF, tk.getInternalName)
     }
 
-    final def checkCast(tk: asm.Type) { // TODO GenASM could use this method
+    final def checkCast(tk: BType) { // TODO GenASM could use this method
       assert(isRefOrArrayType(tk), "checkcast on primitive type: " + tk)
       // TODO ICode also requires: but that's too much, right? assert(!isBoxedType(tk),     "checkcast on boxed type: " + tk)
       jmethod.visitTypeInsn(Opcodes.CHECKCAST, tk.getInternalName)
@@ -1324,7 +1337,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
   /* Given `code` reports the src TypeKind of the coercion indicated by `code`.
    * To find the dst TypeKind, `ScalaPrimitives.generatedKind(code)` can be used. */
-  final def coercionFrom(code: Int): asm.Type = {
+  final def coercionFrom(code: Int): BType = {
     import scalaPrimitives._
     (code: @switch) match {
       case B2B | B2C | B2S | B2I | B2L | B2F | B2D => BYTE
@@ -1338,7 +1351,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
   }
 
   /** If code is a coercion primitive, the result type */
-  final def coercionTo(code: Int): asm.Type = {
+  final def coercionTo(code: Int): BType = {
     import scalaPrimitives._
     (code: @scala.annotation.switch) match {
       case B2B | C2B | S2B | I2B | L2B | F2B | D2B => BYTE
@@ -1351,7 +1364,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     }
   }
 
-  final val typeOfArrayOp: Map[Int, asm.Type] = {
+  final val typeOfArrayOp: Map[Int, BType] = {
     import scalaPrimitives._
     Map(
       (List(ZARRAY_LENGTH, ZARRAY_GET, ZARRAY_SET) map (_ -> BOOL))   ++
@@ -1488,7 +1501,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
   final def internalName(sym: Symbol): String = { asmClassType(sym).getInternalName }
 
-  final def asmClassType(sym: Symbol): asm.Type = {
+  final def asmClassType(sym: Symbol): BType = {
     assert(hasInternalName(sym), "doesn't have internal name: " + sym.fullName)
     bufferIfInner(sym)
     phantomTypeMap.getOrElse(sym, exemplar(sym).c)
@@ -1646,7 +1659,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
   //  https://issues.scala-lang.org/browse/SI-3872
   // -----------------------------------------------------------------------------------------
 
-  def firstCommonSuffix(as: List[Tracked], bs: List[Tracked]): asm.Type = {
+  def firstCommonSuffix(as: List[Tracked], bs: List[Tracked]): BType = {
     var chainA = as
     var chainB = bs
     var fcs: Tracked = null
@@ -1661,7 +1674,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     fcs.c
   }
 
-  @inline final def jvmWiseLUB(a: asm.Type, b: asm.Type): asm.Type = {
+  @inline final def jvmWiseLUB(a: BType, b: BType): BType = {
 
     assert(!isSpecialType(a), "jvmWiseLUB() received a non-plain-class " + a)
     assert(!isSpecialType(b), "jvmWiseLUB() received a non-plain-class " + b)
@@ -1686,8 +1699,8 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
   /* The internal name of the least common ancestor of the types given by inameA and inameB.
      It's what ASM needs to know in order to compute stack map frames, http://asm.ow2.org/doc/developer-guide.html#controlflow */
   def getCommonSuperClass(inameA: String, inameB: String): String = {
-    val a   = asm.Type.getObjectType(inameA)
-    val b = asm.Type.getObjectType(inameB)
+    val a   = brefType(inameA)
+    val b = brefType(inameB)
     val lca = jvmWiseLUB(a, b)
     val lcaName = lca.getInternalName // don't call javaName because that side-effects innerClassBuffer.
     assert(lcaName != "scala/Any")
@@ -1721,8 +1734,8 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     if(emitStackMapFrame) asm.ClassWriter.COMPUTE_FRAMES else 0
   )
 
-  val JAVA_LANG_OBJECT = asm.Type.getObjectType("java/lang/Object")
-  val JAVA_LANG_STRING = asm.Type.getObjectType("java/lang/String")
+  val JAVA_LANG_OBJECT = brefType("java/lang/Object")
+  val JAVA_LANG_STRING = brefType("java/lang/String")
 
   object isJavaEntryPoint {
 
@@ -1905,7 +1918,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
   trait BCInnerClassGen {
 
-    val EMPTY_JTYPE_ARRAY  = Array.empty[asm.Type]
+    val EMPTY_JTYPE_ARRAY  = Array.empty[BType]
     val EMPTY_STRING_ARRAY = Array.empty[String]
 
     val mdesc_arglessvoid = "()V"
@@ -1929,10 +1942,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     /** Specialized array conversion to prevent calling
      *  java.lang.reflect.Array.newInstance via TraversableOnce.toArray
      */
-    def mkArray(xs: Traversable[asm.Type]):  Array[asm.Type]  = { val a = new Array[asm.Type](xs.size); xs.copyToArray(a); a }
-    def mkArray(xs: Traversable[String]):    Array[String]    = { val a = new Array[String](xs.size);   xs.copyToArray(a); a }
-
-    def descriptor(t: Type):     String = { toTypeKind(t).getDescriptor }
+    def descriptor(t: Type):     String = { toTypeKind(t).getDescriptor   }
     def descriptor(s: Symbol):   String = { asmClassType(s).getDescriptor }
 
     /**
@@ -2236,7 +2246,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     private def addForwarder(isRemoteClass: Boolean, jclass: asm.ClassVisitor, module: Symbol, m: Symbol) {
       val moduleName     = internalName(module)
       val methodInfo     = module.thisType.memberInfo(m)
-      val paramJavaTypes: List[asm.Type] = methodInfo.paramTypes map toTypeKind
+      val paramJavaTypes: List[BType] = methodInfo.paramTypes map toTypeKind
       // val paramNames     = 0 until paramJavaTypes.length map ("x_" + _)
 
       /** Forwarders must not be marked final,
@@ -2256,7 +2266,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       val thrownExceptions: List[String] = getExceptions(throws)
 
       val jReturnType = toTypeKind(methodInfo.resultType)
-      val mdesc = asm.Type.getMethodDescriptor(jReturnType, paramJavaTypes: _*)
+      val mdesc = BType.getMethodDescriptor(jReturnType, mkArray(paramJavaTypes))
       val mirrorMethodName = m.javaSimpleName.toString
       val mirrorMethod: asm.MethodVisitor = jclass.visitMethod(
         flags,
@@ -2282,8 +2292,8 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       var index = 0
       for(jparamType <- paramJavaTypes) {
         mirrorMethod.visitVarInsn(jparamType.getOpcode(asm.Opcodes.ILOAD), index)
-        assert(jparamType.getSort() != asm.Type.METHOD, jparamType)
-        index += jparamType.getSize()
+        assert(jparamType.sort != BType.METHOD, jparamType)
+        index += jparamType.getSize
       }
 
       mirrorMethod.visitMethodInsn(asm.Opcodes.INVOKEVIRTUAL, moduleName, mirrorMethodName, asmMethodType(m).getDescriptor)
@@ -2354,7 +2364,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
     val mdesc_arrayClone  = "()Ljava/lang/Object;"
 
-    val tdesc_long        = asm.Type.LONG_TYPE.getDescriptor // ie. "J"
+    val tdesc_long        = BType.LONG_TYPE.getDescriptor // ie. "J"
 
     private def serialVUID(csym: Symbol): Option[Long] = csym getAnnotation definitions.SerialVersionUIDAttr collect {
       case AnnotationInfo(_, Literal(const) :: _, _) => const.longValue
@@ -2381,7 +2391,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
      * @param methodType the method that contains the class.
      */
-    case class EnclMethodEntry(owner: String, name: String, methodType: asm.Type)
+    case class EnclMethodEntry(owner: String, name: String, methodType: BType)
 
     /**
      * @return null if the current class is not internal to a method
@@ -2521,7 +2531,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
     def thisDescr(thisName: String): String = {
       assert(thisName != null, "thisDescr invoked too soon.")
-      asm.Type.getObjectType(thisName).getDescriptor
+      "L" + thisName + ";"
     }
 
     def initJMethod(jclass:           asm.ClassVisitor,
@@ -2529,13 +2539,13 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
                     isNative:         Boolean,
                     csym:             Symbol,
                     isJInterface:     Boolean,
-                    paramTypes:       List[asm.Type],
+                    paramTypes:       List[BType],
                     paramAnnotations: List[List[AnnotationInfo]]
     ): Pair[Int, asm.MethodVisitor] = {
 
-      var resTpe: asm.Type = toTypeKind(msym.info.resultType) // TODO confirm: was msym.tpe.resultType
+      var resTpe: BType = toTypeKind(msym.info.resultType) // TODO confirm: was msym.tpe.resultType
       if (msym.isClassConstructor)
-        resTpe = asm.Type.VOID_TYPE
+        resTpe = BType.VOID_TYPE
 
       val flags = mkFlags(
         javaFlags(msym),
@@ -2554,7 +2564,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       val jMethodName =
         if(msym.isStaticConstructor) CLASS_CONSTRUCTOR_NAME
         else javaSimpleName(msym)
-      val mdesc = asm.Type.getMethodDescriptor(resTpe, paramTypes: _*)
+      val mdesc = BType.getMethodDescriptor(resTpe, mkArray(paramTypes))
       val jmethod = jclass.visitMethod(
         flags,
         jMethodName,
@@ -2722,11 +2732,11 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       // constructor typestate: entering mode with valid call sequences:
       //   [ visitAnnotationDefault ] ( visitAnnotation | visitParameterAnnotation | visitAttribute )*
 
-      val stringArrayJType: asm.Type = arrayOf(JAVA_LANG_STRING)
-      val conJType: asm.Type =
-        asm.Type.getMethodType(
-          asm.Type.VOID_TYPE,
-          Array(exemplar(definitions.ClassClass).c, stringArrayJType, stringArrayJType): _*
+      val stringArrayJType: BType = arrayOf(JAVA_LANG_STRING)
+      val conJType: BType =
+        BType.getMethodType(
+          BType.VOID_TYPE,
+          Array(exemplar(definitions.ClassClass).c, stringArrayJType, stringArrayJType)
         )
 
       def push(lst: List[String]) {
@@ -2796,7 +2806,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     // TODO see JPlainBuilder.addAndroidCreatorCode()
 
     def legacyAddCreatorCode(clinit: asm.MethodVisitor, jclass: asm.ClassVisitor, csym: Symbol, thisName: String) {
-      val creatorType: asm.Type = asmClassType(AndroidCreatorClass)
+      val creatorType: BType = asmClassType(AndroidCreatorClass)
       val tdesc_creator = creatorType.getDescriptor
 
       jclass.visitField(
@@ -2814,7 +2824,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
         asm.Opcodes.GETSTATIC,
         moduleName,
         strMODULE_INSTANCE_FIELD,
-        asm.Type.getObjectType(moduleName).getDescriptor
+        "L" + moduleName + ";"
       )
 
       // INVOKEVIRTUAL `moduleName`.CREATOR() : android.os.Parcelable$Creator;
@@ -2822,7 +2832,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
         asm.Opcodes.INVOKEVIRTUAL,
         moduleName,
         androidFieldName,
-        asm.Type.getMethodDescriptor(creatorType, Array.empty[asm.Type]: _*)
+        BType.getMethodDescriptor(creatorType, Array.empty[BType])
       )
 
       // PUTSTATIC `thisName`.CREATOR;
