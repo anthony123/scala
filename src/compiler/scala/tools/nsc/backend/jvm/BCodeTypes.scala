@@ -142,7 +142,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
      * @return the Java types corresponding to the argument types of the given method descriptor.
      */
     def getArgumentTypes(idx0: Int): Array[BType] = {
-      assert(chrs(idx0 - 1) == '(')
+      assert(chrs(idx0 - 1) == '(', "doesn't look like a method descriptor.")
       var off  = idx0
       var size = 0
       var keepGoing = true
@@ -268,7 +268,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
      *
      * @return Returns the type of the elements of this array type.
      */
-    def getElementType(): BType = {
+    def getElementType: BType = {
       BType.getType(off + getDimensions)
     }
 
@@ -291,7 +291,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
      * @return the argument types of methods of this type.
      */
     def getArgumentTypes: Array[BType] = {
-      BType.getArgumentTypes(getDescriptor) // TODO access idx directly
+      BType.getArgumentTypes(off + 1)
     }
 
     /**
@@ -301,14 +301,17 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
      * @return the return type of methods of this type.
      */
     def getReturnType: BType = {
-      BType.getReturnType(getDescriptor) // TODO access idx directly
+      assert(chrs(off) == '(', "doesn't look like a method descriptor: " + toString)
+      var resPos = off + 1
+      while(resPos != ')') { resPos += 1 }
+      BType.getType(resPos + 1)
     }
 
     // ------------------------------------------------------------------------
     // Inspector methods
     // ------------------------------------------------------------------------
 
-    def isPrimitiveOrVoid(): Boolean = {
+    def isPrimitiveOrVoid: Boolean = {
       sort < BType.ARRAY;
     }
 
@@ -492,8 +495,6 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
   val ThrowableReference       = brefType("java/lang/Throwable")
   val jlCloneableReference     = brefType("java/lang/Cloneable")
   val jioSerializableReference = brefType("java/io/Serializable")
-
-  // TODO rather than lazy, have an init() method that populates mutable collections. That would speed up accesses from then on.
 
   /** A map from scala primitive type-symbols to BTypes */
   var primitiveTypeMap: Map[Symbol, BType] = null
@@ -1058,7 +1059,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       assert(isValueType(b), "b isn't a value type. " + msg)
 
       (a eq b) || (a match {
-        case BOOL | BYTE | SHORT | CHAR => b == INT || b == LONG // TODO Actually, does BOOL conform to LONG ? Even with adapt() it's a type error, right?.
+        case BOOL | BYTE | SHORT | CHAR => b == INT || b == LONG // TODO Actually, BOOL does NOT conform to LONG. Even with adapt().
         case _                          => a == b
       })
     }
@@ -1346,7 +1347,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
     final def genStringConcat(el: BType) {
       val jtype =
-        if(isArrayType(el) || isNonBoxedReferenceType(el)) JAVA_LANG_OBJECT
+        if(isArrayType(el) || hasObjectSort(el)) JAVA_LANG_OBJECT
         else el;
 
       invokevirtual(
@@ -1373,7 +1374,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       assert(isNonUnitValueType(from), "from is !isNonUnitValueType. " + msg)
       assert(isNonUnitValueType(to),   "to is !isNonUnitValueType. " + msg)
 
-          def pickOne(opcs: Array[Int]) { // TODO index on to.getSort
+          def pickOne(opcs: Array[Int]) { // TODO index on to.sort
             val chosen = (to: @unchecked) match {
               case BYTE   => opcs(0)
               case SHORT  => opcs(1)
@@ -1389,7 +1390,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       if(from == to) { return }
       if((from == BOOL) || (to == BOOL)) {
         // the only conversion involving BOOL that is allowed is (BOOL -> BOOL)
-        throw new Error("inconvertible types : " + from.toString() + " -> " + to.toString())
+        throw new Error("inconvertible types : " + from.toString + " -> " + to.toString)
       }
 
       if(isIntSizedType(from)) { // BYTE, CHAR, SHORT, and INT. (we're done with BOOL already)
@@ -1679,7 +1680,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
     val returnOpcodes = { import Opcodes._; Array(ARETURN, IRETURN, IRETURN, IRETURN, IRETURN, LRETURN, FRETURN, DRETURN) }
 
-    final def emitTypeBased(opcs: Array[Int], tk: BType) { // TODO switch on tk.getSort
+    final def emitTypeBased(opcs: Array[Int], tk: BType) { // TODO index on tk.sort
       assert(tk != UNIT, tk)
       val opc = {
         if(isRefOrArrayType(tk)) {  opcs(0) }
@@ -1710,7 +1711,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     val divOpcodes: Array[Int] = { import Opcodes._; Array(IDIV, LDIV, FDIV, DDIV) }
     val remOpcodes: Array[Int] = { import Opcodes._; Array(IREM, LREM, FREM, DREM) }
 
-    final def emitPrimitive(opcs: Array[Int], tk: BType) { // TODO index on tk.getSort
+    final def emitPrimitive(opcs: Array[Int], tk: BType) { // TODO index on tk.sort
       val opc = {
         if(isIntSizedType(tk)) { opcs(0) }
         else {
