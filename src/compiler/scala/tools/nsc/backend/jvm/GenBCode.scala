@@ -1261,7 +1261,7 @@ abstract class GenBCode extends BCodeTypes {
           assert(ctor.isClassConstructor, "'new' call to non-constructor: " + ctor.name)
 
           generatedType = toTypeKind(tpt.tpe)
-          assert(isRefOrArrayType(generatedType), "Non reference type cannot be instantiated: " + generatedType)
+          assert(generatedType.isRefOrArrayType, "Non reference type cannot be instantiated: " + generatedType)
 
           generatedType match {
             case arr if generatedType.isArray =>
@@ -1723,7 +1723,7 @@ abstract class GenBCode extends BCodeTypes {
     private def genCJUMP(success: asm.Label, failure: asm.Label, op: TestOp, tk: BType) {
       if(isIntSizedType(tk)) { // BOOL, BYTE, CHAR, SHORT, or INT
         bc.emitIF_ICMP(op, success)
-      } else if(isRefOrArrayType(tk)) { // REFERENCE(_) | ARRAY(_)
+      } else if(tk.isRefOrArrayType) { // REFERENCE(_) | ARRAY(_)
         bc.emitIF_ACMP(op, success)
       } else {
         (tk: @unchecked) match {
@@ -1744,7 +1744,7 @@ abstract class GenBCode extends BCodeTypes {
     private def genCZJUMP(success: asm.Label, failure: asm.Label, op: TestOp, tk: BType) {
       if(isIntSizedType(tk)) { // BOOL, BYTE, CHAR, SHORT, or INT
         bc.emitIF(op, success)
-      } else if(isRefOrArrayType(tk)) { // REFERENCE(_) | ARRAY(_)
+      } else if(tk.isRefOrArrayType) { // REFERENCE(_) | ARRAY(_)
         // @unchecked because references aren't compared with GT, GE, LT, LE.
         (op : @unchecked) match {
           case EQ => bc emitIFNULL    success

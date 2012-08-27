@@ -329,6 +329,18 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
     def isNonSpecial = { !isValueType && !isArray && !isPhantomType(this) }
 
+    def isBoxed = {
+      this match {
+        case BOXED_UNIT  | BOXED_BOOLEAN | BOXED_CHAR   |
+             BOXED_BYTE  | BOXED_SHORT   | BOXED_INT    |
+             BOXED_FLOAT | BOXED_LONG    | BOXED_DOUBLE
+          => true
+        case _
+          => false
+      }
+    }
+
+    def isRefOrArrayType = (hasObjectSort || isArray)
 
     // ------------------------------------------------------------------------
     // Conversion to type descriptors
@@ -795,19 +807,6 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
   // ---------------- inspector methods on BType  ----------------
 
-  final def isBoxedType(t: BType) = {
-    t match {
-      case BOXED_UNIT  | BOXED_BOOLEAN | BOXED_CHAR   |
-           BOXED_BYTE  | BOXED_SHORT   | BOXED_INT    |
-           BOXED_FLOAT | BOXED_LONG    | BOXED_DOUBLE
-        => true
-      case _
-        => false
-    }
-  }
-
-  final def isRefOrArrayType(t: BType) = t.hasObjectSort || t.isArray
-
   final def isNothingType(t: BType) = { (t == RT_NOTHING) || (t == CT_NOTHING) }
   final def isNullType   (t: BType) = { (t == RT_NULL)    || (t == CT_NULL)    }
   final def isPhantomType(t: BType) = { isNothingType(t)  || isNullType(t)     }
@@ -1013,8 +1012,8 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       else if(b.isArray)            { conforms(componentType(a), componentType(b)) }
       else                          { false }
     }
-    else if(isBoxedType(a)) { // may be null
-      if(isBoxedType(b))            { a == b }
+    else if(a.isBoxed) { // may be null
+      if(b.isBoxed)                 { a == b }
       else if(b == AnyRefReference) { true  }
       else                          { false }
     }
@@ -1120,10 +1119,10 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       if(a == other)           return a;
        // Approximate `lub`. The common type of two references is always AnyRef.
        // For 'real' least upper bound wrt to subclassing use method 'lub'.
-      assert(a.isArray || isBoxedType(a) || a.hasObjectSort, "This is not a valuetype and it's not something else, what is it? " + a)
+      assert(a.isArray || a.isBoxed || a.hasObjectSort, "This is not a valuetype and it's not something else, what is it? " + a)
       // TODO For some reason, ICode thinks `REFERENCE(...).maxType(BOXED(whatever))` is `uncomparable`. Here, that has maxType AnyRefReference.
       //      BTW, when swapping arguments, ICode says BOXED(whatever).maxType(REFERENCE(...)) == AnyRefReference, so I guess the above was an oversight in REFERENCE.maxType()
-      if(isRefOrArrayType(other)) { AnyRefReference }
+      if(other.isRefOrArrayType) { AnyRefReference }
       else                        { abort("Uncomparable BTypes: " + a.toString + " with " + other.toString) }
     }
   }
@@ -1509,7 +1508,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     }
 
     final def newarray(elem: BType) { // TODO switch on elem.getSort
-      if(isRefOrArrayType(elem)) {
+      if(elem.isRefOrArrayType) {
         jmethod.visitTypeInsn(Opcodes.ANEWARRAY, elem.getInternalName)
       } else {
         val rand = {
@@ -1667,7 +1666,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     final def emitTypeBased(opcs: Array[Int], tk: BType) { // TODO index on tk.sort
       assert(tk != UNIT, tk)
       val opc = {
-        if(isRefOrArrayType(tk)) {  opcs(0) }
+        if(tk.isRefOrArrayType) {  opcs(0) }
         else if(isIntSizedType(tk)) {
           (tk: @unchecked) match {
             case BOOL | BYTE     => opcs(1)
@@ -1744,7 +1743,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     }
 
     final def checkCast(tk: BType) { // TODO GenASM could use this method
-      assert(isRefOrArrayType(tk), "checkcast on primitive type: " + tk)
+      assert(tk.isRefOrArrayType, "checkcast on primitive type: " + tk)
       // TODO ICode also requires: but that's too much, right? assert(!isBoxedType(tk),     "checkcast on boxed type: " + tk)
       jmethod.visitTypeInsn(Opcodes.CHECKCAST, tk.getInternalName)
     }
