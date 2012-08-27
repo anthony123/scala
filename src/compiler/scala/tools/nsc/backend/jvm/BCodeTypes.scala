@@ -324,6 +324,8 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       sort < BType.ARRAY;
     }
 
+    def isNonSpecial: Boolean = { !isValueType(this) && !isArrayType(this) && !isPhantomType(this) }
+
     // ------------------------------------------------------------------------
     // Conversion to type descriptors
     // ------------------------------------------------------------------------
@@ -631,11 +633,11 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
   case class Tracked(c: BType, flags: Int, sc: Tracked, ifaces: Array[Tracked]) {
 
     assert(
-      !isSpecialType(c) &&
+      c.isNonSpecial &&
       ( if(sc == null) { (c == ObjectReference) || isInterface     }
         else           { (c != ObjectReference) && !sc.isInterface }
       ) &&
-      (ifaces.forall(i => !isSpecialType(i.c) && i.isInterface)),
+      (ifaces.forall(i => i.c.isNonSpecial && i.isInterface)),
       "non well-formed plain-type: " + this
     )
 
@@ -655,7 +657,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     }
 
     def isSubtypeOf(other: BType): Boolean = {
-      assert(!isSpecialType(other), "so called special cases have to be handled in BCodeTypes.conforms()")
+      assert(other.isNonSpecial, "so called special cases have to be handled in BCodeTypes.conforms()")
 
       if(c == other) return true;
 
@@ -743,7 +745,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     assert(!phantomTypeMap.contains(csym),   "phantom types not tracked here: " + csym.fullName)
 
     val key = brefType(csym.javaBinaryName)
-    assert(!isSpecialType(key), "Not a class to track: " + csym.fullName)
+    assert(key.isNonSpecial, "Not a class to track: " + csym.fullName)
 
     exemplars.get(key) match {
       case Some(tr) => tr
@@ -790,12 +792,6 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
   // ---------------- inspector methods on BType  ----------------
 
   final def isNonBoxedReferenceType(t: BType) = t.hasObjectSort && !isBoxedType(t)
-
-  final def isSpecialType(t: BType): Boolean = {
-    isValueType(t)   ||
-    isArrayType(t)   ||
-    isPhantomType(t)
-  }
 
   final def isArrayType(t: BType) = (t.sort == BType.ARRAY)
 
@@ -2128,8 +2124,8 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
     final def jvmWiseLUB(a: BType, b: BType): BType = {
 
-      assert(!isSpecialType(a), "jvmWiseLUB() received a non-plain-class " + a)
-      assert(!isSpecialType(b), "jvmWiseLUB() received a non-plain-class " + b)
+      assert(a.isNonSpecial, "jvmWiseLUB() received a non-plain-class " + a)
+      assert(b.isNonSpecial, "jvmWiseLUB() received a non-plain-class " + b)
 
       val ta = exemplars(a)
       val tb = exemplars(b)
@@ -2144,7 +2140,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
         case _ =>
           firstCommonSuffix(ta :: ta.superClasses, tb :: tb.superClasses)
       }
-      assert(!isSpecialType(res), "jvmWiseLUB() returned a non-plain-class.")
+      assert(res.isNonSpecial, "jvmWiseLUB() returned a non-plain-class.")
       res
     }
 
