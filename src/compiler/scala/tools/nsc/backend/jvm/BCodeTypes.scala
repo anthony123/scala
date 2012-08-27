@@ -2110,33 +2110,12 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     fcs.c
   }
 
-  @inline final def jvmWiseLUB(a: BType, b: BType): BType = {
-
-    assert(!isSpecialType(a), "jvmWiseLUB() received a non-plain-class " + a)
-    assert(!isSpecialType(b), "jvmWiseLUB() received a non-plain-class " + b)
-
-    val ta = exemplars(a)
-    val tb = exemplars(b)
-
-    val res = Pair(ta.isInterface, tb.isInterface) match {
-      case (true, true) =>
-        ???
-      case (true, false) =>
-        if(tb.isSubtypeOf(a)) a else ObjectReference
-      case (false, true) =>
-        if(ta.isSubtypeOf(b)) b else ObjectReference
-      case _ =>
-        firstCommonSuffix(ta :: ta.superClasses, tb :: tb.superClasses)
-    }
-    assert(!isSpecialType(res), "jvmWiseLUB() returned a non-plain-class.")
-    res
-  }
-
   /** An `asm.ClassWriter` that uses `jvmWiseLUB()`
    *  The internal name of the least common ancestor of the types given by inameA and inameB.
    *  It's what ASM needs to know in order to compute stack map frames, http://asm.ow2.org/doc/developer-guide.html#controlflow
    */
   class CClassWriter(flags: Int) extends asm.ClassWriter(flags) {
+
     override def getCommonSuperClass(inameA: String, inameB: String): String = {
       val a = brefType(inameA)
       val b = brefType(inameB)
@@ -2146,6 +2125,29 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
       lcaName // ASM caches the answer during the lifetime of a ClassWriter. We outlive that. Not sure whether caching on our side would improve things.
     }
+
+    final def jvmWiseLUB(a: BType, b: BType): BType = {
+
+      assert(!isSpecialType(a), "jvmWiseLUB() received a non-plain-class " + a)
+      assert(!isSpecialType(b), "jvmWiseLUB() received a non-plain-class " + b)
+
+      val ta = exemplars(a)
+      val tb = exemplars(b)
+
+      val res = Pair(ta.isInterface, tb.isInterface) match {
+        case (true, true) =>
+          ???
+        case (true, false) =>
+          if(tb.isSubtypeOf(a)) a else ObjectReference
+        case (false, true) =>
+          if(ta.isSubtypeOf(b)) b else ObjectReference
+        case _ =>
+          firstCommonSuffix(ta :: ta.superClasses, tb :: tb.superClasses)
+      }
+      assert(!isSpecialType(res), "jvmWiseLUB() returned a non-plain-class.")
+      res
+    }
+
   }
 
   // -----------------------------------------------------------------------------------------
