@@ -620,8 +620,8 @@ abstract class GenBCode extends BCodeTypes {
       var resKind = toTypeKind(larg.tpe)
 
       assert(args.length <= 1, "Too many arguments for primitive function: " + fun.symbol)
-      assert(isNumericType(resKind) | resKind == BOOL,
-               resKind.toString() + " is not a numeric or boolean type " + "[operation: " + fun.symbol + "]")
+      assert(resKind.isNumericType || (resKind == BOOL),
+               resKind.toString + " is not a numeric or boolean type " + "[operation: " + fun.symbol + "]")
 
       args match {
         // unary operation
@@ -637,9 +637,10 @@ abstract class GenBCode extends BCodeTypes {
         // binary operation
         case rarg :: Nil =>
           resKind = getMaxType(larg.tpe :: rarg.tpe :: Nil);
-          if (scalaPrimitives.isShiftOp(code) || scalaPrimitives.isBitwiseOp(code))
-            assert(isIntegralType(resKind) | resKind == BOOL,
-                   resKind.toString() + " incompatible with arithmetic modulo operation.");
+          if (scalaPrimitives.isShiftOp(code) || scalaPrimitives.isBitwiseOp(code)) {
+            assert(resKind.isIntegralType || (resKind == BOOL),
+                   resKind.toString + " incompatible with arithmetic modulo operation.")
+          }
 
           genLoad(larg, resKind)
           genLoad(rarg, // check .NET size of shift arguments!
@@ -1721,7 +1722,7 @@ abstract class GenBCode extends BCodeTypes {
 
     /** Emit code to compare the two top-most stack values using the 'op' operator. */
     private def genCJUMP(success: asm.Label, failure: asm.Label, op: TestOp, tk: BType) {
-      if(isIntSizedType(tk)) { // BOOL, BYTE, CHAR, SHORT, or INT
+      if(tk.isIntSizedType) { // BOOL, BYTE, CHAR, SHORT, or INT
         bc.emitIF_ICMP(op, success)
       } else if(tk.isRefOrArrayType) { // REFERENCE(_) | ARRAY(_)
         bc.emitIF_ACMP(op, success)
@@ -1742,7 +1743,7 @@ abstract class GenBCode extends BCodeTypes {
 
     /** Emits code to compare (and consume) stack-top and zero using the 'op' operator */
     private def genCZJUMP(success: asm.Label, failure: asm.Label, op: TestOp, tk: BType) {
-      if(isIntSizedType(tk)) { // BOOL, BYTE, CHAR, SHORT, or INT
+      if(tk.isIntSizedType) { // BOOL, BYTE, CHAR, SHORT, or INT
         bc.emitIF(op, success)
       } else if(tk.isRefOrArrayType) { // REFERENCE(_) | ARRAY(_)
         // @unchecked because references aren't compared with GT, GE, LT, LE.

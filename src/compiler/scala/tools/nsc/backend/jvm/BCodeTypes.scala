@@ -325,11 +325,13 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     def isArray           = (sort == BType.ARRAY)
     def isUnitType        = (sort == BType.VOID)
 
-    def isNonUnitValueType = { isValueType && !isUnitType }
+    def isRefOrArrayType   = { hasObjectSort ||  isArray    }
+    def isNonUnitValueType = { isValueType   && !isUnitType }
 
-    def isNonSpecial  = { !isValueType && !isArray && !isPhantomType(this) }
+    def isNonSpecial  = { !isValueType && !isArray && !isPhantomType   }
     def isNothingType = { (this == RT_NOTHING) || (this == CT_NOTHING) }
     def isNullType    = { (this == RT_NULL)    || (this == CT_NULL)    }
+    def isPhantomType = { isNothingType || isNullType }
 
     def isBoxed = {
       this match {
@@ -342,7 +344,36 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       }
     }
 
-    def isRefOrArrayType = (hasObjectSort || isArray)
+    /** On the JVM,
+     *    BOOL, BYTE, CHAR, SHORT, and INT
+     *  are like Ints for the purpose of lub calculation.
+     **/
+    def isIntSizedType = {
+      (sort : @switch) match {
+        case BType.BOOLEAN | BType.CHAR  |
+             BType.BYTE    | BType.SHORT | BType.INT
+          => true
+        case _
+          => false
+      }
+    }
+
+    /** On the JVM, similar to isIntSizedType except that BOOL isn't integral while LONG is. */
+    def isIntegralType = {
+      (sort : @switch) match {
+        case BType.CHAR  |
+             BType.BYTE  | BType.SHORT | BType.INT |
+             BType.LONG
+          => true
+        case _
+          => false
+      }
+    }
+
+    /** On the JVM, FLOAT and DOUBLE. */
+    def isRealType = { (sort == BType.FLOAT ) || (sort == BType.DOUBLE) }
+
+    def isNumericType = (isIntegralType || isRealType)
 
     // ------------------------------------------------------------------------
     // Conversion to type descriptors
@@ -809,8 +840,6 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
   // ---------------- inspector methods on BType  ----------------
 
-  final def isPhantomType(t: BType) = { t.isNothingType   || t.isNullType     }
-
   final def asmMethodType(s: Symbol): BType = {
     assert(s.isMethod, "not a method-symbol: " + s)
     val resT: BType = if (s.isClassConstructor) BType.VOID_TYPE else toTypeKind(s.tpe.resultType);
@@ -819,40 +848,6 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
   def mkArray(xs: Traversable[BType]): Array[BType] = { val a = new Array[BType](xs.size); xs.copyToArray(a); a }
   def mkArray(xs: Traversable[String]):    Array[String]    = { val a = new Array[String](xs.size);    xs.copyToArray(a); a }
-
-  /** On the JVM,
-   *    BOOL, BYTE, CHAR, SHORT, and INT
-   *  are like Ints for the purpose of lub calculation.
-   **/
-  final def isIntSizedType(t: BType): Boolean = {
-    (t.sort : @switch) match {
-      case BType.BOOLEAN | BType.CHAR  |
-           BType.BYTE    | BType.SHORT | BType.INT
-        => true
-      case _
-        => false
-    }
-  }
-
-  /** On the JVM, similar to isIntSizedType except that BOOL isn't integral while LONG is. */
-  final def isIntegralType(t: BType): Boolean = {
-    (t.sort : @switch) match {
-      case BType.CHAR  |
-           BType.BYTE  | BType.SHORT | BType.INT |
-           BType.LONG
-        => true
-      case _
-        => false
-    }
-  }
-
-  /** On the JVM, FLOAT and DOUBLE. */
-  final def isRealType(t: BType): Boolean = {
-    (t.sort == BType.FLOAT ) ||
-    (t.sort == BType.DOUBLE)
-  }
-
-  final def isNumericType(t: BType) = isIntegralType(t) || isRealType(t)
 
   /** Is this type a category 2 type in JVM terms? (ie, is it LONG or DOUBLE?) */
   final def isWideType(t: BType) = (t.getSize == 2)
@@ -892,7 +887,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
   /* the type of 1-dimensional arrays of `elem` type. */
   final def arrayOf(elem: BType): BType = {
-    assert(!(elem.isUnitType) && !isPhantomType(elem),
+    assert(!(elem.isUnitType) && !(elem.isPhantomType),
            "The element type of an array type is necessarily either a primitive type, or a class type, or an interface type.")
     brefType("[" + elem.getDescriptor)
   }
@@ -900,7 +895,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
   /* the type of N-dimensional arrays of `elem` type. */
   final def arrayN(elem: BType, dims: Int): BType = {
     assert(dims > 0)
-    assert(!(elem.isUnitType) && !isPhantomType(elem),
+    assert(!(elem.isUnitType) && !(elem.isPhantomType),
            "The element type of an array type is necessarily either a primitive type, or a class type, or an interface type.")
     val desc = ("[" * dims) + elem.getDescriptor
     brefType(desc)
@@ -1067,7 +1062,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
       case BYTE =>
         if (other == CHAR)            INT
-        else if(isNumericType(other)) other
+        else if(other.isNumericType)  other
         else                          uncomparable
 
       case SHORT =>
@@ -1093,17 +1088,17 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
         }
 
       case LONG =>
-        if(isIntegralType(other))  LONG
-        else if(isRealType(other)) DOUBLE
+        if(other.isIntegralType)   LONG
+        else if(other.isRealType)  DOUBLE
         else                       uncomparable
 
       case FLOAT =>
         if (other == DOUBLE)          DOUBLE
-        else if(isNumericType(other)) FLOAT
+        else if(other.isNumericType)  FLOAT
         else                          uncomparable
 
       case DOUBLE =>
-        if(isNumericType(other)) DOUBLE
+        if(other.isNumericType)  DOUBLE
         else                     uncomparable
 
       case _ => uncomparable
@@ -1231,7 +1226,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
         case REM => rem(kind)
 
         case NOT =>
-          if(isIntSizedType(kind)) {
+          if(kind.isIntSizedType) {
             emit(Opcodes.ICONST_M1)
             emit(Opcodes.IXOR)
           } else if(kind == LONG) {
@@ -1376,7 +1371,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
         throw new Error("inconvertible types : " + from.toString + " -> " + to.toString)
       }
 
-      if(isIntSizedType(from)) { // BYTE, CHAR, SHORT, and INT. (we're done with BOOL already)
+      if(from.isIntSizedType) { // BYTE, CHAR, SHORT, and INT. (we're done with BOOL already)
 
         val fromByte  = { import asm.Opcodes._; Array( -1,  -1, I2C,  -1, I2L, I2F, I2D) } // do nothing for (BYTE -> SHORT) and for (BYTE -> INT)
         val fromChar  = { import asm.Opcodes._; Array(I2B, I2S,  -1,  -1, I2L, I2F, I2D) } // for (CHAR  -> INT) do nothing
@@ -1512,7 +1507,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
         jmethod.visitTypeInsn(Opcodes.ANEWARRAY, elem.getInternalName)
       } else {
         val rand = {
-          if(isIntSizedType(elem)) {
+          if(elem.isIntSizedType) {
             (elem: @unchecked) match {
               case BOOL   => Opcodes.T_BOOLEAN
               case BYTE   => Opcodes.T_BYTE
@@ -1667,7 +1662,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       assert(tk != UNIT, tk)
       val opc = {
         if(tk.isRefOrArrayType) {  opcs(0) }
-        else if(isIntSizedType(tk)) {
+        else if(tk.isIntSizedType) {
           (tk: @unchecked) match {
             case BOOL | BYTE     => opcs(1)
             case SHORT           => opcs(2)
@@ -1696,7 +1691,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
     final def emitPrimitive(opcs: Array[Int], tk: BType) { // TODO index on tk.sort
       val opc = {
-        if(isIntSizedType(tk)) { opcs(0) }
+        if(tk.isIntSizedType) { opcs(0) }
         else {
           (tk: @unchecked) match {
             case LONG   => opcs(1)
