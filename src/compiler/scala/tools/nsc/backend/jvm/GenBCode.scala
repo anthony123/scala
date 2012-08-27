@@ -1213,9 +1213,9 @@ abstract class GenBCode extends BCodeTypes {
           val r = toTypeKind(targs.head.tpe)
           genLoadQualifier(fun)
 
-          if (isValueType(l) && isValueType(r))
+          if (l.isValueType && r.isValueType)
             genConversion(l, r, cast)
-          else if (isValueType(l)) {
+          else if (l.isValueType) {
             bc drop l
             if (cast) {
               mnode.visitTypeInsn(asm.Opcodes.NEW, internalName(definitions.ClassCastExceptionClass))
@@ -1225,10 +1225,10 @@ abstract class GenBCode extends BCodeTypes {
               bc boolconst false
             }
           }
-          else if (isValueType(r) && cast) {
+          else if (r.isValueType && cast) {
             assert(false, tree) /* Erasure should have added an unboxing operation to prevent that. */
           }
-          else if (isValueType(r)) {
+          else if (r.isValueType) {
             bc isInstance classLiteral(r)
           }
           else {

@@ -320,13 +320,12 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     // Inspector methods
     // ------------------------------------------------------------------------
 
-    def isPrimitiveOrVoid: Boolean = {
-      sort < BType.ARRAY;
-    }
+    def isPrimitiveOrVoid = (sort <  BType.ARRAY)
+    def isValueType       = (sort <  BType.ARRAY)
+    def isArray           = (sort == BType.ARRAY)
 
-    def isNonSpecial: Boolean = { !isValueType(this) && !isArray && !isPhantomType(this) }
+    def isNonSpecial = { !isValueType && !isArray && !isPhantomType(this) }
 
-    def isArray = (sort == BType.ARRAY)
 
     // ------------------------------------------------------------------------
     // Conversion to type descriptors
@@ -793,18 +792,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
   // ---------------- inspector methods on BType  ----------------
 
-  final def isValueType(t: BType) = {
-    (t.sort : @switch) match {
-      case BType.VOID  | BType.BOOLEAN | BType.CHAR   |
-           BType.BYTE  | BType.SHORT   | BType.INT    |
-           BType.FLOAT | BType.LONG    | BType.DOUBLE
-        => true
-      case _
-        => false
-    }
-  }
-
-  final def isNonUnitValueType(t: BType): Boolean = { isValueType(t) && !isUnitType(t) }
+  final def isNonUnitValueType(t: BType): Boolean = { t.isValueType && !isUnitType(t) }
 
   final def isBoxedType(t: BType) = {
     t match {
@@ -1032,7 +1020,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     }
     else if(isNullType(a)) { // known to be null
       if(isNothingType(b))          { false }
-      else if(isValueType(b))       { false }
+      else if(b.isValueType)        { false }
       else                          { true  }
     }
     else if(isNothingType(a)) { // known to be Nothing
@@ -1052,7 +1040,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
         def msg = "(a: " + a + ", b: " + b + ")"
 
       assert(isNonUnitValueType(a), "a isn't a non-Unit value type. " + msg)
-      assert(isValueType(b), "b isn't a value type. " + msg)
+      assert(b.isValueType, "b isn't a value type. " + msg)
 
       (a eq b) || (a match {
         case BOOL | BYTE | SHORT | CHAR => b == INT || b == LONG // TODO Actually, BOOL does NOT conform to LONG. Even with adapt().
@@ -1063,7 +1051,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
   /** The maxValueType of (Char, Byte) and of (Char, Short) is Int, to encompass the negative values of Byte and Short. See ticket #2087. */
   private def maxValueType(a: BType, other: BType): BType = {
-    assert(isValueType(a), "maxValueType() is defined only for 1st arg valuetypes (2nd arg doesn't matter).")
+    assert(a.isValueType, "maxValueType() is defined only for 1st arg valuetypes (2nd arg doesn't matter).")
 
         def uncomparable: Nothing = {
           abort("Uncomparable BTypes: " + a.toString + " with " + other.toString)
@@ -1125,7 +1113,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
   /* Takes promotions of numeric primitives into account. */
   final def maxType(a: BType, other: BType): BType = {
-    if(isValueType(a)) { maxValueType(a, other) }
+    if(a.isValueType) { maxValueType(a, other) }
     else {
       if(isNothingType(a))     return other;
       if(isNothingType(other)) return a;
@@ -1458,7 +1446,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
         case ClazzTag   =>
           val kind = toTypeKind(const.typeValue)
           val toPush: BType =
-            if (isValueType(kind)) classLiteral(kind)
+            if (kind.isValueType) classLiteral(kind)
             else kind;
           jmethod.visitLdcInsn(toPush.toASMType)
 
