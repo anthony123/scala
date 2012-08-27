@@ -163,9 +163,9 @@ object BType {
    */
   def getReturnType(methodDescriptor: String): BType = {
     val n     = global.newTypeName(methodDescriptor)
-    val start = n.pos(')') + 1
-    assert(start < n.length, "not a valid method descriptor: " + methodDescriptor)
-    getType(start)
+    val delta = n.pos(')') // `delta` is relative to the Name's zero-based start position, not a valid index into chrs.
+    assert(delta < n.length, "not a valid method descriptor: " + methodDescriptor)
+    getType(n.start + delta + 1)
   }
 
   /**
@@ -205,17 +205,6 @@ class BType(val sort: Int, val off: Int, val len: Int) {
     // ------------------------------------------------------------------------
 
     /**
-     * Returns the sort of this Java type.
-     *
-     * @return {@link #VOID VOID}, {@link #BOOLEAN BOOLEAN},
-     *         {@link #CHAR CHAR}, {@link #BYTE BYTE}, {@link #SHORT SHORT},
-     *         {@link #INT INT}, {@link #FLOAT FLOAT}, {@link #LONG LONG},
-     *         {@link #DOUBLE DOUBLE}, {@link #ARRAY ARRAY},
-     *         {@link #OBJECT OBJECT} or {@link #METHOD METHOD}.
-     */
-    def getSort() = { sort } // TODO access the sort val constructor-param directly.
-
-    /**
      * Returns the number of dimensions of this array type. This method should
      * only be used for an array type.
      *
@@ -224,7 +213,7 @@ class BType(val sort: Int, val off: Int, val len: Int) {
     def getDimensions: Int = { // TODO rename to `dimensions`
       var i = 1;
       while (BType.chrs(off + i) == '[') {
-          i += 1;
+        i += 1;
       }
       i
     }
@@ -374,19 +363,19 @@ class BType(val sort: Int, val off: Int, val len: Int) {
         if (len != t.len) {
           return false
         }
-        if (sort != t.sort) {
-          return false
-        }
+        // sort checked already
         if (off == t.off) {
           return true
         }
         var i = 0
         while(i < len) {
-        if (BType.chrs(off + i) != BType.chrs(t.off + i)) {
-          return false
+          if (BType.chrs(off + i) != BType.chrs(t.off + i)) {
+            return false
+          }
+          i += 1
         }
-        i += 1
-        }
+        // If we reach here, we could update the largest of (this.off, t.off) to match the other, so as to simplify future == comparisons.
+        // But that would require a var rather than val.
       }
       true
     }
