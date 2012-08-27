@@ -500,9 +500,10 @@ LOCAL DEPENDENCY (Adapted ASM)
       srcdir="${src.dir}/asm"
       destdir="${build-asm.dir}/classes"
       classpath="${build-asm.dir}/classes"
+      debug="true" debuglevel="lines,vars,source"
       includes="**/*.java"
       target="1.6" source="1.5">
-        <compilerarg line="${javac.args} -XDignore.symbol.file"/>
+        <compilerarg line="${javac.args} "/>
     </javac>
     <touch file="${build-asm.dir}/asm.complete" verbose="no"/>
     <stopwatch name="asm.lib.timer" action="total"/>

@@ -75,8 +75,10 @@ object BType {
       // case '(':
       case _ =>
         assert(chrs(off) == '(')
-        assert(false, "TODO FIXME")
-        new BType(METHOD, 0, chrs.length) // TODO FIXME
+        var resPos = off + 1
+        while(resPos != ')') { resPos += 1 }
+        val resType = getType(resPos + 1)
+        new BType(METHOD, off, resPos + resType.len)
     }
   }
 
@@ -116,16 +118,14 @@ object BType {
   }
 
   /**
-   * Returns the Java types corresponding to the argument types of the given
-   * method descriptor.
+   * Returns the Java types corresponding to the argument types of method descriptor whose first argument starts at idx0.
    *
-   * @param methodDescriptor a method descriptor.
-   * @return the Java types corresponding to the argument types of the given
-   *         method descriptor.
+   * @param idx0 index into chrs of the first argument.
+   * @return the Java types corresponding to the argument types of the given method descriptor.
    */
-  def getArgumentTypes(methodDescriptor: String): Array[BType] = {
-    val n    = global.newTypeName(methodDescriptor)
-    var off  = n.start + 1
+  def getArgumentTypes(idx0: Int): Array[BType] = {
+    assert(chrs(idx0 - 1) == '(')
+    var off  = idx0
     var size = 0
     var keepGoing = true
     while (keepGoing) {
@@ -143,14 +143,26 @@ object BType {
       }
     }
     val args = new Array[BType](size)
-    off = n.start + 1
+    off = idx0
     size = 0;
     while (chrs(off) != ')') {
       args(size) = getType(off)
       off += args(size).len + (if(args(size).sort == OBJECT) 2 else 0)
       size += 1;
     }
-    args;
+    args
+  }
+
+  /**
+   * Returns the Java types corresponding to the argument types of the given
+   * method descriptor.
+   *
+   * @param methodDescriptor a method descriptor.
+   * @return the Java types corresponding to the argument types of the given method descriptor.
+   */
+  def getArgumentTypes(methodDescriptor: String): Array[BType] = {
+    val n = global.newTypeName(methodDescriptor)
+    getArgumentTypes(n.start + 1)
   }
 
   /**
@@ -200,9 +212,23 @@ object BType {
  */
 class BType(val sort: Int, val off: Int, val len: Int) {
 
-    // ------------------------------------------------------------------------
-    // Accessors
-    // ------------------------------------------------------------------------
+  def toASMType: scala.tools.asm.Type = {
+    import scala.tools.asm
+    sort match {
+      case BType.VOID    => asm.Type.VOID_TYPE
+      case BType.BOOLEAN => asm.Type.BOOLEAN_TYPE
+      case BType.CHAR    => asm.Type.CHAR_TYPE
+      case BType.BYTE    => asm.Type.BYTE_TYPE
+      case BType.SHORT   => asm.Type.SHORT_TYPE
+      case BType.INT     => asm.Type.INT_TYPE
+      case BType.FLOAT   => asm.Type.FLOAT_TYPE
+      case BType.LONG    => asm.Type.LONG_TYPE
+      case BType.DOUBLE  => asm.Type.DOUBLE_TYPE
+      case BType.ARRAY   |
+           BType.OBJECT  => asm.Type.getObjectType(getInternalName)
+      case BType.METHOD  => asm.Type.getMethodType(getDescriptor)
+    }
+  }
 
     /**
      * Returns the number of dimensions of this array type. This method should
@@ -247,7 +273,7 @@ class BType(val sort: Int, val off: Int, val len: Int) {
      * @return the argument types of methods of this type.
      */
     def getArgumentTypes: Array[BType] = {
-      BType.getArgumentTypes(getDescriptor)
+      BType.getArgumentTypes(getDescriptor) // TODO access idx directly
     }
 
     /**
@@ -257,7 +283,7 @@ class BType(val sort: Int, val off: Int, val len: Int) {
      * @return the return type of methods of this type.
      */
     def getReturnType: BType = {
-      BType.getReturnType(getDescriptor)
+      BType.getReturnType(getDescriptor) // TODO access idx directly
     }
 
     // ------------------------------------------------------------------------

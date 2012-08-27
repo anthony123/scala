@@ -39,6 +39,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
   val FLOAT  = BType.FLOAT_TYPE
   val DOUBLE = BType.DOUBLE_TYPE
 
+  assert(global != null, "a non-null global is needed.")
   BType.global = global
 
   /*
@@ -1030,7 +1031,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
           val toPush: BType =
             if (isValueType(kind)) classLiteral(kind)
             else kind;
-          jmethod.visitLdcInsn(toPush)
+          jmethod.visitLdcInsn(toPush.toASMType)
 
         case EnumTag   =>
           val sym = const.symbolValue
