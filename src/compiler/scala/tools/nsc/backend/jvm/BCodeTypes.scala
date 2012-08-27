@@ -228,7 +228,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
   /**
    * Based on ASM's Type class. Namer's chrs is used in this class for the same purposes as the `buf` char array in asm.Type.
    */
-  class BType(val sort: Int, val off: Int, val len: Int) {
+  final class BType(val sort: Int, val off: Int, val len: Int) {
 
     import global.chrs
 
@@ -249,6 +249,13 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
         case BType.METHOD  => asm.Type.getMethodType(getDescriptor)
       }
     }
+
+    /*
+     * Unlike for ICode's REFERENCE, isBoxedType(t) implies isReferenceType(t)
+     * Also, `isReferenceType(RT_NOTHING) == true` , similarly for RT_NULL.
+     * Use isNullType() , isNothingType() to detect Nothing and Null.
+     */
+    def hasObjectSort = (sort == BType.OBJECT)
 
     /**
      * Returns the number of dimensions of this array type. This method should
@@ -782,14 +789,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
   // ---------------- inspector methods on BType  ----------------
 
-  /*
-   * Unlike for ICode's REFERENCE, isBoxedType(t) implies isReferenceType(t)
-   * Also, `isReferenceType(RT_NOTHING) == true` , similarly for RT_NULL.
-   * Use isNullType() , isNothingType() to detect Nothing and Null.
-   */
-  final def hasObjectSort(t: BType) = (t.sort == BType.OBJECT)
-
-  final def isNonBoxedReferenceType(t: BType) = hasObjectSort(t) && !isBoxedType(t)
+  final def isNonBoxedReferenceType(t: BType) = t.hasObjectSort && !isBoxedType(t)
 
   final def isSpecialType(t: BType): Boolean = {
     isValueType(t)   ||
@@ -823,7 +823,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     }
   }
 
-  final def isRefOrArrayType(t: BType) = hasObjectSort(t) || isArrayType(t)
+  final def isRefOrArrayType(t: BType) = t.hasObjectSort || isArrayType(t)
 
   final def isNothingType(t: BType) = { (t == RT_NOTHING) || (t == CT_NOTHING) }
   final def isNullType   (t: BType) = { (t == RT_NULL)    || (t == CT_NULL)    }
@@ -1047,9 +1047,9 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     else if(isUnitType(a)) {
       isUnitType(b)
     }
-    else if(hasObjectSort(a)) { // may be null
+    else if(a.hasObjectSort) { // may be null
       if(isNothingType(a))        { true  }
-      else if(hasObjectSort(b))   { exemplars(a).isSubtypeOf(b) }
+      else if(b.hasObjectSort)    { exemplars(a).isSubtypeOf(b) }
       else if(isArrayType(b))     { isNullType(a) }
       else                        { false }
     }
@@ -1138,7 +1138,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       if(a == other)           return a;
        // Approximate `lub`. The common type of two references is always AnyRef.
        // For 'real' least upper bound wrt to subclassing use method 'lub'.
-      assert(isArrayType(a) || isBoxedType(a) || hasObjectSort(a), "This is not a valuetype and it's not something else, what is it? " + a)
+      assert(isArrayType(a) || isBoxedType(a) || a.hasObjectSort, "This is not a valuetype and it's not something else, what is it? " + a)
       // TODO For some reason, ICode thinks `REFERENCE(...).maxType(BOXED(whatever))` is `uncomparable`. Here, that has maxType AnyRefReference.
       //      BTW, when swapping arguments, ICode says BOXED(whatever).maxType(REFERENCE(...)) == AnyRefReference, so I guess the above was an oversight in REFERENCE.maxType()
       if(isRefOrArrayType(other)) { AnyRefReference }
@@ -1349,7 +1349,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
     final def genStringConcat(el: BType) {
       val jtype =
-        if(isArrayType(el) || hasObjectSort(el)) JAVA_LANG_OBJECT
+        if(isArrayType(el) || el.hasObjectSort) JAVA_LANG_OBJECT
         else el;
 
       invokevirtual(

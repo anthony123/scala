@@ -1280,7 +1280,7 @@ abstract class GenBCode extends BCodeTypes {
                 case dimensions => mnode.visitMultiANewArrayInsn(arrayN(elemKind, dimensions).getDescriptor, dimensions)
               }
 
-            case rt if hasObjectSort(generatedType) =>
+            case rt if generatedType.hasObjectSort =>
               // TODO RE-ENABLE assert(ctor.owner == classSymbol(rt), "Symbol " + ctor.owner.fullName + " is different than " + tpt)
               mnode.visitTypeInsn(asm.Opcodes.NEW, rt.getInternalName)
               bc dup generatedType
@@ -1827,7 +1827,7 @@ abstract class GenBCode extends BCodeTypes {
             case ZOR    => genZandOrZor(and = false)
             case code   =>
               // TODO !!!!!!!!!! isReferenceType, in the sense of TypeKind? (ie non-array, non-boxed, non-nothing, may be null)
-              if (scalaPrimitives.isUniversalEqualityOp(code) && hasObjectSort(toTypeKind(lhs.tpe))) {
+              if (scalaPrimitives.isUniversalEqualityOp(code) && toTypeKind(lhs.tpe).hasObjectSort) {
                 // `lhs` has reference type
                 if (code == EQ) genEqEqPrimitive(lhs, rhs, success, failure)
                 else            genEqEqPrimitive(lhs, rhs, failure, success)
