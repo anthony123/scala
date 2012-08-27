@@ -324,7 +324,9 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       sort < BType.ARRAY;
     }
 
-    def isNonSpecial: Boolean = { !isValueType(this) && !isArrayType(this) && !isPhantomType(this) }
+    def isNonSpecial: Boolean = { !isValueType(this) && !isArray && !isPhantomType(this) }
+
+    def isArray = (sort == BType.ARRAY)
 
     // ------------------------------------------------------------------------
     // Conversion to type descriptors
@@ -791,10 +793,6 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
   // ---------------- inspector methods on BType  ----------------
 
-  final def isNonBoxedReferenceType(t: BType) = t.hasObjectSort && !isBoxedType(t)
-
-  final def isArrayType(t: BType) = (t.sort == BType.ARRAY)
-
   final def isValueType(t: BType) = {
     (t.sort : @switch) match {
       case BType.VOID  | BType.BOOLEAN | BType.CHAR   |
@@ -819,7 +817,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     }
   }
 
-  final def isRefOrArrayType(t: BType) = t.hasObjectSort || isArrayType(t)
+  final def isRefOrArrayType(t: BType) = t.hasObjectSort || t.isArray
 
   final def isNothingType(t: BType) = { (t == RT_NOTHING) || (t == CT_NOTHING) }
   final def isNullType   (t: BType) = { (t == RT_NULL)    || (t == CT_NULL)    }
@@ -887,13 +885,13 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
   /** The (ultimate) element type of this array. */
   final def elementType(t: BType): BType = {
-    assert(isArrayType(t), "Asked for the element type of a non-array type: " + t)
+    assert(t.isArray, "Asked for the element type of a non-array type: " + t)
     t.getElementType
   }
 
   /** The type of items this array holds. */
   final def componentType(t: BType): BType = {
-    assert(isArrayType(t), "Asked for the component type of a non-array type: " + t)
+    assert(t.isArray, "Asked for the component type of a non-array type: " + t)
     val reduced = t.getDimensions - 1
     if(reduced == 0) t.getElementType
     else arrayN(t.getElementType, reduced)
@@ -901,7 +899,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
   /** The number of dimensions for array types. */
   final def dimensions(t: BType): Int = {
-    assert(isArrayType(t), "Asked for the number of dimensions of a non-array type: " + t.toString)
+    assert(t.isArray, "Asked for the number of dimensions of a non-array type: " + t.toString)
     t.getDimensions
   }
 
@@ -1019,12 +1017,12 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
    * This method used to be called, in the ICode world, TypeKind.<:<()
    **/
   final def conforms(a: BType, b: BType): Boolean = {
-    if(isArrayType(a)) { // may be null
+    if(a.isArray) { // may be null
       /* Array subtyping is covariant here, as in Java bytecode. Also necessary for Java interop. */
       if((b == jlCloneableReference)     ||
          (b == jioSerializableReference) ||
          (b == AnyRefReference))    { true  }
-      else if(isArrayType(b))       { conforms(componentType(a), componentType(b)) }
+      else if(b.isArray)            { conforms(componentType(a), componentType(b)) }
       else                          { false }
     }
     else if(isBoxedType(a)) { // may be null
@@ -1046,7 +1044,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     else if(a.hasObjectSort) { // may be null
       if(isNothingType(a))        { true  }
       else if(b.hasObjectSort)    { exemplars(a).isSubtypeOf(b) }
-      else if(isArrayType(b))     { isNullType(a) }
+      else if(b.isArray)     { isNullType(a) }
       else                        { false }
     }
     else {
@@ -1134,7 +1132,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       if(a == other)           return a;
        // Approximate `lub`. The common type of two references is always AnyRef.
        // For 'real' least upper bound wrt to subclassing use method 'lub'.
-      assert(isArrayType(a) || isBoxedType(a) || a.hasObjectSort, "This is not a valuetype and it's not something else, what is it? " + a)
+      assert(a.isArray || isBoxedType(a) || a.hasObjectSort, "This is not a valuetype and it's not something else, what is it? " + a)
       // TODO For some reason, ICode thinks `REFERENCE(...).maxType(BOXED(whatever))` is `uncomparable`. Here, that has maxType AnyRefReference.
       //      BTW, when swapping arguments, ICode says BOXED(whatever).maxType(REFERENCE(...)) == AnyRefReference, so I guess the above was an oversight in REFERENCE.maxType()
       if(isRefOrArrayType(other)) { AnyRefReference }
@@ -1345,7 +1343,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
     final def genStringConcat(el: BType) {
       val jtype =
-        if(isArrayType(el) || el.hasObjectSort) JAVA_LANG_OBJECT
+        if(el.isArray || el.hasObjectSort) JAVA_LANG_OBJECT
         else el;
 
       invokevirtual(

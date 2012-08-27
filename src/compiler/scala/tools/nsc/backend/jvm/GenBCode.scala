@@ -1264,7 +1264,7 @@ abstract class GenBCode extends BCodeTypes {
           assert(isRefOrArrayType(generatedType), "Non reference type cannot be instantiated: " + generatedType)
 
           generatedType match {
-            case arr if isArrayType(generatedType) =>
+            case arr if generatedType.isArray =>
               genLoadArguments(args, ctor.info.paramTypes)
               val dims = arr.getDimensions
               var elemKind = arr.getElementType
