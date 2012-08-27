@@ -22,7 +22,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
   object BType {
 
-    def chrs = global.chrs
+    import global.chrs
 
     // ------------- sorts -------------
 
@@ -230,6 +230,8 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
    */
   class BType(val sort: Int, val off: Int, val len: Int) {
 
+    import global.chrs
+
     def toASMType: scala.tools.asm.Type = {
       import scala.tools.asm
       sort match {
@@ -256,7 +258,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
      */
     def getDimensions: Int = { // TODO rename to `dimensions`
       var i = 1
-      while (BType.chrs(off + i) == '[') {
+      while (chrs(off + i) == '[') {
         i += 1
       }
       i
@@ -281,7 +283,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
      * @return the internal name of the class corresponding to this object type.
      */
     def getInternalName: String = {
-      new String(BType.chrs, off, len)
+      new String(chrs, off, len)
     }
 
     /**
@@ -342,10 +344,10 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
             buf.append(((off & 0xFF000000) >>> 24).asInstanceOf[Char])
         } else if (sort == BType.OBJECT) {
             buf.append('L')
-            buf.append(BType.chrs, off, len)
+            buf.append(chrs, off, len)
             buf.append(';')
         } else { // sort == ARRAY || sort == METHOD
-            buf.append(BType.chrs, off, len)
+            buf.append(chrs, off, len)
         }
     }
 
@@ -420,7 +422,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
         }
         var i = 0
         while(i < len) {
-          if (BType.chrs(off + i) != BType.chrs(t.off + i)) {
+          if (chrs(off + i) != chrs(t.off + i)) {
             return false
           }
           i += 1
@@ -442,7 +444,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
         var i = off
         val end = i + len
         while (i < end) {
-          hc = 17 * (hc + BType.chrs(i))
+          hc = 17 * (hc + chrs(i))
           i += 1
         }
       }
@@ -2130,22 +2132,19 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     res
   }
 
-  /* The internal name of the least common ancestor of the types given by inameA and inameB.
-     It's what ASM needs to know in order to compute stack map frames, http://asm.ow2.org/doc/developer-guide.html#controlflow */
-  def getCommonSuperClass(inameA: String, inameB: String): String = {
-    val a   = brefType(inameA)
-    val b = brefType(inameB)
-    val lca = jvmWiseLUB(a, b)
-    val lcaName = lca.getInternalName // don't call javaName because that side-effects innerClassBuffer.
-    assert(lcaName != "scala/Any")
-
-    lcaName // TODO ASM caches the answer during the lifetime of a ClassWriter. We outlive that. Do some caching.
-  }
-
-  /** An `asm.ClassWriter` that uses `jvmWiseLUB()`  */
+  /** An `asm.ClassWriter` that uses `jvmWiseLUB()`
+   *  The internal name of the least common ancestor of the types given by inameA and inameB.
+   *  It's what ASM needs to know in order to compute stack map frames, http://asm.ow2.org/doc/developer-guide.html#controlflow
+   */
   class CClassWriter(flags: Int) extends asm.ClassWriter(flags) {
-    override def getCommonSuperClass(iname1: String, iname2: String): String = {
-      BCodeTypes.this.getCommonSuperClass(iname1, iname2)
+    override def getCommonSuperClass(inameA: String, inameB: String): String = {
+      val a = brefType(inameA)
+      val b = brefType(inameB)
+      val lca = jvmWiseLUB(a, b)
+      val lcaName = lca.getInternalName // don't call javaName because that side-effects innerClassBuffer.
+      assert(lcaName != "scala/Any")
+
+      lcaName // ASM caches the answer during the lifetime of a ClassWriter. We outlive that. Not sure whether caching on our side would improve things.
     }
   }
 
