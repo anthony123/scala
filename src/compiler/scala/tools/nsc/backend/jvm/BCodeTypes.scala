@@ -836,7 +836,10 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     }
   }
 
-  private val EMPTY_TRACKED_ARRAY  = Array.empty[Tracked]
+  val EMPTY_TRACKED_ARRAY  = Array.empty[Tracked]
+  val EMPTY_STRING_ARRAY   = Array.empty[String]
+  val EMPTY_INT_ARRAY      = Array.empty[Int]
+  val EMPTY_LABEL_ARRAY    = Array.empty[asm.Label]
 
   private def buildExemplar(key: BType, csym: Symbol): Tracked = {
     val sc =
@@ -882,11 +885,48 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
   def mkArray(xs: List[asm.Label]): Array[asm.Label] = { val a = new Array[asm.Label](xs.size); xs.copyToArray(a); a }
   def mkArray(xs: List[Int]):       Array[Int]       = { val a = new Array[Int](xs.size);       xs.copyToArray(a); a }
 
-  /** The number of dimensions for array types. */
-  final def dimensions(t: BType): Int = {
-    assert(t.isArray, "Asked for the number of dimensions of a non-array type: " + t.toString)
-    t.getDimensions
+  def mkArrayReverse(xs: List[String]): Array[String] = {
+    val len = xs.size
+    if(len == 0) { return EMPTY_STRING_ARRAY }
+    val a = new Array[String](len)
+    var i = len - 1
+    var rest = xs
+    while(!rest.isEmpty) {
+      a(i) = rest.head
+      rest = rest.tail
+      i -= 1
+    }
+    a
   }
+
+  def mkArrayReverse(xs: List[Int]): Array[Int] = {
+    val len = xs.size
+    if(len == 0) { return EMPTY_INT_ARRAY }
+    val a = new Array[Int](len)
+    var i = len - 1
+    var rest = xs
+    while(!rest.isEmpty) {
+      a(i) = rest.head
+      rest = rest.tail
+      i -= 1
+    }
+    a
+  }
+
+  def mkArrayReverse(xs: List[asm.Label]): Array[asm.Label] = {
+    val len = xs.size
+    if(len == 0) { return EMPTY_LABEL_ARRAY }
+    val a = new Array[asm.Label](len)
+    var i = len - 1
+    var rest = xs
+    while(!rest.isEmpty) {
+      a(i) = rest.head
+      rest = rest.tail
+      i -= 1
+    }
+    a
+  }
+
 
   /* the type of 1-dimensional arrays of `elem` type. */
   final def arrayOf(elem: BType): BType = {
@@ -2442,10 +2482,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
         strs ::= new java.lang.String(ubytesToCharArray(ba))
       }
       assert(strs.size > 1, "encode instead as one String via strEncode()") // TODO too strict?
-      val arr = new Array[String](strs.size)
-      strs.reverse.copyToArray(arr)
-
-      arr
+      mkArrayReverse(strs)
     }
 
     private def strEncode(sb: ScalaSigBytes): String = {
