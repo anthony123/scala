@@ -200,6 +200,7 @@ abstract class GenBCode extends BCodeTypes {
       beanInfoCodeGen = new JBeanInfoBuilder(bytecodeWriter)
       super.run()
       bytecodeWriter.close()
+      clearBCodeTypes()
     }
 
     override def apply(unit: CompilationUnit): Unit = {

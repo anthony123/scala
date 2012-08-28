@@ -636,11 +636,18 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     for(csym <- boxedClasses) {
       val key = brefType(csym.javaBinaryName)
       val tr  = buildExemplar(key, csym)
+      symExemplars.put(csym, tr)
       exemplars.put(tr.c, tr)
     }
 
     // reversePrimitiveMap = (primitiveTypeMap map { case (s, pt) => (s.tpe, pt) } map (_.swap)).toMap
 
+  }
+
+  def clearBCodeTypes() {
+    symExemplars.clear()
+    exemplars.clear()
+    innerChainsMap.clear()
   }
 
   // in keeping with ICode's tradition of calling out boxed types.
@@ -706,7 +713,8 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
    // allowing answering `conforms()` resorting to typer.
    // ------------------------------------------------
 
-  val exemplars = mutable.Map.empty[BType, Tracked]
+  val exemplars    = mutable.Map.empty[BType, Tracked]
+  val symExemplars = mutable.Map.empty[Symbol, Tracked]
 
   case class Tracked(c: BType, flags: Int, sc: Tracked, ifaces: Array[Tracked]) {
 
@@ -821,16 +829,22 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     }
 
     assert(!primitiveTypeMap.contains(csym) || isCompilingStdLib, "primitive types not tracked here: " + csym.fullName)
-
     assert(!phantomTypeMap.contains(csym),   "phantom types not tracked here: " + csym.fullName)
+
+    val opt = symExemplars.get(csym)
+    if(opt.isDefined) {
+      return opt.get
+    }
 
     val key = brefType(csym.javaBinaryName)
     assert(key.isNonSpecial || isCompilingStdLib, "Not a class to track: " + csym.fullName)
 
     exemplars.get(key) match {
-      case Some(tr) => tr
+      case Some(tr) =>
+        abort("Maps `symExemplars` and `exemplars` got out of synch.")
       case _ =>
         val tr = buildExemplar(key, csym)
+        symExemplars.put(csym, tr)
         exemplars.put(tr.c, tr) // tr.c is the hash-consed, internalized, canonical representative for csym's key.
         tr
     }
@@ -880,12 +894,12 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     BType.getMethodType( resT, mkArray(s.tpe.paramTypes map toTypeKind) )
   }
 
-  def mkArray(xs: List[BType]):     Array[BType]     = { val a = new Array[BType](xs.size);     xs.copyToArray(a); a }
-  def mkArray(xs: List[String]):    Array[String]    = { val a = new Array[String](xs.size);    xs.copyToArray(a); a }
-  def mkArray(xs: List[asm.Label]): Array[asm.Label] = { val a = new Array[asm.Label](xs.size); xs.copyToArray(a); a }
-  def mkArray(xs: List[Int]):       Array[Int]       = { val a = new Array[Int](xs.size);       xs.copyToArray(a); a }
+  final def mkArray(xs: List[BType]):     Array[BType]     = { val a = new Array[BType](xs.size);     xs.copyToArray(a); a }
+  final def mkArray(xs: List[String]):    Array[String]    = { val a = new Array[String](xs.size);    xs.copyToArray(a); a }
+  final def mkArray(xs: List[asm.Label]): Array[asm.Label] = { val a = new Array[asm.Label](xs.size); xs.copyToArray(a); a }
+  final def mkArray(xs: List[Int]):       Array[Int]       = { val a = new Array[Int](xs.size);       xs.copyToArray(a); a }
 
-  def mkArrayReverse(xs: List[String]): Array[String] = {
+  final def mkArrayReverse(xs: List[String]): Array[String] = {
     val len = xs.size
     if(len == 0) { return EMPTY_STRING_ARRAY }
     val a = new Array[String](len)
@@ -899,7 +913,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     a
   }
 
-  def mkArrayReverse(xs: List[Int]): Array[Int] = {
+  final def mkArrayReverse(xs: List[Int]): Array[Int] = {
     val len = xs.size
     if(len == 0) { return EMPTY_INT_ARRAY }
     val a = new Array[Int](len)
@@ -913,7 +927,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     a
   }
 
-  def mkArrayReverse(xs: List[asm.Label]): Array[asm.Label] = {
+  final def mkArrayReverse(xs: List[asm.Label]): Array[asm.Label] = {
     val len = xs.size
     if(len == 0) { return EMPTY_LABEL_ARRAY }
     val a = new Array[asm.Label](len)
@@ -926,7 +940,6 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     }
     a
   }
-
 
   /* the type of 1-dimensional arrays of `elem` type. */
   final def arrayOf(elem: BType): BType = {
