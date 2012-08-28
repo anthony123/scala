@@ -1011,7 +1011,8 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     else if(a.isBoxed) { // may be null
       if(b.isBoxed)                 { a == b }
       else if(b == AnyRefReference) { true  }
-      else                          { false }
+      else if(!(b.hasObjectSort))   { false }
+      else                          { exemplars(a).isSubtypeOf(b) } // e.g., java/lang/Double conforms to java/lang/Number
     }
     else if(a.isNullType) { // known to be null
       if(b.isNothingType)      { false }
@@ -1027,7 +1028,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     else if(a.hasObjectSort) { // may be null
       if(a.isNothingType)      { true  }
       else if(b.hasObjectSort) { exemplars(a).isSubtypeOf(b) }
-      else if(b.isArray)       { a.isNullType }
+      else if(b.isArray)       { a.isNullType } // documentation only, because `if(a.isNullType)` (above) covers this case already.
       else                     { false }
     }
     else {
@@ -2121,6 +2122,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
       val res = Pair(ta.isInterface, tb.isInterface) match {
         case (true, true) =>
+          // exercised by test/files/run/t4761.scala
           if      (tb.isSubtypeOf(ta.c)) ta.c
           else if (ta.isSubtypeOf(tb.c)) tb.c
           else ObjectReference
