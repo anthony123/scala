@@ -1488,7 +1488,7 @@ abstract class GenBCode extends BCodeTypes {
             abort("Invalid pattern in Match node: " + tree + " at: " + tree.pos)
         }
       }
-      bc.emitSWITCH(flatKeys.reverse.toArray, targets.reverse.toArray, default, MIN_SWITCH_DENSITY)
+      bc.emitSWITCH(mkArray(flatKeys.reverse), mkArray(targets.reverse), default, MIN_SWITCH_DENSITY)
 
       // emit switch-blocks.
       val postMatch = new asm.Label

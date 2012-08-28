@@ -877,8 +877,10 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     BType.getMethodType( resT, mkArray(s.tpe.paramTypes map toTypeKind) )
   }
 
-  def mkArray(xs: Traversable[BType]): Array[BType] = { val a = new Array[BType](xs.size); xs.copyToArray(a); a }
-  def mkArray(xs: Traversable[String]):    Array[String]    = { val a = new Array[String](xs.size);    xs.copyToArray(a); a }
+  def mkArray(xs: List[BType]):     Array[BType]     = { val a = new Array[BType](xs.size);     xs.copyToArray(a); a }
+  def mkArray(xs: List[String]):    Array[String]    = { val a = new Array[String](xs.size);    xs.copyToArray(a); a }
+  def mkArray(xs: List[asm.Label]): Array[asm.Label] = { val a = new Array[asm.Label](xs.size); xs.copyToArray(a); a }
+  def mkArray(xs: List[Int]):       Array[Int]       = { val a = new Array[Int](xs.size);       xs.copyToArray(a); a }
 
   /** The number of dimensions for array types. */
   final def dimensions(t: BType): Int = {
@@ -2440,7 +2442,10 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
         strs ::= new java.lang.String(ubytesToCharArray(ba))
       }
       assert(strs.size > 1, "encode instead as one String via strEncode()") // TODO too strict?
-      strs.reverse.toArray
+      val arr = new Array[String](strs.size)
+      strs.reverse.copyToArray(arr)
+
+      arr
     }
 
     private def strEncode(sb: ScalaSigBytes): String = {
@@ -2886,7 +2891,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
       jclass.visit(classfileVersion, flags,
                    thisName, thisSignature,
-                   superClass, ifaces.toArray)
+                   superClass, mkArray(ifaces))
       // typestate: entering mode with valid call sequences:
       //   [ visitSource ] [ visitOuterClass ] ( visitAnnotation | visitAttribute )*
 
