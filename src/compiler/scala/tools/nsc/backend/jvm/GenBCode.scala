@@ -675,7 +675,7 @@ abstract class GenBCode extends BCodeTypes {
     def genArrayOp(tree: Tree, code: Int, expectedType: BType): BType = {
       val Apply(Select(arrayObj, _), args) = tree
       val k    = toTypeKind(arrayObj.tpe)
-      val elem = componentType(k)
+      val elem = k.componentType
       genLoad(arrayObj, k)
       val elementType = typeOfArrayOp.getOrElse(code, abort("Unknown operation on arrays: " + tree + " code: " + code))
 

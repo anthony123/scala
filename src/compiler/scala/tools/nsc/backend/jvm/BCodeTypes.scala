@@ -20,6 +20,9 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
   import global._
 
+  // when compiling the Scala library, some assertions don't hold (e.g., scala.Boolean has null superClass although it's not an interface)
+  val isCompilingStdLib = !(settings.sourcepath.isDefault)
+
   object BType {
 
     import global.chrs
@@ -272,12 +275,13 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     }
 
     /**
-     * Returns the type of the elements of this array type. This method should
+     * Returns the (ultimate) element type of this array type. This method should
      * only be used for an array type.
      *
      * @return Returns the type of the elements of this array type.
      */
     def getElementType: BType = {
+      assert(isArray, "Asked for the element type of a non-array type: " + this)
       BType.getType(off + getDimensions)
     }
 
@@ -374,6 +378,31 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     def isRealType = { (sort == BType.FLOAT ) || (sort == BType.DOUBLE) }
 
     def isNumericType = (isIntegralType || isRealType)
+
+    /** Is this type a category 2 type in JVM terms? (ie, is it LONG or DOUBLE?) */
+    def isWideType = (getSize == 2)
+
+    /*
+     * Element vs. Component type of an array:
+     * Quoting from the JVMS, Sec. 2.4 "Reference Types and Values"
+     *
+     *   An array type consists of a component type with a single dimension (whose
+     *   length is not given by the type). The component type of an array type may itself be
+     *   an array type. If, starting from any array type, one considers its component type,
+     *   and then (if that is also an array type) the component type of that type, and so on,
+     *   eventually one must reach a component type that is not an array type; this is called
+     *   the element type of the array type. The element type of an array type is necessarily
+     *   either a primitive type, or a class type, or an interface type.
+     *
+     **/
+
+    /** The type of items this array holds. */
+    def componentType: BType = {
+      assert(isArray, "Asked for the component type of a non-array type: " + this)
+      val reduced = getDimensions - 1
+      if(reduced == 0) getElementType
+      else arrayN(getElementType, reduced)
+    }
 
     // ------------------------------------------------------------------------
     // Conversion to type descriptors
@@ -522,7 +551,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     brefType(newTypeName(iname))
   }
   def brefType(iname: Name): BType = {
-    assert(iname.isInstanceOf[TypeName])
+    assert(iname.isInstanceOf[TypeName], "Non-built-in BTypes require a TypeName.")
     BType.getObjectType(iname.start, iname.length)
   }
 
@@ -683,7 +712,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
     assert(
       c.isNonSpecial &&
-      ( if(sc == null) { (c == ObjectReference) || isInterface     }
+      ( if(sc == null) { (c == ObjectReference) || isInterface || isCompilingStdLib }
         else           { (c != ObjectReference) && !sc.isInterface }
       ) &&
       (ifaces.forall(i => i.c.isNonSpecial && i.isInterface)),
@@ -790,11 +819,13 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     if(csym0 != csym) {
       // Console.println("[BCodeTypes.exemplar()] Tracking different symbol. \n\tWas: " + csym0.fullName.toString + "\n\tNow: " + csym.fullName.toString)
     }
-    assert(!primitiveTypeMap.contains(csym), "primitive types not tracked here: " + csym.fullName)
+
+    assert(!primitiveTypeMap.contains(csym) || isCompilingStdLib, "primitive types not tracked here: " + csym.fullName)
+
     assert(!phantomTypeMap.contains(csym),   "phantom types not tracked here: " + csym.fullName)
 
     val key = brefType(csym.javaBinaryName)
-    assert(key.isNonSpecial, "Not a class to track: " + csym.fullName)
+    assert(key.isNonSpecial || isCompilingStdLib, "Not a class to track: " + csym.fullName)
 
     exemplars.get(key) match {
       case Some(tr) => tr
@@ -817,7 +848,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       else if(csym.isInterface)
         sc == definitions.ObjectClass
       else
-        (sc != NoSymbol) && !sc.isInterface,
+        ((sc != NoSymbol) && !sc.isInterface) || isCompilingStdLib,
       "superClass out of order"
     )
     val ifaces    = getSuperInterfaces(csym) map exemplar;
@@ -848,36 +879,6 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
   def mkArray(xs: Traversable[BType]): Array[BType] = { val a = new Array[BType](xs.size); xs.copyToArray(a); a }
   def mkArray(xs: Traversable[String]):    Array[String]    = { val a = new Array[String](xs.size);    xs.copyToArray(a); a }
-
-  /** Is this type a category 2 type in JVM terms? (ie, is it LONG or DOUBLE?) */
-  final def isWideType(t: BType) = (t.getSize == 2)
-
-  /*
-   * Quoting from the JVMS, Sec. 2.4 "Reference Types and Values"
-   *
-   *   An array type consists of a component type with a single dimension (whose
-   *   length is not given by the type). The component type of an array type may itself be
-   *   an array type. If, starting from any array type, one considers its component type,
-   *   and then (if that is also an array type) the component type of that type, and so on,
-   *   eventually one must reach a component type that is not an array type; this is called
-   *   the element type of the array type. The element type of an array type is necessarily
-   *   either a primitive type, or a class type, or an interface type.
-   *
-   **/
-
-  /** The (ultimate) element type of this array. */
-  final def elementType(t: BType): BType = {
-    assert(t.isArray, "Asked for the element type of a non-array type: " + t)
-    t.getElementType
-  }
-
-  /** The type of items this array holds. */
-  final def componentType(t: BType): BType = {
-    assert(t.isArray, "Asked for the component type of a non-array type: " + t)
-    val reduced = t.getDimensions - 1
-    if(reduced == 0) t.getElementType
-    else arrayN(t.getElementType, reduced)
-  }
 
   /** The number of dimensions for array types. */
   final def dimensions(t: BType): Int = {
@@ -1004,7 +1005,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       if((b == jlCloneableReference)     ||
          (b == jioSerializableReference) ||
          (b == AnyRefReference))    { true  }
-      else if(b.isArray)            { conforms(componentType(a), componentType(b)) }
+      else if(b.isArray)            { conforms(a.componentType, b.componentType) }
       else                          { false }
     }
     else if(a.isBoxed) { // may be null
@@ -1703,9 +1704,9 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       emit(opc)
     }
 
-    final def drop(tk: BType) { emit(if(isWideType(tk)) Opcodes.POP2 else Opcodes.POP) }
+    final def drop(tk: BType) { emit(if(tk.isWideType) Opcodes.POP2 else Opcodes.POP) }
 
-    final def dup(tk: BType)  { emit(if(isWideType(tk)) Opcodes.DUP2 else Opcodes.DUP) }
+    final def dup(tk: BType)  { emit(if(tk.isWideType) Opcodes.DUP2 else Opcodes.DUP) }
 
     // ---------------- field load and store ----------------
 
@@ -2102,6 +2103,14 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       lcaName // ASM caches the answer during the lifetime of a ClassWriter. We outlive that. Not sure whether caching on our side would improve things.
     }
 
+  // -----------------------------------------------------------------------------------------
+  // finding the least upper bound in agreement with the bytecode verifier (given two internal names handed by ASM)
+  // Background:
+  //  http://gallium.inria.fr/~xleroy/publi/bytecode-verification-JAR.pdf
+  //  http://comments.gmane.org/gmane.comp.java.vm.languages/2293
+  //  https://issues.scala-lang.org/browse/SI-3872
+  // -----------------------------------------------------------------------------------------
+
     final def jvmWiseLUB(a: BType, b: BType): BType = {
 
       assert(a.isNonSpecial, "jvmWiseLUB() received a non-plain-class " + a)
@@ -2112,7 +2121,9 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
       val res = Pair(ta.isInterface, tb.isInterface) match {
         case (true, true) =>
-          ???
+          if      (tb.isSubtypeOf(ta.c)) ta.c
+          else if (ta.isSubtypeOf(tb.c)) tb.c
+          else ObjectReference
         case (true, false) =>
           if(tb.isSubtypeOf(a)) a else ObjectReference
         case (false, true) =>
