@@ -888,8 +888,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
   /* the type of 1-dimensional arrays of `elem` type. */
   final def arrayOf(elem: BType): BType = {
-    assert(!(elem.isUnitType) && !(elem.isPhantomType),
-           "The element type of an array type is necessarily either a primitive type, or a class type, or an interface type.")
+    assert(!(elem.isUnitType), "The element type of an array can't be: " + elem)
     brefType("[" + elem.getDescriptor)
   }
 
@@ -1505,7 +1504,8 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     }
 
     final def newarray(elem: BType) { // TODO switch on elem.getSort
-      if(elem.isRefOrArrayType) {
+      if(elem.isRefOrArrayType || elem.isPhantomType ) {
+        /* phantom type at play in `Array(null)`, SI-1513. On the other hand, Array(()) has element type `scala.runtime.BoxedUnit` which hasObjectSort. */
         jmethod.visitTypeInsn(Opcodes.ANEWARRAY, elem.getInternalName)
       } else {
         val rand = {
@@ -2464,7 +2464,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
               case StringTag  =>
                 assert(const.value != null, const) // TODO this invariant isn't documented in `case class Constant`
                 av.visit(name, const.stringValue)  // `stringValue` special-cases null, but that execution path isn't exercised for a const with StringTag
-              case ClazzTag   => av.visit(name, toTypeKind(const.typeValue))
+              case ClazzTag   => av.visit(name, toTypeKind(const.typeValue).toASMType)
               case EnumTag =>
                 val edesc  = descriptor(const.tpe) // the class descriptor of the enumeration class.
                 val evalue = const.symbolValue.name.toString // value the actual enumeration value.
