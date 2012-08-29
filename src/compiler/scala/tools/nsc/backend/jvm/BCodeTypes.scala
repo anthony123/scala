@@ -584,6 +584,9 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
   val ThrowableReference       = brefType("java/lang/Throwable")
   val jlCloneableReference     = brefType("java/lang/Cloneable")
   val jioSerializableReference = brefType("java/io/Serializable")
+  val classCastExceptionType   = brefType("java/lang/ClassCastException")
+  val StringBuilderClassName   = "scala/collection/mutable/StringBuilder"
+  val StringBuilderType        = brefType(StringBuilderClassName)
 
   /** A map from scala primitive type-symbols to BTypes */
   var primitiveTypeMap: Map[Symbol, BType] = null
@@ -596,6 +599,8 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
   /** Maps the method symbol for an unbox method to the primitive type of the result.
    *  For example, the method symbol for `Byte.unbox()`) is mapped to the BType BYTE. */
   var unboxResultType:  Map[Symbol, BType] = null
+
+  var hashMethodSym: Symbol = null // scala.runtime.ScalaRunTime.hash
 
   def initBCodeTypes() {
 
@@ -641,6 +646,8 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     }
 
     // reversePrimitiveMap = (primitiveTypeMap map { case (s, pt) => (s.tpe, pt) } map (_.swap)).toMap
+
+    hashMethodSym = getMember(ScalaRunTimeModule, nme.hash_)
 
   }
 
@@ -1205,10 +1212,6 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     import asm.Opcodes;
     import icodes.opcodes.{ InvokeStyle, Static, Dynamic,  SuperCall }
 
-    val StringBuilderClassName = definitions.StringBuilderClass.javaBinaryName
-    val StringBuilderType      = brefType(StringBuilderClassName)
-    val mdesc_toString         = "()Ljava/lang/String;"
-
     @inline final def emit(opc: Int) { jmethod.visitInsn(opc) }
 
     final def genCallMethod(method:      Symbol, style: InvokeStyle,
@@ -1280,9 +1283,6 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
     } // end of genCallMethod
 
-    final def genPrimitiveNegation(kind: BType) {
-      neg(kind)
-    }
     final def genPrimitiveArithmetic(op: icodes.ArithmeticOp, kind: BType) {
 
       import icodes.{ ADD, SUB, MUL, DIV, REM, NOT }
@@ -1384,10 +1384,10 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     }
 
     final def genStartConcat {
-      jmethod.visitTypeInsn(Opcodes.NEW, StringBuilderClassName.toString)
+      jmethod.visitTypeInsn(Opcodes.NEW, StringBuilderClassName)
       jmethod.visitInsn(Opcodes.DUP)
       invokespecial(
-        StringBuilderClassName.toString,
+        StringBuilderClassName,
         INSTANCE_CONSTRUCTOR_NAME,
         mdesc_arglessvoid
       )
@@ -1399,14 +1399,14 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
         else el;
 
       invokevirtual(
-        StringBuilderClassName.toString,
+        StringBuilderClassName,
         "append",
         BType.getMethodDescriptor(StringBuilderType, Array(jtype))
       )
     }
 
     final def genEndConcat {
-      invokevirtual(StringBuilderClassName.toString, "toString", mdesc_toString)
+      invokevirtual(StringBuilderClassName, "toString", "()Ljava/lang/String;")
     }
 
     /**

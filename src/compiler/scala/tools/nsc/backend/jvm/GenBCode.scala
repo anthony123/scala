@@ -216,7 +216,7 @@ abstract class GenBCode extends BCodeTypes {
     /** If the selector type has a member with the right name,
      *  it is the host class; otherwise the symbol's owner.
      */
-    def findHostClass(selector: Type, sym: Symbol) = selector member sym.name match { // TODO de-duplicate with GenICode
+    def findHostClass(selector: Type, sym: Symbol) = selector member sym.name match {
       case NoSymbol   => log(s"Rejecting $selector as host class for $sym") ; sym.owner
       case _          => selector.typeSymbol
     }
@@ -630,7 +630,7 @@ abstract class GenBCode extends BCodeTypes {
           genLoad(larg, resKind)
           code match {
             case scalaPrimitives.POS => () // nothing
-            case scalaPrimitives.NEG => bc.genPrimitiveNegation(resKind)
+            case scalaPrimitives.NEG => bc.neg(resKind)
             case scalaPrimitives.NOT => bc.genPrimitiveArithmetic(NOT, resKind)
             case _ => abort("Unknown unary operation: " + fun.symbol.fullName + " code: " + code)
           }
@@ -873,7 +873,7 @@ abstract class GenBCode extends BCodeTypes {
         // (2.a) emit case clause proper
         val startHandler = currProgramPoint()
         var endHandler: asm.Label = null
-        var excType: BType     = null
+        var excType: BType = null
         registerCleanup(finCleanup)
         ch match {
           case NamelessEH(typeToDrop, caseBody) =>
@@ -999,7 +999,7 @@ abstract class GenBCode extends BCodeTypes {
 
     def genPrimitiveOp(tree: Apply, expectedType: BType): BType = {
       val sym = tree.symbol
-      val Apply(fun @ Select(receiver, _), args) = tree
+      val Apply(fun @ Select(receiver, _), _) = tree
       val code = scalaPrimitives.getPrimitive(sym, receiver.tpe)
 
       import scalaPrimitives.{isArithmeticOp, isArrayOp, isLogicalOp, isComparisonOp}
@@ -1075,7 +1075,7 @@ abstract class GenBCode extends BCodeTypes {
           generatedType = genThrow(expr)
 
         case New(tpt) =>
-          abort("Unexpected New(" + tpt.summaryString + "/" + tpt + ") received in icode.\n" +
+          abort("Unexpected New(" + tpt.summaryString + "/" + tpt + ") reached GenBCode.\n" +
                 "  Call was genLoad" + ((tree, expectedType)))
 
         case app : Apply =>
@@ -1219,7 +1219,7 @@ abstract class GenBCode extends BCodeTypes {
           else if (l.isValueType) {
             bc drop l
             if (cast) {
-              mnode.visitTypeInsn(asm.Opcodes.NEW, internalName(definitions.ClassCastExceptionClass))
+              mnode.visitTypeInsn(asm.Opcodes.NEW, classCastExceptionType.getInternalName)
               bc dup ObjectReference
               emit(asm.Opcodes.ATHROW)
             } else {
@@ -1227,7 +1227,7 @@ abstract class GenBCode extends BCodeTypes {
             }
           }
           else if (r.isValueType && cast) {
-            assert(false, tree) /* Erasure should have added an unboxing operation to prevent that. */
+            assert(false, "Erasure should have added an unboxing operation to prevent this cast. Tree: " + tree)
           }
           else if (r.isValueType) {
             bc isInstance classLiteral(r)
@@ -1247,7 +1247,7 @@ abstract class GenBCode extends BCodeTypes {
           val invokeStyle = SuperCall(mix)
           // if (fun.symbol.isConstructor) Static(true) else SuperCall(mix);
           mnode.visitVarInsn(asm.Opcodes.ALOAD, 0)
-          genLoadArguments(args, fun.symbol.info.paramTypes)
+          genLoadArguments(args, fun.symbol.info.paramTypes map toTypeKind)
           genCallMethod(fun.symbol, invokeStyle)
           generatedType =
             if (fun.symbol.isConstructor) UNIT
@@ -1266,7 +1266,7 @@ abstract class GenBCode extends BCodeTypes {
 
           generatedType match {
             case arr if generatedType.isArray =>
-              genLoadArguments(args, ctor.info.paramTypes)
+              genLoadArguments(args, ctor.info.paramTypes map toTypeKind)
               val dims = arr.getDimensions
               var elemKind = arr.getElementType
               if (args.length > dims) {
@@ -1285,7 +1285,7 @@ abstract class GenBCode extends BCodeTypes {
               // TODO RE-ENABLE assert(ctor.owner == classSymbol(rt), "Symbol " + ctor.owner.fullName + " is different than " + tpt)
               mnode.visitTypeInsn(asm.Opcodes.NEW, rt.getInternalName)
               bc dup generatedType
-              genLoadArguments(args, ctor.info.paramTypes)
+              genLoadArguments(args, ctor.info.paramTypes map toTypeKind)
               genCallMethod(ctor, Static(true))
 
             case _ =>
@@ -1354,7 +1354,7 @@ abstract class GenBCode extends BCodeTypes {
             )
           } else if (sym.isSetter) {
             // push setter's argument
-            genLoadArguments(args, sym.info.paramTypes)
+            genLoadArguments(args, sym.info.paramTypes map toTypeKind)
             // GETSTATIC `hostClass`.`accessed`
             emit(
               new asm.tree.FieldInsnNode(asm.Opcodes.PUTSTATIC,
@@ -1386,11 +1386,11 @@ abstract class GenBCode extends BCodeTypes {
               genLoadQualifier(fun)
             }
 
-            genLoadArguments(args, sym.info.paramTypes)
+            genLoadArguments(args, sym.info.paramTypes map toTypeKind)
 
             // In "a couple cases", squirrel away a extra information (hostClass, targetTypeKind). TODO Document what "in a couple cases" refers to.
-            var hostClass: Symbol        = null
-            var targetTypeKind: BType = null
+            var hostClass:      Symbol = null
+            var targetTypeKind: BType  = null
             fun match {
               case Select(qual, _) =>
                 val qualSym = findHostClass(qual.tpe, sym)
@@ -1398,7 +1398,7 @@ abstract class GenBCode extends BCodeTypes {
                 else { hostClass = qualSym }
 
                 log(
-                  if (qualSym == ArrayClass) "Stored target type kind " + toTypeKind(qual.tpe) + " for " + sym.fullName
+                  if (qualSym == ArrayClass) "Stored target type kind " + targetTypeKind + " for " + sym.fullName
                   else s"Set more precise host class for ${sym.fullName} hostClass: $qualSym"
                 )
               case _ =>
@@ -1573,8 +1573,8 @@ abstract class GenBCode extends BCodeTypes {
 
     }
 
-    def genLoadArguments(args: List[Tree], tpes: List[Type]) {
-      (args zip tpes) foreach { case (arg, tpe) => genLoad(arg, toTypeKind(tpe)) }
+    def genLoadArguments(args: List[Tree], btpes: List[BType]) {
+      (args zip btpes) foreach { case (arg, btpe) => genLoad(arg, btpe) }
     }
 
     def genLoadModule(tree: Tree): BType = {
@@ -1694,8 +1694,7 @@ abstract class GenBCode extends BCodeTypes {
     def genScalaHash(tree: Tree): BType = {
       genLoadModule(ScalaRunTimeModule) // TODO why load ScalaRunTimeModule if ## has InvokeStyle of Static(false) ?
       genLoad(tree, ObjectReference)
-      val hashMethod = getMember(ScalaRunTimeModule, nme.hash_)
-      genCallMethod(hashMethod, Static(false))
+      genCallMethod(hashMethodSym, Static(false))
 
       INT
     }
@@ -1704,7 +1703,7 @@ abstract class GenBCode extends BCodeTypes {
      * Returns a list of trees that each should be concatenated, from left to right.
      * It turns a chained call like "a".+("b").+("c") into a list of arguments.
      */
-    def liftStringConcat(tree: Tree): List[Tree] = tree match { // TODO de-duplicate with GenICode
+    def liftStringConcat(tree: Tree): List[Tree] = tree match {
       case Apply(fun @ Select(larg, method), rarg) =>
         if (isPrimitive(fun.symbol) &&
             scalaPrimitives.getPrimitive(fun.symbol) == scalaPrimitives.CONCAT)
@@ -1716,10 +1715,15 @@ abstract class GenBCode extends BCodeTypes {
     }
 
     /** Some useful equality helpers. */
-    def isNull(t: Tree) = PartialFunction.cond(t) { case Literal(Constant(null)) => true } // TODO de-duplicate with GenICode
+    def isNull(t: Tree) = {
+      t match {
+        case Literal(Constant(null)) => true
+        case _ => false
+      }
+    }
 
     /* If l or r is constant null, returns the other ; otherwise null */
-    def ifOneIsNull(l: Tree, r: Tree) = if (isNull(l)) r else if (isNull(r)) l else null // TODO de-duplicate with GenICode
+    def ifOneIsNull(l: Tree, r: Tree) = if (isNull(l)) r else if (isNull(r)) l else null
 
     /** Emit code to compare the two top-most stack values using the 'op' operator. */
     private def genCJUMP(success: asm.Label, failure: asm.Label, op: TestOp, tk: BType) {
