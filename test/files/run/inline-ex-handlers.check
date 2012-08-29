@@ -1,29 +1,411 @@
-172c172
-<   locals: value x$1, value x1
----
+0a1,1773
+> object MyException extends runtime.AbstractFunction1, Serializable {
+>   // fields:
+>   
+>   // methods
+>   def toString(): String {
+>   locals: 
+>   startBlock: 1
+>   blocks: [1]
+>   
+>   1: 
+>     92	CONSTANT("MyException")
+>     92	RETURN(REF(class String))
+>     
+>   }
+>   Exception handlers: 
+>     
+>   def apply(message: String (REF(class String))): MyException {
+>   locals: value message
+>   startBlock: 1
+>   blocks: [1]
+>   
+>   1: 
+>     92	NEW REF(class MyException)
+>     92	DUP(REF(class MyException))
+>     92	LOAD_LOCAL(value message)
+>     92	CALL_METHOD MyException.<init> (static-instance)
+>     92	RETURN(REF(class MyException))
+>     
+>   }
+>   Exception handlers: 
+>     
+>   def unapply(x$0: MyException (REF(class MyException))): Option {
+>   locals: value x$0
+>   startBlock: 1
+>   blocks: [1,2,3,4]
+>   
+>   1: 
+>     92	LOAD_LOCAL(value x$0)
+>     92	CZJUMP (REF(class Object))EQ ? 2 : 3
+>     
+>   2: 
+>     92	LOAD_MODULE object None
+>     92	JUMP 4
+>     
+>   3: 
+>     92	NEW REF(class Some)
+>     92	DUP(REF(class Some))
+>     92	LOAD_LOCAL(value x$0)
+>     92	CALL_METHOD MyException.message (dynamic)
+>     92	CALL_METHOD scala.Some.<init> (static-instance)
+>     92	JUMP 4
+>     
+>   4: 
+>     92	RETURN(REF(class Option))
+>     
+>   }
+>   Exception handlers: 
+>     
+>   def readResolve(): Object {
+>   locals: 
+>   startBlock: 1
+>   blocks: [1]
+>   
+>   1: 
+>     92	LOAD_MODULE object MyException
+>     92	RETURN(REF(class Object))
+>     
+>   }
+>   Exception handlers: 
+>     
+>   def apply(v1: Object (REF(class Object))): Object {
+>   locals: value v1
+>   startBlock: 1
+>   blocks: [1]
+>   
+>   1: 
+>     92	THIS(MyException)
+>     92	LOAD_LOCAL(value v1)
+>     92	CHECK_CAST REF(class String)
+>     92	CALL_METHOD MyException.apply (dynamic)
+>     92	RETURN(REF(class Object))
+>     
+>   }
+>   Exception handlers: 
+>     
+>   def <init>(): MyException.type {
+>   locals: 
+>   startBlock: 1
+>   blocks: [1]
+>   
+>   1: 
+>     92	THIS(MyException)
+>     92	CALL_METHOD scala.runtime.AbstractFunction1.<init> (super())
+>     92	RETURN(UNIT)
+>     
+>   }
+>   Exception handlers: 
+>     
+>   
+> }
+> class MyException extends RuntimeException, Product, Serializable {
+>   // fields:
+>   val message: String
+>   
+>   // methods
+>   def message(): String {
+>   locals: 
+>   startBlock: 1
+>   blocks: [1]
+>   
+>   1: 
+>     92	THIS(MyException)
+>     92	LOAD_FIELD value message
+>     92	RETURN(REF(class String))
+>     
+>   }
+>   Exception handlers: 
+>     
+>   def copy(message: String (REF(class String))): MyException {
+>   locals: value message
+>   startBlock: 1
+>   blocks: [1]
+>   
+>   1: 
+>     92	NEW REF(class MyException)
+>     92	DUP(REF(class MyException))
+>     92	LOAD_LOCAL(value message)
+>     92	CALL_METHOD MyException.<init> (static-instance)
+>     92	RETURN(REF(class MyException))
+>     
+>   }
+>   Exception handlers: 
+>     
+>   def copy$default$1(): String {
+>   locals: 
+>   startBlock: 1
+>   blocks: [1]
+>   
+>   1: 
+>     92	THIS(MyException)
+>     92	CALL_METHOD MyException.message (dynamic)
+>     92	RETURN(REF(class String))
+>     
+>   }
+>   Exception handlers: 
+>     
+>   def productPrefix(): String {
+>   locals: 
+>   startBlock: 1
+>   blocks: [1]
+>   
+>   1: 
+>     92	CONSTANT("MyException")
+>     92	RETURN(REF(class String))
+>     
+>   }
+>   Exception handlers: 
+>     
+>   def productArity(): Int {
+>   locals: 
+>   startBlock: 1
+>   blocks: [1]
+>   
+>   1: 
+>     92	CONSTANT(1)
+>     92	RETURN(INT)
+>     
+>   }
+>   Exception handlers: 
+>     
+>   def productElement(x$1: Int (INT)): Object {
 >   locals: value x$1, value x1, variable boxed1
-174c174
-<   blocks: [1,2,3,4]
----
+>   startBlock: 1
 >   blocks: [1,3,4]
-186a187,188
+>   
+>   1: 
+>     92	LOAD_LOCAL(value x$1)
+>     92	STORE_LOCAL(value x1)
+>     92	SCOPE_ENTER value x1
+>     92	LOAD_LOCAL(value x1)
+>     92	SWITCH ...
+>     
+>   4: 
+>     92	NEW REF(class IndexOutOfBoundsException)
+>     92	DUP(REF(class IndexOutOfBoundsException))
+>     92	LOAD_LOCAL(value x$1)
 >     92	STORE_LOCAL(variable boxed1)
 >     92	LOAD_LOCAL(variable boxed1)
-195,197d196
-<     92	JUMP 2
-<     
-<   2: 
-383c382
-<   locals: value args, variable result, value ex6, value x4, value x5, value message, value x
----
+>     92	BOX INT
+>     92	CALL_METHOD java.lang.Object.toString (dynamic)
+>     92	CALL_METHOD java.lang.IndexOutOfBoundsException.<init> (static-instance)
+>     92	THROW(IndexOutOfBoundsException)
+>     
+>   3: 
+>     92	THIS(MyException)
+>     92	CALL_METHOD MyException.message (dynamic)
+>     92	RETURN(REF(class Object))
+>     
+>   }
+>   Exception handlers: 
+>     
+>   def productIterator(): Iterator {
+>   locals: 
+>   startBlock: 1
+>   blocks: [1]
+>   
+>   1: 
+>     92	LOAD_MODULE object ScalaRunTime
+>     92	THIS(MyException)
+>     92	CALL_METHOD scala.runtime.ScalaRunTime.typedProductIterator (dynamic)
+>     92	RETURN(REF(trait Iterator))
+>     
+>   }
+>   Exception handlers: 
+>     
+>   def canEqual(x$1: Object (REF(class Object))): Boolean {
+>   locals: value x$1
+>   startBlock: 1
+>   blocks: [1]
+>   
+>   1: 
+>     92	LOAD_LOCAL(value x$1)
+>     92	IS_INSTANCE REF(class MyException)
+>     92	RETURN(BOOL)
+>     
+>   }
+>   Exception handlers: 
+>     
+>   def _1(): String {
+>   locals: 
+>   startBlock: 1
+>   blocks: [1]
+>   
+>   1: 
+>     92	THIS(MyException)
+>     92	CALL_METHOD MyException.message (dynamic)
+>     92	RETURN(REF(class String))
+>     
+>   }
+>   Exception handlers: 
+>     
+>   def hashCode(): Int {
+>   locals: 
+>   startBlock: 1
+>   blocks: [1]
+>   
+>   1: 
+>     92	LOAD_MODULE object ScalaRunTime
+>     92	THIS(MyException)
+>     92	CALL_METHOD scala.runtime.ScalaRunTime._hashCode (dynamic)
+>     92	RETURN(INT)
+>     
+>   }
+>   Exception handlers: 
+>     
+>   def equals(x$1: Object (REF(class Object))): Boolean {
+>   locals: value x$1, value MyException$1, variable eqEqTemp$1
+>   startBlock: 1
+>   blocks: [1,2,3,4,5,6,7,8,9,10,11,12]
+>   
+>   1: 
+>     92	THIS(MyException)
+>     92	LOAD_LOCAL(value x$1)
+>     92	CJUMP (REF(type AnyRef))EQ ? 2 : 5
+>     
+>   5: 
+>     92	LOAD_LOCAL(value x$1)
+>     92	IS_INSTANCE REF(class MyException)
+>     92	CZJUMP (BOOL)NE ? 6 : 3
+>     
+>   6: 
+>     92	LOAD_LOCAL(value x$1)
+>     92	CHECK_CAST REF(class MyException)
+>     92	STORE_LOCAL(value MyException$1)
+>     92	SCOPE_ENTER value MyException$1
+>     92	THIS(MyException)
+>     92	CALL_METHOD MyException.message (dynamic)
+>     92	LOAD_LOCAL(value MyException$1)
+>     92	CALL_METHOD MyException.message (dynamic)
+>     92	STORE_LOCAL(variable eqEqTemp$1)
+>     92	DUP(REF(class Object))
+>     92	CZJUMP (REF(class Object))EQ ? 11 : 12
+>     
+>   11: 
+>     92	DROP REF(class Object)
+>     92	LOAD_LOCAL(variable eqEqTemp$1)
+>     92	CZJUMP (REF(class Object))EQ ? 10 : 8
+>     
+>   12: 
+>     92	LOAD_LOCAL(variable eqEqTemp$1)
+>     92	CALL_METHOD java.lang.Object.equals (dynamic)
+>     92	CZJUMP (BOOL)NE ? 10 : 8
+>     
+>   10: 
+>     92	LOAD_LOCAL(value MyException$1)
+>     92	THIS(MyException)
+>     92	CALL_METHOD MyException.canEqual (dynamic)
+>     92	CZJUMP (BOOL)NE ? 7 : 8
+>     
+>   7: 
+>     92	CONSTANT(true)
+>     92	JUMP 9
+>     
+>   8: 
+>     92	CONSTANT(false)
+>     92	JUMP 9
+>     
+>   9: 
+>     ?	CZJUMP (BOOL)NE ? 2 : 3
+>     
+>   2: 
+>     92	CONSTANT(true)
+>     92	JUMP 4
+>     
+>   3: 
+>     92	CONSTANT(false)
+>     92	JUMP 4
+>     
+>   4: 
+>     92	RETURN(BOOL)
+>     
+>   }
+>   Exception handlers: 
+>     
+>   def <init>(message: String (REF(class String))): MyException {
+>   locals: value message
+>   startBlock: 1
+>   blocks: [1]
+>   
+>   1: 
+>     92	THIS(MyException)
+>     92	LOAD_LOCAL(value message)
+>     92	STORE_FIELD value message (dynamic)
+>     92	THIS(MyException)
+>     92	LOAD_LOCAL(value message)
+>     92	CALL_METHOD java.lang.RuntimeException.<init> (super())
+>     92	THIS(MyException)
+>     92	CALL_METHOD scala.Product$class.$init$ (static-class)
+>     92	RETURN(UNIT)
+>     
+>   }
+>   Exception handlers: 
+>     
+>   
+> }
+> object Test extends tools.partest.IcodeTest {
+>   // fields:
+>   
+>   // methods
+>   def printIcodeAfterPhase(): String {
+>   locals: 
+>   startBlock: 1
+>   blocks: [1]
+>   
+>   1: 
+>     4	CONSTANT("inlineExceptionHandlers")
+>     4	RETURN(REF(class String))
+>     
+>   }
+>   Exception handlers: 
+>     
+>   def <init>(): Test.type {
+>   locals: 
+>   startBlock: 1
+>   blocks: [1]
+>   
+>   1: 
+>     3	THIS(Test)
+>     3	CALL_METHOD scala.tools.partest.IcodeTest.<init> (super())
+>     3	RETURN(UNIT)
+>     
+>   }
+>   Exception handlers: 
+>     
+>   
+> }
+> object TestInlineHandlersCaseClassExceptionInline extends Object {
+>   // fields:
+>   
+>   // methods
+>   def main(args: Array[String] (ARRAY[REF(class String)])): Unit {
 >   locals: value args, variable result, value ex6, value x4, value x5, value x
-385c384
-<   blocks: [1,2,3,4,5,8,11,13,14,16]
----
+>   startBlock: 1
 >   blocks: [1,2,3,5,8,11,13,14,16,17]
-409c408,417
-<     103	THROW(MyException)
----
+>   
+>   1: 
+>     98	LOAD_MODULE object Predef
+>     98	CONSTANT("TestInlineHandlersCaseClassExceptionInline")
+>     98	CALL_METHOD scala.Predef.println (dynamic)
+>     99	CONSTANT(-1)
+>     99	STORE_LOCAL(variable result)
+>     99	SCOPE_ENTER variable result
+>     99	JUMP 13
+>     
+>   13: 
+>     102	LOAD_MODULE object Random
+>     102	CALL_METHOD scala.util.Random.nextInt (dynamic)
+>     102	CONSTANT(2)
+>     102	CALL_PRIMITIVE(Arithmetic(REM,INT))
+>     102	CONSTANT(0)
+>     102	CJUMP (INT)EQ ? 14 : 16
+>     
+>   14: 
+>     103	NEW REF(class MyException)
+>     103	DUP(REF(class MyException))
+>     103	CONSTANT("something")
+>     103	CALL_METHOD MyException.<init> (static-instance)
 >     ?	STORE_LOCAL(value ex6)
 >     ?	JUMP 17
 >     
@@ -34,40 +416,151 @@
 >     106	LOAD_LOCAL(value x4)
 >     106	IS_INSTANCE REF(class MyException)
 >     106	CZJUMP (BOOL)NE ? 5 : 11
-422,424d429
-<     101	JUMP 4
-<     
-<   4: 
-438,441d442
-<     106	LOAD_LOCAL(value x5)
-<     106	CALL_METHOD MyException.message (dynamic)
-<     106	STORE_LOCAL(value message)
-<     106	SCOPE_ENTER value message
-443c444,445
-<     106	LOAD_LOCAL(value message)
----
+>     
+>   16: 
+>     104	CONSTANT(1)
+>     104	STORE_LOCAL(variable result)
+>     104	JUMP 2
+>     
+>   3: 
+>     101	LOAD_EXCEPTION(class Throwable)
+>     101	STORE_LOCAL(value ex6)
+>     101	LOAD_LOCAL(value ex6)
+>     101	STORE_LOCAL(value x4)
+>     101	SCOPE_ENTER value x4
+>     106	LOAD_LOCAL(value x4)
+>     106	IS_INSTANCE REF(class MyException)
+>     106	CZJUMP (BOOL)NE ? 5 : 11
+>     
+>   5: 
+>     106	LOAD_LOCAL(value x4)
+>     106	CHECK_CAST REF(class MyException)
+>     106	STORE_LOCAL(value x5)
+>     106	SCOPE_ENTER value x5
+>     106	LOAD_LOCAL(value x5)
+>     106	CZJUMP (REF(class Object))NE ? 8 : 11
+>     
+>   8: 
+>     106	LOAD_MODULE object Predef
 >     ?	LOAD_LOCAL(value x5)
 >     ?	CALL_METHOD MyException.message (dynamic)
-515c517
-<   blocks: [1,2,3,4,6,7,8,9,10]
----
+>     106	CALL_METHOD scala.Predef.println (dynamic)
+>     106	LOAD_FIELD scala.runtime.BoxedUnit.UNIT
+>     106	STORE_LOCAL(value x)
+>     106	JUMP 2
+>     
+>   2: 
+>     109	LOAD_LOCAL(variable result)
+>     109	DROP INT
+>     109	SCOPE_EXIT variable result
+>     109	RETURN(UNIT)
+>     
+>   11: 
+>     101	LOAD_LOCAL(value ex6)
+>     101	THROW(Throwable)
+>     
+>   }
+>   Exception handlers: 
+>     catch (Throwable) in ArrayBuffer(13, 14, 16) starting at: 3
+>       consisting of blocks: List(11, 8, 5, 4, 3)
+>       with finalizer: null
+>     
+>   def <init>(): TestInlineHandlersCaseClassExceptionInline.type {
+>   locals: 
+>   startBlock: 1
+>   blocks: [1]
+>   
+>   1: 
+>     95	THIS(TestInlineHandlersCaseClassExceptionInline)
+>     95	CALL_METHOD java.lang.Object.<init> (super())
+>     95	RETURN(UNIT)
+>     
+>   }
+>   Exception handlers: 
+>     
+>   
+> }
+> object TestInlineHandlersDoubleNoLocal extends Object {
+>   // fields:
+>   val a1: String
+>   val a2: String
+>   
+>   // methods
+>   def a1(): String {
+>   locals: 
+>   startBlock: 1
+>   blocks: [1]
+>   
+>   1: 
+>     297	THIS(TestInlineHandlersDoubleNoLocal)
+>     297	LOAD_FIELD value a1
+>     297	RETURN(REF(class String))
+>     
+>   }
+>   Exception handlers: 
+>     
+>   def a2(): String {
+>   locals: 
+>   startBlock: 1
+>   blocks: [1]
+>   
+>   1: 
+>     298	THIS(TestInlineHandlersDoubleNoLocal)
+>     298	LOAD_FIELD value a2
+>     298	RETURN(REF(class String))
+>     
+>   }
+>   Exception handlers: 
+>     
+>   def main(args: Array[String] (ARRAY[REF(class String)])): Unit {
+>   locals: value args, value t, variable monitor3, variable monitor4
+>   startBlock: 1
 >   blocks: [1,2,3,4,6,7,8,9,10,11,12,13]
-544c546,551
-<     306	THROW(MyException)
----
+>   
+>   1: 
+>     301	LOAD_MODULE object Predef
+>     301	CONSTANT("TestInlineHandlersDoubleNoLocal")
+>     301	CALL_METHOD scala.Predef.println (dynamic)
+>     301	JUMP 4
+>     
+>   4: 
+>     304	THIS(TestInlineHandlersDoubleNoLocal)
+>     304	CALL_METHOD TestInlineHandlersDoubleNoLocal.a1 (dynamic)
+>     ?	DUP(REF(class Object))
+>     ?	STORE_LOCAL(variable monitor3)
+>     304	MONITOR_ENTER
+>     304	JUMP 7
+>     
+>   7: 
+>     305	THIS(TestInlineHandlersDoubleNoLocal)
+>     305	CALL_METHOD TestInlineHandlersDoubleNoLocal.a2 (dynamic)
+>     ?	DUP(REF(class Object))
+>     ?	STORE_LOCAL(variable monitor4)
+>     305	MONITOR_ENTER
+>     305	JUMP 10
+>     
+>   10: 
+>     306	NEW REF(class MyException)
+>     306	DUP(REF(class MyException))
+>     306	CONSTANT("crash")
+>     306	CALL_METHOD MyException.<init> (static-instance)
 >     ?	JUMP 11
 >     
 >   11: 
 >     ?	LOAD_LOCAL(variable monitor4)
 >     305	MONITOR_EXIT
 >     ?	JUMP 12
-550c557
-<     ?	THROW(Throwable)
----
+>     
+>   9: 
+>     305	LOAD_EXCEPTION(class Throwable)
+>     ?	LOAD_LOCAL(variable monitor4)
+>     305	MONITOR_EXIT
 >     ?	JUMP 12
-556c563,570
-<     ?	THROW(Throwable)
----
+>     
+>   6: 
+>     304	LOAD_EXCEPTION(class Throwable)
+>     ?	LOAD_LOCAL(variable monitor3)
+>     304	MONITOR_EXIT
 >     ?	STORE_LOCAL(value t)
 >     ?	JUMP 13
 >     
@@ -76,7 +569,21 @@
 >     304	MONITOR_EXIT
 >     ?	STORE_LOCAL(value t)
 >     ?	JUMP 13
-571a586,597
+>     
+>   3: 
+>     303	LOAD_EXCEPTION(class Throwable)
+>     310	STORE_LOCAL(value t)
+>     310	LOAD_MODULE object Predef
+>     310	CALL_PRIMITIVE(StartConcat)
+>     310	CONSTANT("Caught crash: ")
+>     310	CALL_PRIMITIVE(StringConcat(REF(class String)))
+>     310	LOAD_LOCAL(value t)
+>     310	CALL_METHOD java.lang.Throwable.toString (dynamic)
+>     310	CALL_PRIMITIVE(StringConcat(REF(class String)))
+>     310	CALL_PRIMITIVE(EndConcat)
+>     310	CALL_METHOD scala.Predef.println (dynamic)
+>     310	JUMP 2
+>     
 >   13: 
 >     310	LOAD_MODULE object Predef
 >     310	CALL_PRIMITIVE(StartConcat)
@@ -89,21 +596,73 @@
 >     310	CALL_METHOD scala.Predef.println (dynamic)
 >     310	JUMP 2
 >     
-580c606
-<     catch (Throwable) in ArrayBuffer(7, 8, 9, 10) starting at: 6
----
+>   2: 
+>     300	RETURN(UNIT)
+>     
+>   }
+>   Exception handlers: 
+>     catch (Throwable) in ArrayBuffer(10) starting at: 9
+>       consisting of blocks: List(9)
+>       with finalizer: null
 >     catch (Throwable) in ArrayBuffer(7, 8, 9, 10, 11) starting at: 6
-583c609
-<     catch (Throwable) in ArrayBuffer(4, 6, 7, 8, 9, 10) starting at: 3
----
+>       consisting of blocks: List(6)
+>       with finalizer: null
 >     catch (Throwable) in ArrayBuffer(4, 6, 7, 8, 9, 10, 11, 12) starting at: 3
-615c641
-<   blocks: [1,2,3,4,5,6,7,9,10]
----
+>       consisting of blocks: List(3)
+>       with finalizer: null
+>     
+>   def <init>(): TestInlineHandlersDoubleNoLocal.type {
+>   locals: 
+>   startBlock: 1
+>   blocks: [1]
+>   
+>   1: 
+>     295	THIS(TestInlineHandlersDoubleNoLocal)
+>     295	CALL_METHOD java.lang.Object.<init> (super())
+>     297	THIS(TestInlineHandlersDoubleNoLocal)
+>     297	CONSTANT("a")
+>     297	STORE_FIELD value a1 (dynamic)
+>     298	THIS(TestInlineHandlersDoubleNoLocal)
+>     298	CONSTANT("b")
+>     298	STORE_FIELD value a2 (dynamic)
+>     298	RETURN(UNIT)
+>     
+>   }
+>   Exception handlers: 
+>     
+>   
+> }
+> object TestInlineHandlersFinallyInline extends Object {
+>   // fields:
+>   
+>   // methods
+>   def main(args: Array[String] (ARRAY[REF(class String)])): Unit {
+>   locals: value args, variable result, value e, variable exc1
+>   startBlock: 1
 >   blocks: [1,2,3,4,5,6,7,9,10,11,12]
-639c665,671
-<     78	THROW(IllegalArgumentException)
----
+>   
+>   1: 
+>     73	LOAD_MODULE object Predef
+>     73	CONSTANT("TestInlineHandlersFinallyInline")
+>     73	CALL_METHOD scala.Predef.println (dynamic)
+>     74	CONSTANT(-1)
+>     74	STORE_LOCAL(variable result)
+>     74	SCOPE_ENTER variable result
+>     74	JUMP 6
+>     
+>   6: 
+>     77	LOAD_MODULE object Random
+>     77	CALL_METHOD scala.util.Random.nextInt (dynamic)
+>     77	CONSTANT(2)
+>     77	CALL_PRIMITIVE(Arithmetic(REM,INT))
+>     77	CONSTANT(0)
+>     77	CJUMP (INT)EQ ? 7 : 9
+>     
+>   7: 
+>     78	NEW REF(class IllegalArgumentException)
+>     78	DUP(REF(class IllegalArgumentException))
+>     78	CONSTANT("something")
+>     78	CALL_METHOD java.lang.IllegalArgumentException.<init> (static-instance)
 >     ?	STORE_LOCAL(value e)
 >     ?	JUMP 11
 >     
@@ -111,12 +670,52 @@
 >     81	LOAD_LOCAL(value e)
 >     ?	STORE_LOCAL(variable exc1)
 >     ?	JUMP 12
-668c700,701
-<     81	THROW(Exception)
----
+>     
+>   9: 
+>     79	CONSTANT(1)
+>     79	STORE_LOCAL(variable result)
+>     79	JUMP 10
+>     
+>   10: 
+>     83	LOAD_MODULE object Predef
+>     83	CONSTANT("finally")
+>     83	CALL_METHOD scala.Predef.println (dynamic)
+>     84	LOAD_LOCAL(variable result)
+>     84	CONSTANT(1)
+>     84	CALL_PRIMITIVE(Arithmetic(SUB,INT))
+>     84	CONSTANT(2)
+>     84	CALL_PRIMITIVE(Arithmetic(DIV,INT))
+>     84	STORE_LOCAL(variable result)
+>     84	JUMP 2
+>     
+>   2: 
+>     87	LOAD_LOCAL(variable result)
+>     87	DROP INT
+>     87	SCOPE_EXIT variable result
+>     87	RETURN(UNIT)
+>     
+>   4: 
+>     76	LOAD_EXCEPTION(class Exception)
+>     81	STORE_LOCAL(value e)
+>     81	LOAD_LOCAL(value e)
 >     ?	STORE_LOCAL(variable exc1)
 >     ?	JUMP 12
-684a718,730
+>     
+>   3: 
+>     82	LOAD_EXCEPTION(class Throwable)
+>     82	STORE_LOCAL(variable exc1)
+>     83	LOAD_MODULE object Predef
+>     83	CONSTANT("finally")
+>     83	CALL_METHOD scala.Predef.println (dynamic)
+>     84	LOAD_LOCAL(variable result)
+>     84	CONSTANT(1)
+>     84	CALL_PRIMITIVE(Arithmetic(SUB,INT))
+>     84	CONSTANT(2)
+>     84	CALL_PRIMITIVE(Arithmetic(DIV,INT))
+>     84	STORE_LOCAL(variable result)
+>     84	LOAD_LOCAL(variable exc1)
+>     84	THROW(Throwable)
+>     
 >   12: 
 >     83	LOAD_MODULE object Predef
 >     83	CONSTANT("finally")
@@ -130,21 +729,61 @@
 >     84	LOAD_LOCAL(variable exc1)
 >     84	THROW(Throwable)
 >     
-690c736
-<     catch (<none>) in ArrayBuffer(4, 6, 7, 9) starting at: 3
----
+>   }
+>   Exception handlers: 
+>     catch (Exception) in ArrayBuffer(6, 7, 9) starting at: 4
+>       consisting of blocks: List(4)
+>       with finalizer: null
 >     catch (<none>) in ArrayBuffer(4, 6, 7, 9, 11) starting at: 3
-714c760
-<   locals: value args, variable result, value ex6, variable exc2, value x4, value x5, value message, value x, value ex6, value x4, value x5, value message, value x
----
+>       consisting of blocks: List(3)
+>       with finalizer: null
+>     
+>   def <init>(): TestInlineHandlersFinallyInline.type {
+>   locals: 
+>   startBlock: 1
+>   blocks: [1]
+>   
+>   1: 
+>     70	THIS(TestInlineHandlersFinallyInline)
+>     70	CALL_METHOD java.lang.Object.<init> (super())
+>     70	RETURN(UNIT)
+>     
+>   }
+>   Exception handlers: 
+>     
+>   
+> }
+> object TestInlineHandlersNestedHandlerAllInline extends Object {
+>   // fields:
+>   
+>   // methods
+>   def main(args: Array[String] (ARRAY[REF(class String)])): Unit {
 >   locals: value args, variable result, value ex6, variable exc2, value x4, value x5, value x, value ex6, value x4, value x5, value x
-716c762
-<   blocks: [1,2,3,4,5,6,9,12,14,17,18,19,22,25,27,28,30,31]
----
+>   startBlock: 1
 >   blocks: [1,2,3,4,5,6,9,12,14,17,18,19,22,25,27,28,30,31,32,33,34]
-740c786,793
-<     172	THROW(MyException)
----
+>   
+>   1: 
+>     166	LOAD_MODULE object Predef
+>     166	CONSTANT("TestInlineHandlersNestedHandlersOuterInline")
+>     166	CALL_METHOD scala.Predef.println (dynamic)
+>     167	CONSTANT(-1)
+>     167	STORE_LOCAL(variable result)
+>     167	SCOPE_ENTER variable result
+>     167	JUMP 27
+>     
+>   27: 
+>     171	LOAD_MODULE object Random
+>     171	CALL_METHOD scala.util.Random.nextInt (dynamic)
+>     171	CONSTANT(2)
+>     171	CALL_PRIMITIVE(Arithmetic(REM,INT))
+>     171	CONSTANT(0)
+>     171	CJUMP (INT)EQ ? 28 : 30
+>     
+>   28: 
+>     172	NEW REF(class MyException)
+>     172	DUP(REF(class MyException))
+>     172	CONSTANT("something")
+>     172	CALL_METHOD MyException.<init> (static-instance)
 >     ?	STORE_LOCAL(value ex6)
 >     ?	JUMP 32
 >     
@@ -153,64 +792,129 @@
 >     170	STORE_LOCAL(value x4)
 >     170	SCOPE_ENTER value x4
 >     170	JUMP 18
-787,790d839
-<     175	LOAD_LOCAL(value x5)
-<     175	CALL_METHOD MyException.message (dynamic)
-<     175	STORE_LOCAL(value message)
-<     175	SCOPE_ENTER value message
-792c841,842
-<     176	LOAD_LOCAL(value message)
----
+>     
+>   30: 
+>     173	CONSTANT(1)
+>     173	STORE_LOCAL(variable result)
+>     173	JUMP 31
+>     
+>   31: 
+>     184	LOAD_MODULE object Predef
+>     184	CONSTANT("finally")
+>     184	CALL_METHOD scala.Predef.println (dynamic)
+>     185	LOAD_LOCAL(variable result)
+>     185	CONSTANT(1)
+>     185	CALL_PRIMITIVE(Arithmetic(SUB,INT))
+>     185	CONSTANT(2)
+>     185	CALL_PRIMITIVE(Arithmetic(DIV,INT))
+>     185	STORE_LOCAL(variable result)
+>     185	JUMP 2
+>     
+>   2: 
+>     188	LOAD_LOCAL(variable result)
+>     188	DROP INT
+>     188	SCOPE_EXIT variable result
+>     188	RETURN(UNIT)
+>     
+>   17: 
+>     170	LOAD_EXCEPTION(class Throwable)
+>     170	STORE_LOCAL(value ex6)
+>     170	LOAD_LOCAL(value ex6)
+>     170	STORE_LOCAL(value x4)
+>     170	SCOPE_ENTER value x4
+>     170	JUMP 18
+>     
+>   18: 
+>     175	LOAD_LOCAL(value x4)
+>     175	IS_INSTANCE REF(class MyException)
+>     175	CZJUMP (BOOL)NE ? 19 : 25
+>     
+>   19: 
+>     175	LOAD_LOCAL(value x4)
+>     175	CHECK_CAST REF(class MyException)
+>     175	STORE_LOCAL(value x5)
+>     175	SCOPE_ENTER value x5
+>     175	LOAD_LOCAL(value x5)
+>     175	CZJUMP (REF(class Object))NE ? 22 : 25
+>     
+>   22: 
+>     176	LOAD_MODULE object Predef
 >     ?	LOAD_LOCAL(value x5)
 >     ?	CALL_METHOD MyException.message (dynamic)
-796c846,847
-<     177	LOAD_LOCAL(value message)
----
+>     176	CALL_METHOD scala.Predef.println (dynamic)
+>     177	NEW REF(class MyException)
+>     177	DUP(REF(class MyException))
 >     ?	LOAD_LOCAL(value x5)
 >     ?	CALL_METHOD MyException.message (dynamic)
-798c849,850
-<     177	THROW(MyException)
----
+>     177	CALL_METHOD MyException.<init> (static-instance)
 >     ?	STORE_LOCAL(value ex6)
 >     ?	JUMP 33
-802c854,855
-<     170	THROW(Throwable)
----
+>     
+>   25: 
+>     170	LOAD_LOCAL(value ex6)
 >     ?	STORE_LOCAL(value ex6)
 >     ?	JUMP 33
-811a865,870
+>     
+>   4: 
+>     169	LOAD_EXCEPTION(class Throwable)
+>     169	STORE_LOCAL(value ex6)
+>     169	LOAD_LOCAL(value ex6)
+>     169	STORE_LOCAL(value x4)
+>     169	SCOPE_ENTER value x4
+>     169	JUMP 5
+>     
 >   33: 
 >     169	LOAD_LOCAL(value ex6)
 >     169	STORE_LOCAL(value x4)
 >     169	SCOPE_ENTER value x4
 >     169	JUMP 5
 >     
-826,829d884
-<     180	LOAD_LOCAL(value x5)
-<     180	CALL_METHOD MyException.message (dynamic)
-<     180	STORE_LOCAL(value message)
-<     180	SCOPE_ENTER value message
-831c886,887
-<     181	LOAD_LOCAL(value message)
----
+>   5: 
+>     180	LOAD_LOCAL(value x4)
+>     180	IS_INSTANCE REF(class MyException)
+>     180	CZJUMP (BOOL)NE ? 6 : 12
+>     
+>   6: 
+>     180	LOAD_LOCAL(value x4)
+>     180	CHECK_CAST REF(class MyException)
+>     180	STORE_LOCAL(value x5)
+>     180	SCOPE_ENTER value x5
+>     180	LOAD_LOCAL(value x5)
+>     180	CZJUMP (REF(class Object))NE ? 9 : 12
+>     
+>   9: 
+>     181	LOAD_MODULE object Predef
 >     ?	LOAD_LOCAL(value x5)
 >     ?	CALL_METHOD MyException.message (dynamic)
-835c891,892
-<     182	LOAD_LOCAL(value message)
----
+>     181	CALL_METHOD scala.Predef.println (dynamic)
+>     182	NEW REF(class MyException)
+>     182	DUP(REF(class MyException))
 >     ?	LOAD_LOCAL(value x5)
 >     ?	CALL_METHOD MyException.message (dynamic)
-837c894,895
-<     182	THROW(MyException)
----
+>     182	CALL_METHOD MyException.<init> (static-instance)
 >     ?	STORE_LOCAL(variable exc2)
 >     ?	JUMP 34
-841c899,900
-<     169	THROW(Throwable)
----
+>     
+>   12: 
+>     169	LOAD_LOCAL(value ex6)
 >     ?	STORE_LOCAL(variable exc2)
 >     ?	JUMP 34
-857a917,929
+>     
+>   3: 
+>     183	LOAD_EXCEPTION(class Throwable)
+>     183	STORE_LOCAL(variable exc2)
+>     184	LOAD_MODULE object Predef
+>     184	CONSTANT("finally")
+>     184	CALL_METHOD scala.Predef.println (dynamic)
+>     185	LOAD_LOCAL(variable result)
+>     185	CONSTANT(1)
+>     185	CALL_PRIMITIVE(Arithmetic(SUB,INT))
+>     185	CONSTANT(2)
+>     185	CALL_PRIMITIVE(Arithmetic(DIV,INT))
+>     185	STORE_LOCAL(variable result)
+>     185	LOAD_LOCAL(variable exc2)
+>     185	THROW(Throwable)
+>     
 >   34: 
 >     184	LOAD_MODULE object Predef
 >     184	CONSTANT("finally")
@@ -224,25 +928,64 @@
 >     185	LOAD_LOCAL(variable exc2)
 >     185	THROW(Throwable)
 >     
-863c935
-<     catch (Throwable) in ArrayBuffer(17, 18, 19, 22, 25, 27, 28, 30) starting at: 4
----
+>   }
+>   Exception handlers: 
+>     catch (Throwable) in ArrayBuffer(27, 28, 30) starting at: 17
+>       consisting of blocks: List(25, 22, 19, 18, 17)
+>       with finalizer: null
 >     catch (Throwable) in ArrayBuffer(17, 18, 19, 22, 25, 27, 28, 30, 32) starting at: 4
-866c938
-<     catch (<none>) in ArrayBuffer(4, 5, 6, 9, 12, 17, 18, 19, 22, 25, 27, 28, 30) starting at: 3
----
+>       consisting of blocks: List(12, 9, 6, 5, 4)
+>       with finalizer: null
 >     catch (<none>) in ArrayBuffer(4, 5, 6, 9, 12, 17, 18, 19, 22, 25, 27, 28, 30, 32, 33) starting at: 3
-890c962
-<   locals: value args, variable result, value e, value ex6, value x4, value x5, value message, value x
----
+>       consisting of blocks: List(3)
+>       with finalizer: null
+>     
+>   def <init>(): TestInlineHandlersNestedHandlerAllInline.type {
+>   locals: 
+>   startBlock: 1
+>   blocks: [1]
+>   
+>   1: 
+>     163	THIS(TestInlineHandlersNestedHandlerAllInline)
+>     163	CALL_METHOD java.lang.Object.<init> (super())
+>     163	RETURN(UNIT)
+>     
+>   }
+>   Exception handlers: 
+>     
+>   
+> }
+> object TestInlineHandlersNestedHandlerInnerInline extends Object {
+>   // fields:
+>   
+>   // methods
+>   def main(args: Array[String] (ARRAY[REF(class String)])): Unit {
 >   locals: value args, variable result, value e, value ex6, value x4, value x5, value x
-892c964
-<   blocks: [1,2,3,6,7,8,11,14,16,17,19]
----
+>   startBlock: 1
 >   blocks: [1,2,3,6,7,8,11,14,16,17,19,20]
-916c988,995
-<     124	THROW(MyException)
----
+>   
+>   1: 
+>     118	LOAD_MODULE object Predef
+>     118	CONSTANT("TestInlineHandlersNestedHandlersInnerInline")
+>     118	CALL_METHOD scala.Predef.println (dynamic)
+>     119	CONSTANT(-1)
+>     119	STORE_LOCAL(variable result)
+>     119	SCOPE_ENTER variable result
+>     119	JUMP 16
+>     
+>   16: 
+>     123	LOAD_MODULE object Random
+>     123	CALL_METHOD scala.util.Random.nextInt (dynamic)
+>     123	CONSTANT(2)
+>     123	CALL_PRIMITIVE(Arithmetic(REM,INT))
+>     123	CONSTANT(0)
+>     123	CJUMP (INT)EQ ? 17 : 19
+>     
+>   17: 
+>     124	NEW REF(class MyException)
+>     124	DUP(REF(class MyException))
+>     124	CONSTANT("something")
+>     124	CALL_METHOD MyException.<init> (static-instance)
 >     ?	STORE_LOCAL(value ex6)
 >     ?	JUMP 20
 >     
@@ -251,31 +994,115 @@
 >     122	STORE_LOCAL(value x4)
 >     122	SCOPE_ENTER value x4
 >     122	JUMP 7
-945,948d1023
-<     127	LOAD_LOCAL(value x5)
-<     127	CALL_METHOD MyException.message (dynamic)
-<     127	STORE_LOCAL(value message)
-<     127	SCOPE_ENTER value message
-950c1025,1026
-<     127	LOAD_LOCAL(value message)
----
+>     
+>   19: 
+>     125	CONSTANT(1)
+>     125	STORE_LOCAL(variable result)
+>     125	JUMP 2
+>     
+>   6: 
+>     122	LOAD_EXCEPTION(class Throwable)
+>     122	STORE_LOCAL(value ex6)
+>     122	LOAD_LOCAL(value ex6)
+>     122	STORE_LOCAL(value x4)
+>     122	SCOPE_ENTER value x4
+>     122	JUMP 7
+>     
+>   7: 
+>     127	LOAD_LOCAL(value x4)
+>     127	IS_INSTANCE REF(class MyException)
+>     127	CZJUMP (BOOL)NE ? 8 : 14
+>     
+>   8: 
+>     127	LOAD_LOCAL(value x4)
+>     127	CHECK_CAST REF(class MyException)
+>     127	STORE_LOCAL(value x5)
+>     127	SCOPE_ENTER value x5
+>     127	LOAD_LOCAL(value x5)
+>     127	CZJUMP (REF(class Object))NE ? 11 : 14
+>     
+>   11: 
+>     127	LOAD_MODULE object Predef
 >     ?	LOAD_LOCAL(value x5)
 >     ?	CALL_METHOD MyException.message (dynamic)
-979c1055
-<     catch (IllegalArgumentException) in ArrayBuffer(6, 7, 8, 11, 14, 16, 17, 19) starting at: 3
----
+>     127	CALL_METHOD scala.Predef.println (dynamic)
+>     127	LOAD_FIELD scala.runtime.BoxedUnit.UNIT
+>     127	STORE_LOCAL(value x)
+>     127	JUMP 2
+>     
+>   14: 
+>     122	LOAD_LOCAL(value ex6)
+>     122	THROW(Throwable)
+>     
+>   3: 
+>     121	LOAD_EXCEPTION(class IllegalArgumentException)
+>     130	STORE_LOCAL(value e)
+>     130	LOAD_MODULE object Predef
+>     130	CONSTANT("IllegalArgumentException")
+>     130	CALL_METHOD scala.Predef.println (dynamic)
+>     130	JUMP 2
+>     
+>   2: 
+>     133	LOAD_LOCAL(variable result)
+>     133	DROP INT
+>     133	SCOPE_EXIT variable result
+>     133	RETURN(UNIT)
+>     
+>   }
+>   Exception handlers: 
+>     catch (Throwable) in ArrayBuffer(16, 17, 19) starting at: 6
+>       consisting of blocks: List(14, 11, 8, 7, 6)
+>       with finalizer: null
 >     catch (IllegalArgumentException) in ArrayBuffer(6, 7, 8, 11, 14, 16, 17, 19, 20) starting at: 3
-1003c1079
-<   locals: value args, variable result, value ex6, value x4, value x5, value message, value x, value e
----
+>       consisting of blocks: List(3)
+>       with finalizer: null
+>     
+>   def <init>(): TestInlineHandlersNestedHandlerInnerInline.type {
+>   locals: 
+>   startBlock: 1
+>   blocks: [1]
+>   
+>   1: 
+>     115	THIS(TestInlineHandlersNestedHandlerInnerInline)
+>     115	CALL_METHOD java.lang.Object.<init> (super())
+>     115	RETURN(UNIT)
+>     
+>   }
+>   Exception handlers: 
+>     
+>   
+> }
+> object TestInlineHandlersNestedHandlerOuterInline extends Object {
+>   // fields:
+>   
+>   // methods
+>   def main(args: Array[String] (ARRAY[REF(class String)])): Unit {
 >   locals: value args, variable result, value ex6, value x4, value x5, value x, value e
-1005c1081
-<   blocks: [1,2,3,4,5,8,11,15,16,17,19]
----
+>   startBlock: 1
 >   blocks: [1,2,3,5,8,11,15,16,17,19,20]
-1029c1105,1114
-<     148	THROW(MyException)
----
+>   
+>   1: 
+>     142	LOAD_MODULE object Predef
+>     142	CONSTANT("TestInlineHandlersNestedHandlersOuterInline")
+>     142	CALL_METHOD scala.Predef.println (dynamic)
+>     143	CONSTANT(-1)
+>     143	STORE_LOCAL(variable result)
+>     143	SCOPE_ENTER variable result
+>     143	JUMP 16
+>     
+>   16: 
+>     147	LOAD_MODULE object Random
+>     147	CALL_METHOD scala.util.Random.nextInt (dynamic)
+>     147	CONSTANT(2)
+>     147	CALL_PRIMITIVE(Arithmetic(REM,INT))
+>     147	CONSTANT(0)
+>     147	CJUMP (INT)EQ ? 17 : 19
+>     
+>   17: 
+>     148	NEW REF(class MyException)
+>     148	DUP(REF(class MyException))
+>     148	CONSTANT("something")
+>     148	CALL_METHOD MyException.<init> (static-instance)
 >     ?	STORE_LOCAL(value ex6)
 >     ?	JUMP 20
 >     
@@ -286,27 +1113,282 @@
 >     154	LOAD_LOCAL(value x4)
 >     154	IS_INSTANCE REF(class MyException)
 >     154	CZJUMP (BOOL)NE ? 5 : 11
-1050,1052d1134
-<     145	JUMP 4
-<     
-<   4: 
-1066,1069d1147
-<     154	LOAD_LOCAL(value x5)
-<     154	CALL_METHOD MyException.message (dynamic)
-<     154	STORE_LOCAL(value message)
-<     154	SCOPE_ENTER value message
-1071c1149,1150
-<     154	LOAD_LOCAL(value message)
----
+>     
+>   19: 
+>     149	CONSTANT(1)
+>     149	STORE_LOCAL(variable result)
+>     149	JUMP 2
+>     
+>   15: 
+>     146	LOAD_EXCEPTION(class IllegalArgumentException)
+>     151	STORE_LOCAL(value e)
+>     151	LOAD_MODULE object Predef
+>     151	CONSTANT("IllegalArgumentException")
+>     151	CALL_METHOD scala.Predef.println (dynamic)
+>     151	JUMP 2
+>     
+>   3: 
+>     145	LOAD_EXCEPTION(class Throwable)
+>     145	STORE_LOCAL(value ex6)
+>     145	LOAD_LOCAL(value ex6)
+>     145	STORE_LOCAL(value x4)
+>     145	SCOPE_ENTER value x4
+>     154	LOAD_LOCAL(value x4)
+>     154	IS_INSTANCE REF(class MyException)
+>     154	CZJUMP (BOOL)NE ? 5 : 11
+>     
+>   5: 
+>     154	LOAD_LOCAL(value x4)
+>     154	CHECK_CAST REF(class MyException)
+>     154	STORE_LOCAL(value x5)
+>     154	SCOPE_ENTER value x5
+>     154	LOAD_LOCAL(value x5)
+>     154	CZJUMP (REF(class Object))NE ? 8 : 11
+>     
+>   8: 
+>     154	LOAD_MODULE object Predef
 >     ?	LOAD_LOCAL(value x5)
 >     ?	CALL_METHOD MyException.message (dynamic)
-1288c1367
-<   blocks: [1,2,3,4,5,7]
----
+>     154	CALL_METHOD scala.Predef.println (dynamic)
+>     154	LOAD_FIELD scala.runtime.BoxedUnit.UNIT
+>     154	STORE_LOCAL(value x)
+>     154	JUMP 2
+>     
+>   11: 
+>     145	LOAD_LOCAL(value ex6)
+>     145	THROW(Throwable)
+>     
+>   2: 
+>     157	LOAD_LOCAL(variable result)
+>     157	DROP INT
+>     157	SCOPE_EXIT variable result
+>     157	RETURN(UNIT)
+>     
+>   }
+>   Exception handlers: 
+>     catch (IllegalArgumentException) in ArrayBuffer(16, 17, 19) starting at: 15
+>       consisting of blocks: List(15)
+>       with finalizer: null
+>     catch (Throwable) in ArrayBuffer(15, 16, 17, 19) starting at: 3
+>       consisting of blocks: List(11, 8, 5, 4, 3)
+>       with finalizer: null
+>     
+>   def <init>(): TestInlineHandlersNestedHandlerOuterInline.type {
+>   locals: 
+>   startBlock: 1
+>   blocks: [1]
+>   
+>   1: 
+>     139	THIS(TestInlineHandlersNestedHandlerOuterInline)
+>     139	CALL_METHOD java.lang.Object.<init> (super())
+>     139	RETURN(UNIT)
+>     
+>   }
+>   Exception handlers: 
+>     
+>   
+> }
+> object TestInlineHandlersNoInline extends Object {
+>   // fields:
+>   
+>   // methods
+>   def main(args: Array[String] (ARRAY[REF(class String)])): Unit {
+>   locals: value args, variable result, value e
+>   startBlock: 1
+>   blocks: [1,2,3,4,5,7]
+>   
+>   1: 
+>     13	LOAD_MODULE object Predef
+>     13	CONSTANT("TestInlineHandlersNoInline")
+>     13	CALL_METHOD scala.Predef.println (dynamic)
+>     14	CONSTANT(-1)
+>     14	STORE_LOCAL(variable result)
+>     14	SCOPE_ENTER variable result
+>     14	JUMP 4
+>     
+>   4: 
+>     17	LOAD_MODULE object Random
+>     17	CALL_METHOD scala.util.Random.nextInt (dynamic)
+>     17	CONSTANT(2)
+>     17	CALL_PRIMITIVE(Arithmetic(REM,INT))
+>     17	CONSTANT(0)
+>     17	CJUMP (INT)EQ ? 5 : 7
+>     
+>   5: 
+>     18	NEW REF(class IllegalArgumentException)
+>     18	DUP(REF(class IllegalArgumentException))
+>     18	CONSTANT("something")
+>     18	CALL_METHOD java.lang.IllegalArgumentException.<init> (static-instance)
+>     18	THROW(IllegalArgumentException)
+>     
+>   7: 
+>     19	CONSTANT(1)
+>     19	STORE_LOCAL(variable result)
+>     19	JUMP 2
+>     
+>   3: 
+>     16	LOAD_EXCEPTION(class StackOverflowError)
+>     21	STORE_LOCAL(value e)
+>     22	LOAD_MODULE object Predef
+>     22	CONSTANT("Stack overflow")
+>     22	CALL_METHOD scala.Predef.println (dynamic)
+>     22	JUMP 2
+>     
+>   2: 
+>     25	LOAD_LOCAL(variable result)
+>     25	DROP INT
+>     25	SCOPE_EXIT variable result
+>     25	RETURN(UNIT)
+>     
+>   }
+>   Exception handlers: 
+>     catch (StackOverflowError) in ArrayBuffer(4, 5, 7) starting at: 3
+>       consisting of blocks: List(3)
+>       with finalizer: null
+>     
+>   def <init>(): TestInlineHandlersNoInline.type {
+>   locals: 
+>   startBlock: 1
+>   blocks: [1]
+>   
+>   1: 
+>     10	THIS(TestInlineHandlersNoInline)
+>     10	CALL_METHOD java.lang.Object.<init> (super())
+>     10	RETURN(UNIT)
+>     
+>   }
+>   Exception handlers: 
+>     
+>   
+> }
+> object TestInlineHandlersPreciseness extends Object {
+>   // fields:
+>   
+>   // methods
+>   def main(args: Array[String] (ARRAY[REF(class String)])): Unit {
+>   locals: value args, value t, value e, value e, value exception
+>   startBlock: 1
+>   blocks: [1,2,3,4,5,6,7,8,9]
+>   
+>   1: 
+>     274	LOAD_MODULE object Predef
+>     274	CONSTANT("TestInlineHandlersCorrectHandler")
+>     274	CALL_METHOD scala.Predef.println (dynamic)
+>     274	JUMP 6
+>     
+>   6: 
+>     278	LOAD_MODULE object Random
+>     278	CALL_METHOD scala.util.Random.nextInt (dynamic)
+>     278	CONSTANT(2)
+>     278	CALL_PRIMITIVE(Arithmetic(REM,INT))
+>     278	CONSTANT(0)
+>     278	CJUMP (INT)EQ ? 7 : 8
+>     
+>   7: 
+>     279	NEW REF(class IllegalArgumentException)
+>     279	DUP(REF(class IllegalArgumentException))
+>     279	CONSTANT("even")
+>     279	CALL_METHOD java.lang.IllegalArgumentException.<init> (static-instance)
+>     279	JUMP 9
+>     
+>   8: 
+>     281	NEW REF(class StackOverflowError)
+>     281	DUP(REF(class StackOverflowError))
+>     281	CONSTANT("odd")
+>     281	CALL_METHOD java.lang.StackOverflowError.<init> (static-instance)
+>     281	JUMP 9
+>     
+>   9: 
+>     277	STORE_LOCAL(value exception)
+>     277	SCOPE_ENTER value exception
+>     282	LOAD_LOCAL(value exception)
+>     282	THROW(Throwable)
+>     
+>   3: 
+>     276	LOAD_EXCEPTION(class Throwable)
+>     288	STORE_LOCAL(value t)
+>     289	LOAD_MODULE object Predef
+>     289	CONSTANT("WROOOONG, not Throwable!")
+>     289	CALL_METHOD scala.Predef.println (dynamic)
+>     289	JUMP 2
+>     
+>   4: 
+>     276	LOAD_EXCEPTION(class StackOverflowError)
+>     286	STORE_LOCAL(value e)
+>     287	LOAD_MODULE object Predef
+>     287	CONSTANT("Correct, StackOverflowException")
+>     287	CALL_METHOD scala.Predef.println (dynamic)
+>     287	JUMP 2
+>     
+>   5: 
+>     276	LOAD_EXCEPTION(class IllegalArgumentException)
+>     284	STORE_LOCAL(value e)
+>     285	LOAD_MODULE object Predef
+>     285	CONSTANT("Correct, IllegalArgumentException")
+>     285	CALL_METHOD scala.Predef.println (dynamic)
+>     285	JUMP 2
+>     
+>   2: 
+>     273	RETURN(UNIT)
+>     
+>   }
+>   Exception handlers: 
+>     catch (IllegalArgumentException) in ArrayBuffer(6, 7, 8, 9) starting at: 5
+>       consisting of blocks: List(5)
+>       with finalizer: null
+>     catch (StackOverflowError) in ArrayBuffer(6, 7, 8, 9) starting at: 4
+>       consisting of blocks: List(4)
+>       with finalizer: null
+>     catch (Throwable) in ArrayBuffer(6, 7, 8, 9) starting at: 3
+>       consisting of blocks: List(3)
+>       with finalizer: null
+>     
+>   def <init>(): TestInlineHandlersPreciseness.type {
+>   locals: 
+>   startBlock: 1
+>   blocks: [1]
+>   
+>   1: 
+>     271	THIS(TestInlineHandlersPreciseness)
+>     271	CALL_METHOD java.lang.Object.<init> (super())
+>     271	RETURN(UNIT)
+>     
+>   }
+>   Exception handlers: 
+>     
+>   
+> }
+> object TestInlineHandlersSimpleInline extends Object {
+>   // fields:
+>   
+>   // methods
+>   def main(args: Array[String] (ARRAY[REF(class String)])): Unit {
+>   locals: value args, variable result, value e
+>   startBlock: 1
 >   blocks: [1,2,3,4,5,7,8]
-1312c1391,1398
-<     38	THROW(IllegalArgumentException)
----
+>   
+>   1: 
+>     33	LOAD_MODULE object Predef
+>     33	CONSTANT("TestInlineHandlersSimpleInline")
+>     33	CALL_METHOD scala.Predef.println (dynamic)
+>     34	CONSTANT(-1)
+>     34	STORE_LOCAL(variable result)
+>     34	SCOPE_ENTER variable result
+>     34	JUMP 4
+>     
+>   4: 
+>     37	LOAD_MODULE object Random
+>     37	CALL_METHOD scala.util.Random.nextInt (dynamic)
+>     37	CONSTANT(2)
+>     37	CALL_PRIMITIVE(Arithmetic(REM,INT))
+>     37	CONSTANT(0)
+>     37	CJUMP (INT)EQ ? 5 : 7
+>     
+>   5: 
+>     38	NEW REF(class IllegalArgumentException)
+>     38	DUP(REF(class IllegalArgumentException))
+>     38	CONSTANT("something")
+>     38	CALL_METHOD java.lang.IllegalArgumentException.<init> (static-instance)
 >     ?	STORE_LOCAL(value e)
 >     ?	JUMP 8
 >     
@@ -315,22 +1397,99 @@
 >     42	CONSTANT("IllegalArgumentException")
 >     42	CALL_METHOD scala.Predef.println (dynamic)
 >     42	JUMP 2
-1359c1445
-<   locals: value args, variable result, value ex6, value x4, value x5, value message, value x
----
+>     
+>   7: 
+>     39	CONSTANT(1)
+>     39	STORE_LOCAL(variable result)
+>     39	JUMP 2
+>     
+>   3: 
+>     36	LOAD_EXCEPTION(class IllegalArgumentException)
+>     41	STORE_LOCAL(value e)
+>     42	LOAD_MODULE object Predef
+>     42	CONSTANT("IllegalArgumentException")
+>     42	CALL_METHOD scala.Predef.println (dynamic)
+>     42	JUMP 2
+>     
+>   2: 
+>     45	LOAD_LOCAL(variable result)
+>     45	DROP INT
+>     45	SCOPE_EXIT variable result
+>     45	RETURN(UNIT)
+>     
+>   }
+>   Exception handlers: 
+>     catch (IllegalArgumentException) in ArrayBuffer(4, 5, 7) starting at: 3
+>       consisting of blocks: List(3)
+>       with finalizer: null
+>     
+>   def <init>(): TestInlineHandlersSimpleInline.type {
+>   locals: 
+>   startBlock: 1
+>   blocks: [1]
+>   
+>   1: 
+>     30	THIS(TestInlineHandlersSimpleInline)
+>     30	CALL_METHOD java.lang.Object.<init> (super())
+>     30	RETURN(UNIT)
+>     
+>   }
+>   Exception handlers: 
+>     
+>   
+> }
+> object TestInlineHandlersSingleCopy extends Object {
+>   // fields:
+>   
+>   // methods
+>   def main(args: Array[String] (ARRAY[REF(class String)])): Unit {
 >   locals: value args, variable result, value ex6, value x4, value x5, value x
-1361c1447
-<   blocks: [1,2,3,4,5,8,11,13,14,16,17,19]
----
+>   startBlock: 1
 >   blocks: [1,2,3,5,8,11,13,14,16,17,19,20]
-1385c1471,1472
-<     203	THROW(MyException)
----
+>   
+>   1: 
+>     197	LOAD_MODULE object Predef
+>     197	CONSTANT("TestInlineHandlersSingleCopy")
+>     197	CALL_METHOD scala.Predef.println (dynamic)
+>     198	CONSTANT(-1)
+>     198	STORE_LOCAL(variable result)
+>     198	SCOPE_ENTER variable result
+>     198	JUMP 13
+>     
+>   13: 
+>     202	LOAD_MODULE object Random
+>     202	CALL_METHOD scala.util.Random.nextInt (dynamic)
+>     202	CONSTANT(2)
+>     202	CALL_PRIMITIVE(Arithmetic(REM,INT))
+>     202	CONSTANT(0)
+>     202	CJUMP (INT)EQ ? 14 : 16
+>     
+>   14: 
+>     203	NEW REF(class MyException)
+>     203	DUP(REF(class MyException))
+>     203	CONSTANT("something")
+>     203	CALL_METHOD MyException.<init> (static-instance)
 >     ?	STORE_LOCAL(value ex6)
 >     ?	JUMP 20
-1405c1492,1501
-<     209	THROW(MyException)
----
+>     
+>   16: 
+>     205	LOAD_MODULE object Predef
+>     205	CONSTANT("A side effect in the middle")
+>     205	CALL_METHOD scala.Predef.println (dynamic)
+>     206	CONSTANT(3)
+>     206	STORE_LOCAL(variable result)
+>     208	LOAD_MODULE object Random
+>     208	CALL_METHOD scala.util.Random.nextInt (dynamic)
+>     208	CONSTANT(3)
+>     208	CALL_PRIMITIVE(Arithmetic(REM,INT))
+>     208	CONSTANT(2)
+>     208	CJUMP (INT)EQ ? 17 : 19
+>     
+>   17: 
+>     209	NEW REF(class MyException)
+>     209	DUP(REF(class MyException))
+>     209	CONSTANT("something else")
+>     209	CALL_METHOD MyException.<init> (static-instance)
 >     ?	STORE_LOCAL(value ex6)
 >     ?	JUMP 20
 >     
@@ -341,27 +1500,101 @@
 >     212	LOAD_LOCAL(value x4)
 >     212	IS_INSTANCE REF(class MyException)
 >     212	CZJUMP (BOOL)NE ? 5 : 11
-1418,1420d1513
-<     200	JUMP 4
-<     
-<   4: 
-1434,1437d1526
-<     212	LOAD_LOCAL(value x5)
-<     212	CALL_METHOD MyException.message (dynamic)
-<     212	STORE_LOCAL(value message)
-<     212	SCOPE_ENTER value message
-1439c1528,1529
-<     213	LOAD_LOCAL(value message)
----
+>     
+>   19: 
+>     210	CONSTANT(1)
+>     210	STORE_LOCAL(variable result)
+>     210	JUMP 2
+>     
+>   3: 
+>     200	LOAD_EXCEPTION(class Throwable)
+>     200	STORE_LOCAL(value ex6)
+>     200	LOAD_LOCAL(value ex6)
+>     200	STORE_LOCAL(value x4)
+>     200	SCOPE_ENTER value x4
+>     212	LOAD_LOCAL(value x4)
+>     212	IS_INSTANCE REF(class MyException)
+>     212	CZJUMP (BOOL)NE ? 5 : 11
+>     
+>   5: 
+>     212	LOAD_LOCAL(value x4)
+>     212	CHECK_CAST REF(class MyException)
+>     212	STORE_LOCAL(value x5)
+>     212	SCOPE_ENTER value x5
+>     212	LOAD_LOCAL(value x5)
+>     212	CZJUMP (REF(class Object))NE ? 8 : 11
+>     
+>   8: 
+>     213	LOAD_MODULE object Predef
 >     ?	LOAD_LOCAL(value x5)
 >     ?	CALL_METHOD MyException.message (dynamic)
-1483c1573
-<   blocks: [1,2,3,4,5,7]
----
+>     213	CALL_METHOD scala.Predef.println (dynamic)
+>     213	LOAD_FIELD scala.runtime.BoxedUnit.UNIT
+>     213	STORE_LOCAL(value x)
+>     213	JUMP 2
+>     
+>   2: 
+>     216	LOAD_LOCAL(variable result)
+>     216	DROP INT
+>     216	SCOPE_EXIT variable result
+>     216	RETURN(UNIT)
+>     
+>   11: 
+>     200	LOAD_LOCAL(value ex6)
+>     200	THROW(Throwable)
+>     
+>   }
+>   Exception handlers: 
+>     catch (Throwable) in ArrayBuffer(13, 14, 16, 17, 19) starting at: 3
+>       consisting of blocks: List(11, 8, 5, 4, 3)
+>       with finalizer: null
+>     
+>   def <init>(): TestInlineHandlersSingleCopy.type {
+>   locals: 
+>   startBlock: 1
+>   blocks: [1]
+>   
+>   1: 
+>     194	THIS(TestInlineHandlersSingleCopy)
+>     194	CALL_METHOD java.lang.Object.<init> (super())
+>     194	RETURN(UNIT)
+>     
+>   }
+>   Exception handlers: 
+>     
+>   
+> }
+> object TestInlineHandlersSubclassInline extends Object {
+>   // fields:
+>   
+>   // methods
+>   def main(args: Array[String] (ARRAY[REF(class String)])): Unit {
+>   locals: value args, variable result, value e
+>   startBlock: 1
 >   blocks: [1,2,3,4,5,7,8]
-1507c1597,1604
-<     58	THROW(IllegalArgumentException)
----
+>   
+>   1: 
+>     53	LOAD_MODULE object Predef
+>     53	CONSTANT("TestInlineHandlersSubclassInline")
+>     53	CALL_METHOD scala.Predef.println (dynamic)
+>     54	CONSTANT(-1)
+>     54	STORE_LOCAL(variable result)
+>     54	SCOPE_ENTER variable result
+>     54	JUMP 4
+>     
+>   4: 
+>     57	LOAD_MODULE object Random
+>     57	CALL_METHOD scala.util.Random.nextInt (dynamic)
+>     57	CONSTANT(2)
+>     57	CALL_PRIMITIVE(Arithmetic(REM,INT))
+>     57	CONSTANT(0)
+>     57	CJUMP (INT)EQ ? 5 : 7
+>     
+>   5: 
+>     58	NEW REF(class IllegalArgumentException)
+>     58	DUP(REF(class IllegalArgumentException))
+>     58	CONSTANT("something")
+>     58	CALL_METHOD java.lang.IllegalArgumentException.<init> (static-instance)
 >     ?	STORE_LOCAL(value e)
 >     ?	JUMP 8
 >     
@@ -370,34 +1603,138 @@
 >     62	CONSTANT("RuntimeException")
 >     62	CALL_METHOD scala.Predef.println (dynamic)
 >     62	JUMP 2
-1556c1653
-<   blocks: [1,2,3,4]
----
+>     
+>   7: 
+>     59	CONSTANT(1)
+>     59	STORE_LOCAL(variable result)
+>     59	JUMP 2
+>     
+>   3: 
+>     56	LOAD_EXCEPTION(class RuntimeException)
+>     61	STORE_LOCAL(value e)
+>     62	LOAD_MODULE object Predef
+>     62	CONSTANT("RuntimeException")
+>     62	CALL_METHOD scala.Predef.println (dynamic)
+>     62	JUMP 2
+>     
+>   2: 
+>     65	LOAD_LOCAL(variable result)
+>     65	DROP INT
+>     65	SCOPE_EXIT variable result
+>     65	RETURN(UNIT)
+>     
+>   }
+>   Exception handlers: 
+>     catch (RuntimeException) in ArrayBuffer(4, 5, 7) starting at: 3
+>       consisting of blocks: List(3)
+>       with finalizer: null
+>     
+>   def <init>(): TestInlineHandlersSubclassInline.type {
+>   locals: 
+>   startBlock: 1
+>   blocks: [1]
+>   
+>   1: 
+>     50	THIS(TestInlineHandlersSubclassInline)
+>     50	CALL_METHOD java.lang.Object.<init> (super())
+>     50	RETURN(UNIT)
+>     
+>   }
+>   Exception handlers: 
+>     
+>   
+> }
+> object TestInlineHandlersSynchronized extends Object {
+>   // fields:
+>   
+>   // methods
+>   def main(args: Array[String] (ARRAY[REF(class String)])): Unit {
+>   locals: value args, variable result, variable monitor1
+>   startBlock: 1
 >   blocks: [1,2,3,4,5]
-1576c1673,1678
-<     229	THROW(MyException)
----
+>   
+>   1: 
+>     224	LOAD_MODULE object Predef
+>     224	CONSTANT("TestInlineHandlersSynchronized")
+>     224	CALL_METHOD scala.Predef.println (dynamic)
+>     225	CONSTANT("hello")
+>     225	STORE_LOCAL(variable result)
+>     225	SCOPE_ENTER variable result
+>     228	LOAD_LOCAL(variable result)
+>     ?	DUP(REF(class Object))
+>     ?	STORE_LOCAL(variable monitor1)
+>     228	MONITOR_ENTER
+>     228	JUMP 4
+>     
+>   4: 
+>     229	NEW REF(class MyException)
+>     229	DUP(REF(class MyException))
+>     229	LOAD_LOCAL(variable result)
+>     229	CALL_METHOD MyException.<init> (static-instance)
 >     ?	JUMP 5
 >     
 >   5: 
 >     ?	LOAD_LOCAL(variable monitor1)
 >     228	MONITOR_EXIT
 >     228	THROW(Throwable)
-1582c1684
-<     ?	THROW(Throwable)
----
+>     
+>   3: 
+>     228	LOAD_EXCEPTION(class Throwable)
+>     ?	LOAD_LOCAL(variable monitor1)
+>     228	MONITOR_EXIT
 >     228	THROW(Throwable)
-1610c1712
-<   locals: value args, variable result, variable monitor2, variable monitorResult1
----
+>     
+>   }
+>   Exception handlers: 
+>     catch (Throwable) in ArrayBuffer(4) starting at: 3
+>       consisting of blocks: List(3)
+>       with finalizer: null
+>     
+>   def <init>(): TestInlineHandlersSynchronized.type {
+>   locals: 
+>   startBlock: 1
+>   blocks: [1]
+>   
+>   1: 
+>     221	THIS(TestInlineHandlersSynchronized)
+>     221	CALL_METHOD java.lang.Object.<init> (super())
+>     221	RETURN(UNIT)
+>     
+>   }
+>   Exception handlers: 
+>     
+>   
+> }
+> object TestInlineHandlersSynchronizedWithStack extends Object {
+>   // fields:
+>   
+>   // methods
+>   def main(args: Array[String] (ARRAY[REF(class String)])): Unit {
 >   locals: value exception$1, value args, variable result, variable monitor2, variable monitorResult1
-1612c1714
-<   blocks: [1,2,3,4]
----
+>   startBlock: 1
 >   blocks: [1,2,3,4,5]
-1635c1737,1745
-<     245	THROW(MyException)
----
+>   
+>   1: 
+>     240	LOAD_MODULE object Predef
+>     240	CONSTANT("TestInlineHandlersSynchronizedWithStack")
+>     240	CALL_METHOD scala.Predef.println (dynamic)
+>     241	CONSTANT("hello")
+>     241	STORE_LOCAL(variable result)
+>     241	SCOPE_ENTER variable result
+>     244	CALL_PRIMITIVE(StartConcat)
+>     244	CONSTANT("abc")
+>     244	CALL_PRIMITIVE(StringConcat(REF(class String)))
+>     244	LOAD_LOCAL(variable result)
+>     ?	DUP(REF(class Object))
+>     ?	STORE_LOCAL(variable monitor2)
+>     244	MONITOR_ENTER
+>     244	JUMP 4
+>     
+>   4: 
+>     245	NEW REF(class MyException)
+>     245	DUP(REF(class MyException))
+>     245	LOAD_LOCAL(variable result)
+>     245	CALL_METHOD MyException.<init> (static-instance)
 >     ?	STORE_LOCAL(value exception$1)
 >     ?	DROP ConcatClass
 >     ?	LOAD_LOCAL(value exception$1)
@@ -407,8 +1744,32 @@
 >     ?	LOAD_LOCAL(variable monitor2)
 >     244	MONITOR_EXIT
 >     244	THROW(Throwable)
-1641c1751
-<     ?	THROW(Throwable)
----
+>     
+>   3: 
+>     244	LOAD_EXCEPTION(class Throwable)
+>     ?	LOAD_LOCAL(variable monitor2)
+>     244	MONITOR_EXIT
 >     244	THROW(Throwable)
+>     
+>   }
+>   Exception handlers: 
+>     catch (Throwable) in ArrayBuffer(4) starting at: 3
+>       consisting of blocks: List(3)
+>       with finalizer: null
+>     
+>   def <init>(): TestInlineHandlersSynchronizedWithStack.type {
+>   locals: 
+>   startBlock: 1
+>   blocks: [1]
+>   
+>   1: 
+>     237	THIS(TestInlineHandlersSynchronizedWithStack)
+>     237	CALL_METHOD java.lang.Object.<init> (super())
+>     237	RETURN(UNIT)
+>     
+>   }
+>   Exception handlers: 
+>     
+>   
+> }
 

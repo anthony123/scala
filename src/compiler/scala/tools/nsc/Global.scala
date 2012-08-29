@@ -26,7 +26,7 @@ import typechecker._
 import transform._
 import backend.icode.{ ICodes, GenICode, ICodeCheckers }
 import backend.{ ScalaPrimitives, Platform, MSILPlatform, JavaPlatform }
-import backend.jvm.{GenJVM, GenASM}
+import backend.jvm.{GenBCode, GenJVM, GenASM}
 import backend.opt.{ Inliners, InlineExceptionHandlers, ClosureElimination, DeadCodeElimination }
 import backend.icode.analysis._
 import language.postfixOps
@@ -654,6 +654,13 @@ class Global(var currentSettings: Settings, var reporter: Reporter)
     val runsAfter = List("dce")
     val runsRightAfter = None
   } with GenASM
+
+  // phaseName = "bcode"
+  object genBCode extends {
+    val global: Global.this.type = Global.this
+    val runsAfter = List("dce")
+    val runsRightAfter = None
+  } with GenBCode
 
   // This phase is optional: only added if settings.make option is given.
   // phaseName = "dependencyAnalysis"

@@ -1,65 +1,359 @@
-37c37
-<   locals: value args, value x, value y
----
+0a1,357
+> object Test extends tools.partest.IcodeTest {
+>   // fields:
+>   
+>   // methods
+>   def printIcodeAfterPhase(): String {
+>   locals: 
+>   startBlock: 1
+>   blocks: [1]
+>   
+>   1: 
+>     18	CONSTANT("dce")
+>     18	RETURN(REF(class String))
+>     
+>   }
+>   Exception handlers: 
+>     
+>   def <init>(): Test.type {
+>   locals: 
+>   startBlock: 1
+>   blocks: [1]
+>   
+>   1: 
+>     17	THIS(Test)
+>     17	CALL_METHOD scala.tools.partest.IcodeTest.<init> (super())
+>     17	RETURN(UNIT)
+>     
+>   }
+>   Exception handlers: 
+>     
+>   
+> }
+> object TestAliasChainConstat extends Object {
+>   // fields:
+>   
+>   // methods
+>   def main(args: Array[String] (ARRAY[REF(class String)])): Unit {
 >   locals: value args
-42,43d41
-<     52	CONSTANT(2)
-<     52	STORE_LOCAL(value x)
-45,46d42
-<     53	LOAD_LOCAL(value x)
-<     53	STORE_LOCAL(value y)
-49c45
-<     54	LOAD_LOCAL(value y)
----
+>   startBlock: 1
+>   blocks: [1]
+>   
+>   1: 
+>     52	SCOPE_ENTER value x
+>     53	SCOPE_ENTER value y
+>     54	LOAD_MODULE object Predef
 >     54	CONSTANT(2)
-92c88
-<   locals: value args, value x, value y
----
+>     54	BOX INT
+>     54	CALL_METHOD scala.Predef.println (dynamic)
+>     54	SCOPE_EXIT value x
+>     54	SCOPE_EXIT value y
+>     54	RETURN(UNIT)
+>     
+>   }
+>   Exception handlers: 
+>     
+>   def <init>(): TestAliasChainConstat.type {
+>   locals: 
+>   startBlock: 1
+>   blocks: [1]
+>   
+>   1: 
+>     49	THIS(TestAliasChainConstat)
+>     49	CALL_METHOD java.lang.Object.<init> (super())
+>     49	RETURN(UNIT)
+>     
+>   }
+>   Exception handlers: 
+>     
+>   
+> }
+> object TestAliasChainDerefField extends Object {
+>   // fields:
+>   
+>   // methods
+>   def f(): Int {
+>   locals: 
+>   startBlock: 1
+>   blocks: [1]
+>   
+>   1: 
+>     78	LOAD_MODULE object Random
+>     78	CALL_METHOD scala.util.Random.nextInt (dynamic)
+>     78	RETURN(INT)
+>     
+>   }
+>   Exception handlers: 
+>     
+>   def main(args: Array[String] (ARRAY[REF(class String)])): Unit {
 >   locals: value args, value x
-101,102d96
-<     82	LOAD_LOCAL(value x)
-<     82	STORE_LOCAL(value y)
-105c99
-<     83	LOAD_LOCAL(value y)
----
+>   startBlock: 1
+>   blocks: [1]
+>   
+>   1: 
+>     81	THIS(TestAliasChainDerefField)
+>     81	CALL_METHOD TestAliasChainDerefField.f (dynamic)
+>     81	STORE_LOCAL(value x)
+>     81	SCOPE_ENTER value x
+>     82	SCOPE_ENTER value y
+>     83	LOAD_MODULE object Predef
 >     83	LOAD_LOCAL(value x)
-135c129
-<   locals: value args, value x, value y
----
+>     83	BOX INT
+>     83	CALL_METHOD scala.Predef.println (dynamic)
+>     83	SCOPE_EXIT value x
+>     83	SCOPE_EXIT value y
+>     83	RETURN(UNIT)
+>     
+>   }
+>   Exception handlers: 
+>     
+>   def <init>(): TestAliasChainDerefField.type {
+>   locals: 
+>   startBlock: 1
+>   blocks: [1]
+>   
+>   1: 
+>     77	THIS(TestAliasChainDerefField)
+>     77	CALL_METHOD java.lang.Object.<init> (super())
+>     77	RETURN(UNIT)
+>     
+>   }
+>   Exception handlers: 
+>     
+>   
+> }
+> class TestAliasChainDerefThis extends Object {
+>   // fields:
+>   
+>   // methods
+>   def main(args: Array[String] (ARRAY[REF(class String)])): Unit {
 >   locals: value args
-140,141d133
-<     66	THIS(TestAliasChainDerefThis)
-<     66	STORE_LOCAL(value x)
-143,144d134
-<     67	LOAD_LOCAL(value x)
-<     67	STORE_LOCAL(value y)
-147c137
-<     68	LOAD_LOCAL(value y)
----
+>   startBlock: 1
+>   blocks: [1]
+>   
+>   1: 
+>     66	SCOPE_ENTER value x
+>     67	SCOPE_ENTER value y
+>     68	LOAD_MODULE object Predef
 >     68	THIS(Object)
-176c166
-<   locals: value x, value y
----
+>     68	CALL_METHOD scala.Predef.println (dynamic)
+>     68	SCOPE_EXIT value x
+>     68	SCOPE_EXIT value y
+>     68	RETURN(UNIT)
+>     
+>   }
+>   Exception handlers: 
+>     
+>   def <init>(): TestAliasChainDerefThis {
+>   locals: 
+>   startBlock: 1
+>   blocks: [1]
+>   
+>   1: 
+>     63	THIS(TestAliasChainDerefThis)
+>     63	CALL_METHOD java.lang.Object.<init> (super())
+>     63	RETURN(UNIT)
+>     
+>   }
+>   Exception handlers: 
+>     
+>   
+> }
+> object TestBugReport extends Object {
+>   // fields:
+>   
+>   // methods
+>   def test(x: Int (INT)): Unit {
 >   locals: value x
-181,182d170
-<     29	LOAD_LOCAL(value x)
-<     29	STORE_LOCAL(value y)
-185c173
-<     30	LOAD_LOCAL(value y)
----
+>   startBlock: 1
+>   blocks: [1]
+>   
+>   1: 
+>     29	SCOPE_ENTER value y
+>     30	LOAD_MODULE object Predef
 >     30	LOAD_LOCAL(value x)
-223,224d210
-<     97	LOAD_LOCAL(variable x)
-<     97	STORE_LOCAL(variable y)
-227c213
-<     98	LOAD_LOCAL(variable y)
----
+>     30	BOX INT
+>     30	CALL_METHOD scala.Predef.println (dynamic)
+>     30	SCOPE_EXIT value y
+>     30	RETURN(UNIT)
+>     
+>   }
+>   Exception handlers: 
+>     
+>   def <init>(): TestBugReport.type {
+>   locals: 
+>   startBlock: 1
+>   blocks: [1]
+>   
+>   1: 
+>     27	THIS(TestBugReport)
+>     27	CALL_METHOD java.lang.Object.<init> (super())
+>     27	RETURN(UNIT)
+>     
+>   }
+>   Exception handlers: 
+>     
+>   
+> }
+> object TestDifferentBindings extends Object {
+>   // fields:
+>   
+>   // methods
+>   def main(args: Array[String] (ARRAY[REF(class String)])): Unit {
+>   locals: value args, variable x, variable y
+>   startBlock: 1
+>   blocks: [1]
+>   
+>   1: 
+>     96	LOAD_MODULE object Random
+>     96	CALL_METHOD scala.util.Random.nextInt (dynamic)
+>     96	STORE_LOCAL(variable x)
+>     96	SCOPE_ENTER variable x
+>     97	SCOPE_ENTER variable y
+>     98	LOAD_MODULE object Predef
 >     98	LOAD_LOCAL(variable x)
-233,234d218
-<     101	LOAD_LOCAL(variable y)
-<     101	STORE_LOCAL(variable x)
-236c220
-<     102	LOAD_LOCAL(variable x)
----
+>     98	BOX INT
+>     98	CALL_METHOD scala.Predef.println (dynamic)
+>     100	LOAD_MODULE object Random
+>     100	CALL_METHOD scala.util.Random.nextInt (dynamic)
+>     100	STORE_LOCAL(variable y)
+>     102	LOAD_MODULE object Predef
 >     102	LOAD_LOCAL(variable y)
+>     102	BOX INT
+>     102	CALL_METHOD scala.Predef.println (dynamic)
+>     102	SCOPE_EXIT variable x
+>     102	SCOPE_EXIT variable y
+>     102	RETURN(UNIT)
+>     
+>   }
+>   Exception handlers: 
+>     
+>   def <init>(): TestDifferentBindings.type {
+>   locals: 
+>   startBlock: 1
+>   blocks: [1]
+>   
+>   1: 
+>     93	THIS(TestDifferentBindings)
+>     93	CALL_METHOD java.lang.Object.<init> (super())
+>     93	RETURN(UNIT)
+>     
+>   }
+>   Exception handlers: 
+>     
+>   
+> }
+> anonymous class TestSetterInline$$anonfun$1 extends runtime.AbstractFunction1, Serializable {
+>   // fields:
+>   
+>   // methods
+>   def apply(x: TestSetterInline.type (REF(object TestSetterInline))): Unit {
+>   locals: value x
+>   startBlock: 1
+>   blocks: [1]
+>   
+>   1: 
+>     40	RETURN(UNIT)
+>     
+>   }
+>   Exception handlers: 
+>     
+>   def apply(v1: Object (REF(class Object))): Object {
+>   locals: value v1
+>   startBlock: 1
+>   blocks: [1]
+>   
+>   1: 
+>     40	THIS(TestSetterInline$$anonfun$1)
+>     40	LOAD_LOCAL(value v1)
+>     40	CHECK_CAST REF(object TestSetterInline)
+>     40	CALL_METHOD TestSetterInline$$anonfun$1.apply (dynamic)
+>     40	LOAD_FIELD scala.runtime.BoxedUnit.UNIT
+>     40	RETURN(REF(class Object))
+>     
+>   }
+>   Exception handlers: 
+>     
+>   def <init>(): TestSetterInline$$anonfun$1 {
+>   locals: 
+>   startBlock: 1
+>   blocks: [1]
+>   
+>   1: 
+>     40	THIS(TestSetterInline$$anonfun$1)
+>     40	CALL_METHOD scala.runtime.AbstractFunction1.<init> (super())
+>     40	RETURN(UNIT)
+>     
+>   }
+>   Exception handlers: 
+>     
+>   
+> }
+> object TestSetterInline extends Object {
+>   // fields:
+>   var _postSetHook: Function1
+>   
+>   // methods
+>   def _postSetHook(): Function1 {
+>   locals: 
+>   startBlock: 1
+>   blocks: [1]
+>   
+>   1: 
+>     40	THIS(TestSetterInline)
+>     40	LOAD_FIELD variable _postSetHook
+>     40	RETURN(REF(trait Function1))
+>     
+>   }
+>   Exception handlers: 
+>     
+>   def _postSetHook_$eq(x$1: Function1 (REF(trait Function1))): Unit {
+>   locals: value _postSetHook_=
+>   startBlock: 1
+>   blocks: [1]
+>   
+>   1: 
+>     40	THIS(TestSetterInline)
+>     40	LOAD_LOCAL(value _postSetHook_=)
+>     40	STORE_FIELD variable _postSetHook (dynamic)
+>     40	RETURN(UNIT)
+>     
+>   }
+>   Exception handlers: 
+>     
+>   def withPostSetHook(f: Function1 (REF(trait Function1))): TestSetterInline.type {
+>   locals: value f
+>   startBlock: 1
+>   blocks: [1]
+>   
+>   1: 
+>     41	THIS(TestSetterInline)
+>     41	LOAD_LOCAL(value f)
+>     41	CALL_METHOD TestSetterInline._postSetHook_$eq (static-instance)
+>     41	THIS(TestSetterInline)
+>     41	RETURN(REF(object TestSetterInline))
+>     
+>   }
+>   Exception handlers: 
+>     
+>   def <init>(): TestSetterInline.type {
+>   locals: 
+>   startBlock: 1
+>   blocks: [1]
+>   
+>   1: 
+>     39	THIS(TestSetterInline)
+>     39	CALL_METHOD java.lang.Object.<init> (super())
+>     40	THIS(TestSetterInline)
+>     40	NEW REF(anonymous class TestSetterInline$$anonfun$1)
+>     40	DUP(REF(anonymous class TestSetterInline$$anonfun$1))
+>     40	CALL_METHOD TestSetterInline$$anonfun$1.<init> (static-instance)
+>     40	STORE_FIELD variable _postSetHook (dynamic)
+>     40	RETURN(UNIT)
+>     
+>   }
+>   Exception handlers: 
+>     
+>   
+> }
 
