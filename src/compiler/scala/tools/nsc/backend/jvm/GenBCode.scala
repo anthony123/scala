@@ -1088,8 +1088,7 @@ abstract class GenBCode extends BCodeTypes {
                  "Trying to access the this of another class: " +
                  "tree.symbol = " + tree.symbol + ", class symbol = " + claszSymbol + " compilation unit:"+ cunit)
           if (tree.symbol.isModuleClass && tree.symbol != claszSymbol) {
-            genLoadModule(tree)
-            generatedType = asmClassType(tree.symbol)
+            generatedType = genLoadModule(tree)
           }
           else {
             mnode.visitVarInsn(asm.Opcodes.ALOAD, 0)
@@ -1578,7 +1577,7 @@ abstract class GenBCode extends BCodeTypes {
       (args zip tpes) foreach { case (arg, tpe) => genLoad(arg, toTypeKind(tpe)) }
     }
 
-    def genLoadModule(tree: Tree) {
+    def genLoadModule(tree: Tree): BType = {
       // Working around SI-5604.  Rather than failing the compile when we see a package here, check if there's a package object.
       val module = (
         if (!tree.symbol.isPackageClass) tree.symbol
@@ -1589,6 +1588,7 @@ abstract class GenBCode extends BCodeTypes {
       )
       lineNumber(tree)
       genLoadModule(module)
+      asmClassType(module)
     }
 
     def genLoadModule(module: Symbol) {

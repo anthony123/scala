@@ -963,12 +963,22 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
         /** Interfaces have to be handled delicately to avoid introducing spurious errors,
          *  but if we treat them all as AnyRef we lose too much information.
          **/
-        def newReference(sym: Symbol): BType = {
-          assert(!primitiveTypeMap.contains(sym), "Use primitiveTypeMap instead.")
-          assert(sym != definitions.ArrayClass,   "Use arrayOf() instead.")
+        def newReference(sym0: Symbol): BType = {
+          assert(!primitiveTypeMap.contains(sym0), "Use primitiveTypeMap instead.")
+          assert(sym0 != definitions.ArrayClass,   "Use arrayOf() instead.")
 
-          if(sym == definitions.NullClass)    return RT_NULL;
-          if(sym == definitions.NothingClass) return RT_NOTHING;
+          if(sym0 == definitions.NullClass)    return RT_NULL;
+          if(sym0 == definitions.NothingClass) return RT_NOTHING;
+
+          // Working around SI-5604.  Rather than failing the compile when we see
+          // a package here, check if there's a package object.
+          val sym = (
+            if (!sym0.isPackageClass) sym0
+            else sym0.info.member(nme.PACKAGE) match {
+              case NoSymbol => assert(false, "Cannot use package as value: " + sym0.fullName) ; NoSymbol
+              case s        => debugwarn("Bug: found package class where package object expected.  Converting.") ; s.moduleClass
+            }
+          )
 
           // Can't call .toInterface (at this phase) or we trip an assertion.
           // See PackratParser#grow for a method which fails with an apparent mismatch
@@ -977,6 +987,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
             // pos/spec-List.scala is the sole failure if we don't check for NoSymbol
             val traitSym = sym.owner.info.decl(tpnme.interfaceName(sym.name))
             if (traitSym != NoSymbol)
+              bufferIfInner(traitSym)
               return asmClassType(traitSym)
           }
 
@@ -1032,10 +1043,9 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
         primitiveOrRefType(sym)
 
       // !!! Iulian says types which make no sense after erasure should not reach here, which includes the ExistentialType, AnnotatedType, RefinedType.
-      // I don't know if the first two cases exist because they do or as a defensive measure, but at the time I added it, RefinedTypes were indeed reaching here.
-      case _: ExistentialType => abort("ExistentialType reached GenBCode: " + t)
-      case _: AnnotatedType   => abort("AnnotatedType reached GenBCode: "   + t)
-      case _: RefinedType     => abort("RefinedType reached GenBCode: "     + t) // defensive: parents map toTypeKind reduceLeft lub
+      case _: ExistentialType     => abort("ExistentialType reached GenBCode: " + t)
+      case AnnotatedType(_, w, _) => toTypeKind(w) // TODO test/files/jvm/annotations.scala causes an AnnotatedType to reach here.
+      case _: RefinedType         => abort("RefinedType reached GenBCode: "     + t) // defensive: parents map toTypeKind reduceLeft lub
 
       // For sure WildcardTypes shouldn't reach here either, but when debugging such situations this may come in handy.
       // case WildcardType    => REFERENCE(ObjectClass)
