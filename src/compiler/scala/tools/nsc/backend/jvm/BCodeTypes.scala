@@ -242,7 +242,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       buf.toString()
     }
 
-  }
+  } // end of object BType
 
   /**
    * Based on ASM's Type class. Namer's chrs is used in this class for the same purposes as the `buf` char array in asm.Type.
@@ -611,11 +611,16 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
   /**
    * Creates a TypeName and the BType token for it.
+   * This method does not add to `innerClassesBuffer`
+   *
    * @must-single-thread
    **/
-  def brefType(iname: String): BType = { brefType(newTypeName(iname)) }
+  def brefType(iname: String): BType = { brefType(newTypeName(iname.toCharArray(), 0, iname.length())) }
 
-  /** A BType token for the TypeName received as argument.
+  /**
+   * Creates a BType token for the TypeName received as argument.
+   * This method does not add to `innerClassesBuffer`
+   *
    *  @can-multi-thread
    **/
   def brefType(iname: TypeName): BType = { BType.getObjectType(iname.start, iname.length) }
@@ -655,9 +660,8 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
   /** A map from scala primitive type-symbols to BTypes */
   var primitiveTypeMap: Map[Symbol, BType] = null
-
+  /** A map from scala type-symbols for Nothing and Null to (runtime version) BTypes */
   var phantomTypeMap:   Map[Symbol, BType] = null
-
   /** Maps the method symbol for a box method to the boxed type of the result.
    *  For example, the method symbol for `Byte.box()`) is mapped to the BType `Ljava/lang/Integer;`. */
   var boxResultType:    Map[Symbol, BType] = null
@@ -2395,11 +2399,14 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
   class CClassWriter(flags: Int) extends asm.ClassWriter(flags) {
 
     /**
-     * TODO threadability.
+     *  This method is thread re-entrant because chrs never grows during its operation (that's because all TypeNames being looked up have already been entered).
+     *  To stress this point, rather than using `newTypeName()` we use `lookupTypeName()`
+     *
+     *  @can-multi-thread
      **/
     override def getCommonSuperClass(inameA: String, inameB: String): String = {
-      val a = brefType(inameA)
-      val b = brefType(inameB)
+      val a = brefType(lookupTypeName(inameA.toCharArray))
+      val b = brefType(lookupTypeName(inameB.toCharArray))
       val lca = jvmWiseLUB(a, b)
       val lcaName = lca.getInternalName // don't call javaName because that side-effects innerClassBuffer.
       assert(lcaName != "scala/Any")
