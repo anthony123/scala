@@ -186,11 +186,11 @@ abstract class GenBCode extends BCodeTypes {
 
     override def getCurrentCUnit(): CompilationUnit = { cunit }
 
-    def isParcelableClass = isAndroidParcelableClass(claszSymbol)
+    def isParcelableClass = isAndroidParcelableClass(claszSymbol) // @must-single-thread
 
     // see https://github.com/scala/scala/commit/892ee3df93a10ffe24fb11b37ad7c3a9cb93d5de
-    def isAccessorToStaticField(msym: Symbol) = { msym.isAccessor && msym.accessed.hasStaticAnnotation }
-    def isStaticField(fsym: Symbol) = {  fsym.owner.isModuleClass && fsym.hasStaticAnnotation }
+    def isAccessorToStaticField(msym: Symbol) = { msym.isAccessor && msym.accessed.hasStaticAnnotation } // @must-single-thread
+    def isStaticField(fsym: Symbol) = {  fsym.owner.isModuleClass && fsym.hasStaticAnnotation }          // @must-single-thread
 
     override def run() {
       scalaPrimitives.init
@@ -265,18 +265,14 @@ abstract class GenBCode extends BCodeTypes {
       }
     } // end of method gen(Tree)
 
-    /* if you look closely, you'll notice almost no code duplication with JBuilder's `writeIfNotTooBig()` */
-    def writeIfNotTooBig(label: String, jclassName: String, cnode: asm.tree.ClassNode, sym: Symbol) {
-      try {
-        val cw = new CClassWriter(extraProc)
-        cnode.accept(cw)
-        val arr = cw.toByteArray
-        bytecodeWriter.writeClass(label, jclassName, arr, sym)
-      } catch {
-        case e: java.lang.RuntimeException if(e.getMessage() == "Class file too large!") =>
-          // TODO check where ASM throws the equivalent of CodeSizeTooBigException
-          log("Skipped class "+jclassName+" because it exceeds JVM limits (it's too big or has methods that are too long).")
-      }
+    /**
+     *  If you look closely, you'll notice almost no code duplication with JBuilder's `writeIfNotTooBig()`
+     *
+     *  @must-single-thread
+     */
+    def writeIfNotTooBig(jclassName: String, arr: Array[Byte], sym: Symbol) {
+      val label = "" + sym.name
+      bytecodeWriter.writeClass(label, jclassName, arr, sym)
     }
 
     /* ---------------- helper utils for generating classes and fiels ---------------- */
@@ -298,7 +294,9 @@ abstract class GenBCode extends BCodeTypes {
         }
       }
 
-      addSerialVUID(csym, cnode)
+      val optSerial: Option[Long] = serialVUID(csym)
+      if(optSerial.isDefined) { addSerialVUID(optSerial.get, cnode)}
+
       addClassFields(csym)
       gen(cd.impl)
       addInnerClassesASM(csym, cnode)
@@ -307,7 +305,9 @@ abstract class GenBCode extends BCodeTypes {
        * TODO this is a good time to collapse jump-chains, perform dce and remove unused locals, on the asm.tree.ClassNode.
        * See Ch. 8. "Method Analysis" in the ASM User Guide, http://download.forge.objectweb.org/asm/asm4-guide.pdf
        **/
-      writeIfNotTooBig("" + csym.name, thisName, cnode, csym)
+      val cw = new CClassWriter(extraProc)
+      cnode.accept(cw)
+      writeIfNotTooBig(thisName, cw.toByteArray, csym)
       cnode = null
 
       assert(cd.symbol == claszSymbol, "Someone messed up BCodePhase.claszSymbol during genPlainClass().")
@@ -332,7 +332,7 @@ abstract class GenBCode extends BCodeTypes {
         clinit.visitMethodInsn(asm.Opcodes.INVOKESPECIAL,
                                thisName, INSTANCE_CONSTRUCTOR_NAME, mdesc_arglessvoid)
       }
-      if (isParcelableClass) { legacyAddCreatorCode(clinit, cnode, claszSymbol, thisName) }
+      if (isParcelableClass) { legacyAddCreatorCode(clinit, cnode, thisName) }
       clinit.visitInsn(asm.Opcodes.RETURN)
 
       clinit.visitMaxs(0, 0) // just to follow protocol, dummy arguments
@@ -505,7 +505,11 @@ abstract class GenBCode extends BCodeTypes {
       mnode = null
     } // end of method genDefDef()
 
-    /** TODO document, explain interplay with `fabricateStaticInit()` */
+    /**
+     *  @must-single-thread
+     *
+     *  TODO document, explain interplay with `fabricateStaticInit()`
+     **/
     private def appendToStaticCtor(dd: DefDef) {
 
           def insertBefore(location: asm.tree.AbstractInsnNode, insns: List[asm.tree.AbstractInsnNode]) {
@@ -524,11 +528,15 @@ abstract class GenBCode extends BCodeTypes {
       var andrFieldDescr: String = null
       if(isParcelableClass && rets.nonEmpty) {
         // add a static field ("CREATOR") to this class to cache android.os.Parcelable$Creator
-        andrFieldName = newTermName(androidFieldName)
-        val fieldAccess    = asm.Opcodes.ACC_STATIC | asm.Opcodes.ACC_FINAL
-        val fieldType      = internalName(AndroidCreatorClass) // tracks inner classes if any.
-        val andrFieldDescr = toTypeKind(AndroidCreatorClass.tpe).getDescriptor
-        cnode.visitField(fieldAccess, andrFieldName, andrFieldDescr, null, null)
+        andrFieldName = androidFieldName.toString // TermName to String
+        andrFieldDescr = toTypeKind(AndroidCreatorClass.tpe).getDescriptor
+        cnode.visitField(
+          asm.Opcodes.ACC_STATIC | asm.Opcodes.ACC_FINAL,
+          andrFieldName,
+          andrFieldDescr,
+          null,
+          null
+        )
       }
 
       // insert a few instructions for initialization before each return instruction

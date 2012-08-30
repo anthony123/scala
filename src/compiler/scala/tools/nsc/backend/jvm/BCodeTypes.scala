@@ -671,6 +671,10 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
   var hashMethodSym: Symbol = null // scala.runtime.ScalaRunTime.hash
 
+  var AndroidParcelableInterface: Symbol = null
+  var AndroidCreatorClass       : Symbol = null
+  var androidCreatorType        : BType  = null
+
   /**
    * @must-single-thread
    **/
@@ -720,6 +724,10 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     // reversePrimitiveMap = (primitiveTypeMap map { case (s, pt) => (s.tpe, pt) } map (_.swap)).toMap
 
     hashMethodSym = getMember(ScalaRunTimeModule, nme.hash_)
+
+    AndroidParcelableInterface = rootMirror.getClassIfDefined("android.os.Parcelable")
+    AndroidCreatorClass        = rootMirror.getClassIfDefined("android.os.Parcelable$Creator")
+    androidCreatorType         = if(AndroidCreatorClass != NoSymbol) asmClassType(AndroidCreatorClass) else null
 
   }
 
@@ -1443,6 +1451,9 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
     } // end of method genPrimitiveArithmetic()
 
+    /**
+     * @can-multi-thread
+     **/
     final def genPrimitiveLogical(op: /* LogicalOp */ Int, kind: BType) {
 
       import scalaPrimitives.{ AND, OR, XOR }
@@ -1469,6 +1480,9 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
     } // end of method genPrimitiveLogical()
 
+    /**
+     * @can-multi-thread
+     **/
     final def genPrimitiveShift(op: /* ShiftOp */ Int, kind: BType) {
 
       import scalaPrimitives.{ LSL, ASR, LSR }
@@ -1495,6 +1509,9 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
     } // end of method genPrimitiveShift()
 
+    /**
+     * @can-multi-thread
+     **/
     final def genPrimitiveComparison(op: icodes.ComparisonOp, kind: BType) {
 
       import icodes.{ CMPL, CMP, CMPG }
@@ -1509,11 +1526,17 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
     } // end of method genPrimitiveComparison()
 
+    /**
+     * @can-multi-thread
+     **/
     final def genPrimitiveConversion(src: BType, dst: BType, pos: Position) {
       if (dst == BOOL) { println("Illegal conversion at: " + pos.source + ":" + pos.line) }
       else { emitT2T(src, dst) }
     }
 
+    /**
+     * @can-multi-thread
+     **/
     final def genStartConcat {
       jmethod.visitTypeInsn(Opcodes.NEW, StringBuilderClassName)
       jmethod.visitInsn(Opcodes.DUP)
@@ -1524,6 +1547,9 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       )
     }
 
+    /**
+     * @can-multi-thread
+     **/
     final def genStringConcat(el: BType) {
       val jtype =
         if(el.isArray || el.hasObjectSort) JAVA_LANG_OBJECT
@@ -1536,6 +1562,9 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       )
     }
 
+    /**
+     * @can-multi-thread
+     **/
     final def genEndConcat {
       invokevirtual(StringBuilderClassName, "toString", "()Ljava/lang/String;")
     }
@@ -2396,7 +2425,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
    *  The internal name of the least common ancestor of the types given by inameA and inameB.
    *  It's what ASM needs to know in order to compute stack map frames, http://asm.ow2.org/doc/developer-guide.html#controlflow
    */
-  class CClassWriter(flags: Int) extends asm.ClassWriter(flags) {
+  final class CClassWriter(flags: Int) extends asm.ClassWriter(flags) {
 
     /**
      *  This method is thread re-entrant because chrs never grows during its operation (that's because all TypeNames being looked up have already been entered).
@@ -2425,7 +2454,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     /**
      * @can-multi-thread
      **/
-    final def jvmWiseLUB(a: BType, b: BType): BType = {
+    def jvmWiseLUB(a: BType, b: BType): BType = {
 
       assert(a.isNonSpecial, "jvmWiseLUB() received a non-plain-class " + a)
       assert(b.isNonSpecial, "jvmWiseLUB() received a non-plain-class " + b)
@@ -3163,23 +3192,27 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
     val tdesc_long        = BType.LONG_TYPE.getDescriptor // ie. "J"
 
-    private def serialVUID(csym: Symbol): Option[Long] = csym getAnnotation definitions.SerialVersionUIDAttr collect {
+    /**
+     *  @must-single-thread
+     */
+    def serialVUID(csym: Symbol): Option[Long] = csym getAnnotation definitions.SerialVersionUIDAttr collect {
       case AnnotationInfo(_, Literal(const) :: _, _) => const.longValue
     }
 
-    // TODO improve threadability
-    def addSerialVUID(csym: Symbol, jclass: asm.ClassVisitor) {
+    /**
+     *  Add public static final field serialVersionUID with value `id`
+     *
+     *  @can-multi-thread
+     */
+    def addSerialVUID(id: Long, jclass: asm.ClassVisitor) {
       // add static serialVersionUID field if `clasz` annotated with `@SerialVersionUID(uid: Long)`
-      serialVUID(csym) foreach { value =>
-        val fieldName = "serialVersionUID"
-        jclass.visitField(
-          PublicStaticFinal,
-          fieldName,
-          tdesc_long,
-          null, // no java-generic-signature
-          value
-        ).visitEnd()
-      }
+      jclass.visitField(
+        PublicStaticFinal,
+        "serialVersionUID",
+        tdesc_long,
+        null, // no java-generic-signature
+        new java.lang.Long(id)
+      ).visitEnd()
     }
 
     /**
@@ -3403,16 +3436,11 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
   /** basic functionality for class file building of plain, mirror, and beaninfo classes. */
   abstract class JBuilder(bytecodeWriter: BytecodeWriter) extends BCInnerClassGen {
 
-    // TODO improve threadability (invoker should deliver jclass.toByteArray)
-    def writeIfNotTooBig(label: String, jclassName: String, jclass: asm.ClassWriter, sym: Symbol) {
-      try {
-        val arr = jclass.toByteArray()
-        bytecodeWriter.writeClass(label, jclassName, arr, sym)
-      } catch {
-        case e: java.lang.RuntimeException if(e.getMessage() == "Class file too large!") =>
-          // TODO check where ASM throws the equivalent of CodeSizeTooBigException
-          log("Skipped class "+jclassName+" because it exceeds JVM limits (it's too big or has methods that are too long).")
-      }
+    /**
+     *  @must-single-thread
+     */
+    def writeIfNotTooBig(label: String, jclassName: String, arr: Array[Byte], sym: Symbol) {
+      bytecodeWriter.writeClass(label, jclassName, arr, sym)
     }
 
   } // end of class JBuilder
@@ -3471,7 +3499,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
       addInnerClassesASM(modsym, mirrorClass)
       mirrorClass.visitEnd()
-      writeIfNotTooBig("" + modsym.name, mirrorName, mirrorClass, modsym)
+      writeIfNotTooBig("" + modsym.name, mirrorName, mirrorClass.toByteArray(), modsym)
     }
 
   } // end of class JMirrorBuilder
@@ -3600,7 +3628,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       addInnerClassesASM(cls, beanInfoClass)
       beanInfoClass.visitEnd()
 
-      writeIfNotTooBig("BeanInfo ", beanInfoName, beanInfoClass, cls)
+      writeIfNotTooBig("BeanInfo ", beanInfoName, beanInfoClass.toByteArray(), cls)
     }
 
   } // end of class JBeanInfoBuilder
@@ -3615,9 +3643,6 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
      */
     val androidFieldName = newTermName("CREATOR")
 
-    private lazy val AndroidParcelableInterface = rootMirror.getClassIfDefined("android.os.Parcelable")
-    lazy val AndroidCreatorClass        = rootMirror.getClassIfDefined("android.os.Parcelable$Creator")
-
     /**
      * @must-single-thread
      */
@@ -3625,22 +3650,21 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       (AndroidParcelableInterface != NoSymbol) &&
       (sym.parentSymbols contains AndroidParcelableInterface)
 
-    // TODO see JPlainBuilder.addAndroidCreatorCode()
-
-    // TODO improve threadability
-    def legacyAddCreatorCode(clinit: asm.MethodVisitor, jclass: asm.ClassVisitor, csym: Symbol, thisName: String) {
-      val creatorType: BType = asmClassType(AndroidCreatorClass)
-      val tdesc_creator = creatorType.getDescriptor
+    /**
+     * @can-multi-thread
+     */
+    def legacyAddCreatorCode(clinit: asm.MethodVisitor, jclass: asm.ClassVisitor, thisName: String) {
+      val tdesc_creator = androidCreatorType.getDescriptor
 
       jclass.visitField(
         PublicStaticFinal,
-        androidFieldName,
+        "CREATOR",
         tdesc_creator,
         null, // no java-generic-signature
         null  // no initial value
       ).visitEnd()
 
-      val moduleName = internalName(csym)+"$"
+      val moduleName = (thisName + "$")
 
       // GETSTATIC `moduleName`.MODULE$ : `moduleName`;
       clinit.visitFieldInsn(
@@ -3654,15 +3678,15 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       clinit.visitMethodInsn(
         asm.Opcodes.INVOKEVIRTUAL,
         moduleName,
-        androidFieldName,
-        BType.getMethodDescriptor(creatorType, Array.empty[BType])
+        "CREATOR",
+        BType.getMethodDescriptor(androidCreatorType, Array.empty[BType])
       )
 
       // PUTSTATIC `thisName`.CREATOR;
       clinit.visitFieldInsn(
         asm.Opcodes.PUTSTATIC,
         thisName,
-        androidFieldName,
+        "CREATOR",
         tdesc_creator
       )
     }
