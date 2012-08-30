@@ -637,7 +637,7 @@ abstract class GenBCode extends BCodeTypes {
 
         // binary operation
         case rarg :: Nil =>
-          resKind = getMaxType(larg.tpe :: rarg.tpe :: Nil);
+          resKind = maxType(toTypeKind(larg.tpe), toTypeKind(rarg.tpe))
           if (scalaPrimitives.isShiftOp(code) || scalaPrimitives.isBitwiseOp(code)) {
             assert(resKind.isIntegralType || (resKind == BOOL),
                    resKind.toString + " incompatible with arithmetic modulo operation.")
@@ -676,7 +676,7 @@ abstract class GenBCode extends BCodeTypes {
     def genArrayOp(tree: Tree, code: Int, expectedType: BType): BType = {
       val Apply(Select(arrayObj, _), args) = tree
       val k    = toTypeKind(arrayObj.tpe)
-      val elem = k.componentType
+      val elem = k.getComponentType
       genLoad(arrayObj, k)
       val elementType = typeOfArrayOp.getOrElse(code, abort("Unknown operation on arrays: " + tree + " code: " + code))
 
@@ -1794,7 +1794,7 @@ abstract class GenBCode extends BCodeTypes {
               genCZJUMP(success, failure, op, ObjectReference)
             }
             else {
-              val tk = getMaxType(l.tpe :: r.tpe :: Nil)
+              val tk = maxType(toTypeKind(l.tpe), toTypeKind(r.tpe))
               genLoad(l, tk)
               genLoad(r, tk)
               genCJUMP(success, failure, op, tk)
@@ -1930,8 +1930,10 @@ abstract class GenBCode extends BCodeTypes {
       case _            => false
     }
 
-    def getMaxType(ts: List[Type]): BType =
+    /** @can-multi-thread **/
+    def getMaxType(ts: List[Type]): BType = {
       ts map toTypeKind reduceLeft maxType
+    }
 
     abstract class Cleanup(val value: AnyRef) {
       def contains(x: AnyRef) = value == x

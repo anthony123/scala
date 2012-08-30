@@ -62,7 +62,9 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
      * @param chrs a buffer containing a type descriptor.
      * @param off the offset of this descriptor in the previous buffer.
      * @return the Java type corresponding to the given type descriptor.
-     */
+     *
+     * @can-multi-thread
+     **/
     private def getType(off: Int): BType = {
       var len = 0
       chrs(off) match {
@@ -103,7 +105,9 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       }
     }
 
-    /** Params denote an internal name. */
+    /** Params denote an internal name.
+     *  @can-multi-thread
+     **/
     def getObjectType(index: Int, length: Int): BType = {
       val sort = if(chrs(index) == '[') ARRAY else OBJECT;
       new BType(sort, index, length)
@@ -111,7 +115,9 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
     /**
      * @param typeDescriptor a field or method type descriptor.
-     */
+     *
+     * @must-single-thread
+     **/
     def getType(typeDescriptor: String): BType = {
       val n = global.newTypeName(typeDescriptor)
       getType(n.start)
@@ -119,7 +125,9 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
     /**
      * @param methodDescriptor a method descriptor.
-     */
+     *
+     * @must-single-thread
+     **/
     def getMethodType(methodDescriptor: String): BType = {
       val n = global.newTypeName(methodDescriptor)
       new BType(BType.METHOD, n.start, n.length) // TODO assert isValidMethodDescriptor
@@ -132,7 +140,9 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
      * @param returnType the return type of the method.
      * @param argumentTypes the argument types of the method.
      * @return the Java type corresponding to the given argument and return types.
-     */
+     *
+     * @must-single-thread
+     **/
     def getMethodType(returnType: BType, argumentTypes: Array[BType]): BType = {
       val n = global.newTypeName(getMethodDescriptor(returnType, argumentTypes))
       new BType(BType.METHOD, n.start, n.length)
@@ -143,7 +153,9 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
      *
      * @param idx0 index into chrs of the first argument.
      * @return the Java types corresponding to the argument types of the given method descriptor.
-     */
+     *
+     * @can-multi-thread
+     **/
     def getArgumentTypes(idx0: Int): Array[BType] = {
       assert(chrs(idx0 - 1) == '(', "doesn't look like a method descriptor.")
       var off  = idx0
@@ -180,7 +192,9 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
      *
      * @param methodDescriptor a method descriptor.
      * @return the Java types corresponding to the argument types of the given method descriptor.
-     */
+     *
+     * @must-single-thread
+     **/
     def getArgumentTypes(methodDescriptor: String): Array[BType] = {
       val n = global.newTypeName(methodDescriptor)
       getArgumentTypes(n.start + 1)
@@ -191,9 +205,10 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
      * method descriptor.
      *
      * @param methodDescriptor a method descriptor.
-     * @return the Java type corresponding to the return type of the given
-     *         method descriptor.
-     */
+     * @return the Java type corresponding to the return type of the given method descriptor.
+     *
+     * @must-single-thread
+     **/
     def getReturnType(methodDescriptor: String): BType = {
       val n     = global.newTypeName(methodDescriptor)
       val delta = n.pos(')') // `delta` is relative to the Name's zero-based start position, not a valid index into chrs.
@@ -207,9 +222,10 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
      *
      * @param returnType the return type of the method.
      * @param argumentTypes the argument types of the method.
-     * @return the descriptor corresponding to the given argument and return
-     *         types.
-     */
+     * @return the descriptor corresponding to the given argument and return types.
+     *
+     * @can-multi-thread
+     **/
     def getMethodDescriptor(
         returnType: BType,
         argumentTypes: Array[BType]): String =
@@ -230,11 +246,16 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
   /**
    * Based on ASM's Type class. Namer's chrs is used in this class for the same purposes as the `buf` char array in asm.Type.
-   */
+   *
+   * All methods of this classs @can-multi-thread
+   **/
   final class BType(val sort: Int, val off: Int, val len: Int) {
 
     import global.chrs
 
+    /**
+     * @can-multi-thread
+     **/
     def toASMType: scala.tools.asm.Type = {
       import scala.tools.asm
       sort match {
@@ -257,7 +278,9 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
      * Unlike for ICode's REFERENCE, isBoxedType(t) implies isReferenceType(t)
      * Also, `isReferenceType(RT_NOTHING) == true` , similarly for RT_NULL.
      * Use isNullType() , isNothingType() to detect Nothing and Null.
-     */
+     *
+     * @can-multi-thread
+     **/
     def hasObjectSort = (sort == BType.OBJECT)
 
     /**
@@ -265,8 +288,10 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
      * only be used for an array type.
      *
      * @return the number of dimensions of this array type.
-     */
-    def getDimensions: Int = { // TODO rename to `dimensions`
+     *
+     * @can-multi-thread
+     **/
+    def getDimensions: Int = {
       var i = 1
       while (chrs(off + i) == '[') {
         i += 1
@@ -279,7 +304,9 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
      * only be used for an array type.
      *
      * @return Returns the type of the elements of this array type.
-     */
+     *
+     * @can-multi-thread
+     **/
     def getElementType: BType = {
       assert(isArray, "Asked for the element type of a non-array type: " + this)
       BType.getType(off + getDimensions)
@@ -292,7 +319,9 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
      * should only be used for an object or array type.
      *
      * @return the internal name of the class corresponding to this object type.
-     */
+     *
+     * @can-multi-thread
+     **/
     def getInternalName: String = {
       new String(chrs, off, len)
     }
@@ -302,7 +331,9 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
      * only be used for method types.
      *
      * @return the argument types of methods of this type.
-     */
+     *
+     * @can-multi-thread
+     **/
     def getArgumentTypes: Array[BType] = {
       BType.getArgumentTypes(off + 1)
     }
@@ -312,7 +343,9 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
      * be used for method types.
      *
      * @return the return type of methods of this type.
-     */
+     *
+     * @can-multi-thread
+     **/
     def getReturnType: BType = {
       assert(chrs(off) == '(', "doesn't look like a method descriptor: " + toString)
       var resPos = off + 1
@@ -324,19 +357,22 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     // Inspector methods
     // ------------------------------------------------------------------------
 
-    def isPrimitiveOrVoid = (sort <  BType.ARRAY)
-    def isValueType       = (sort <  BType.ARRAY)
-    def isArray           = (sort == BType.ARRAY)
-    def isUnitType        = (sort == BType.VOID)
+    def isPrimitiveOrVoid = (sort <  BType.ARRAY) // @can-multi-thread
+    def isValueType       = (sort <  BType.ARRAY) // @can-multi-thread
+    def isArray           = (sort == BType.ARRAY) // @can-multi-thread
+    def isUnitType        = (sort == BType.VOID)  // @can-multi-thread
 
-    def isRefOrArrayType   = { hasObjectSort ||  isArray    }
-    def isNonUnitValueType = { isValueType   && !isUnitType }
+    def isRefOrArrayType   = { hasObjectSort ||  isArray    } // @can-multi-thread
+    def isNonUnitValueType = { isValueType   && !isUnitType } // @can-multi-thread
 
-    def isNonSpecial  = { !isValueType && !isArray && !isPhantomType   }
-    def isNothingType = { (this == RT_NOTHING) || (this == CT_NOTHING) }
-    def isNullType    = { (this == RT_NULL)    || (this == CT_NULL)    }
-    def isPhantomType = { isNothingType || isNullType }
+    def isNonSpecial  = { !isValueType && !isArray && !isPhantomType   } // @can-multi-thread
+    def isNothingType = { (this == RT_NOTHING) || (this == CT_NOTHING) } // @can-multi-thread
+    def isNullType    = { (this == RT_NULL)    || (this == CT_NULL)    } // @can-multi-thread
+    def isPhantomType = { isNothingType || isNullType } // @can-multi-thread
 
+    /**
+     * @can-multi-thread
+     **/
     def isBoxed = {
       this match {
         case BOXED_UNIT  | BOXED_BOOLEAN | BOXED_CHAR   |
@@ -351,6 +387,8 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     /** On the JVM,
      *    BOOL, BYTE, CHAR, SHORT, and INT
      *  are like Ints for the purpose of lub calculation.
+     *
+     * @can-multi-thread
      **/
     def isIntSizedType = {
       (sort : @switch) match {
@@ -362,7 +400,10 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       }
     }
 
-    /** On the JVM, similar to isIntSizedType except that BOOL isn't integral while LONG is. */
+    /** On the JVM, similar to isIntSizedType except that BOOL isn't integral while LONG is.
+     *
+     * @can-multi-thread
+     **/
     def isIntegralType = {
       (sort : @switch) match {
         case BType.CHAR  |
@@ -374,12 +415,18 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       }
     }
 
-    /** On the JVM, FLOAT and DOUBLE. */
+    /** On the JVM, FLOAT and DOUBLE.
+     *
+     * @can-multi-thread
+     **/
     def isRealType = { (sort == BType.FLOAT ) || (sort == BType.DOUBLE) }
 
-    def isNumericType = (isIntegralType || isRealType)
+    def isNumericType = (isIntegralType || isRealType) // @can-multi-thread
 
-    /** Is this type a category 2 type in JVM terms? (ie, is it LONG or DOUBLE?) */
+    /** Is this type a category 2 type in JVM terms? (ie, is it LONG or DOUBLE?)
+     *
+     * @can-multi-thread
+     **/
     def isWideType = (getSize == 2)
 
     /*
@@ -396,12 +443,13 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
      *
      **/
 
-    /** The type of items this array holds. */
-    def componentType: BType = {
+    /** The type of items this array holds.
+     *
+     * @can-multi-thread
+     **/
+    def getComponentType: BType = {
       assert(isArray, "Asked for the component type of a non-array type: " + this)
-      val reduced = getDimensions - 1
-      if(reduced == 0) getElementType
-      else arrayN(getElementType, reduced)
+      BType.getType(off + 1)
     }
 
     // ------------------------------------------------------------------------
@@ -412,7 +460,9 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
      * Returns the descriptor corresponding to this Java type.
      *
      * @return the descriptor corresponding to this Java type.
-     */
+     *
+     * @can-multi-thread
+     **/
     def getDescriptor: String = {
       val buf = new StringBuffer()
       getDescriptor(buf)
@@ -424,18 +474,20 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
      * string buffer.
      *
      * @param buf the string buffer to which the descriptor must be appended.
-     */
+     *
+     * @can-multi-thread
+     **/
     private def getDescriptor(buf: StringBuffer) {
-        if (isPrimitiveOrVoid) {
-            // descriptor is in byte 3 of 'off' for primitive types (buf == null)
-            buf.append(((off & 0xFF000000) >>> 24).asInstanceOf[Char])
-        } else if (sort == BType.OBJECT) {
-            buf.append('L')
-            buf.append(chrs, off, len)
-            buf.append(';')
-        } else { // sort == ARRAY || sort == METHOD
-            buf.append(chrs, off, len)
-        }
+      if (isPrimitiveOrVoid) {
+        // descriptor is in byte 3 of 'off' for primitive types (buf == null)
+        buf.append(((off & 0xFF000000) >>> 24).asInstanceOf[Char])
+      } else if (sort == BType.OBJECT) {
+        buf.append('L')
+        buf.append(chrs, off, len)
+        buf.append(';')
+      } else { // sort == ARRAY || sort == METHOD
+        buf.append(chrs, off, len)
+      }
     }
 
     // ------------------------------------------------------------------------
@@ -448,10 +500,12 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
      *
      * @return the size of values of this type, i.e., 2 for <tt>long</tt> and
      *         <tt>double</tt>, 0 for <tt>void</tt> and 1 otherwise.
-     */
+     *
+     * @can-multi-thread
+     **/
     def getSize: Int = {
-        // the size is in byte 0 of 'off' for primitive types (buf == null)
-        if(isPrimitiveOrVoid) (off & 0xFF) else 1
+      // the size is in byte 0 of 'off' for primitive types (buf == null)
+      if(isPrimitiveOrVoid) (off & 0xFF) else 1
     }
 
     /**
@@ -464,7 +518,9 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
      * @return an opcode that is similar to the given opcode, but adapted to
      *         this Java type. For example, if this type is <tt>float</tt> and
      *         <tt>opcode</tt> is IRETURN, this method returns FRETURN.
-     */
+     *
+     * @can-multi-thread
+     **/
     def getOpcode(opcode: Int): Int = {
       import scala.tools.asm.Opcodes
       if (opcode == Opcodes.IALOAD || opcode == Opcodes.IASTORE) {
@@ -487,7 +543,9 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
      *
      * @param o the object to be compared to this type.
      * @return <tt>true</tt> if the given object is equal to this type.
-     */
+     *
+     * @can-multi-thread
+     **/
     override def equals(o: Any): Boolean = {
       if (!(o.isInstanceOf[BType])) {
         return false
@@ -524,7 +582,9 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
      * Returns a hash code value for this type.
      *
      * @return a hash code value for this type.
-     */
+     *
+     * @can-multi-thread
+     **/
     override def hashCode(): Int = {
       var hc = 13 * sort;
       if (sort >= BType.ARRAY) {
@@ -542,18 +602,23 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
      * Returns a string representation of this type.
      *
      * @return the descriptor of this type.
-     */
+     *
+     * @can-multi-thread
+     **/
     override def toString: String = { getDescriptor }
 
   }
 
-  def brefType(iname: String): BType = {
-    brefType(newTypeName(iname))
-  }
-  def brefType(iname: Name): BType = {
-    assert(iname.isInstanceOf[TypeName], "Non-built-in BTypes require a TypeName.")
-    BType.getObjectType(iname.start, iname.length)
-  }
+  /**
+   * Creates a TypeName and the BType token for it.
+   * @must-single-thread
+   **/
+  def brefType(iname: String): BType = { brefType(newTypeName(iname)) }
+
+  /** A BType token for the TypeName received as argument.
+   *  @can-multi-thread
+   **/
+  def brefType(iname: TypeName): BType = { BType.getObjectType(iname.start, iname.length) }
 
   // due to keyboard economy only
   val UNIT   = BType.VOID_TYPE
@@ -602,6 +667,9 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
   var hashMethodSym: Symbol = null // scala.runtime.ScalaRunTime.hash
 
+  /**
+   * @must-single-thread
+   **/
   def initBCodeTypes() {
 
     import definitions._
@@ -639,7 +707,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     // Other than that, they aren't needed there (e.g., `isSubtypeOf()` special-cases boxed classes, similarly for others).
     val boxedClasses = List(BoxedBooleanClass, BoxedCharacterClass, BoxedByteClass, BoxedShortClass, BoxedIntClass, BoxedLongClass, BoxedFloatClass, BoxedDoubleClass)
     for(csym <- boxedClasses) {
-      val key = brefType(csym.javaBinaryName)
+      val key = brefType(csym.javaBinaryName.toTypeName)
       val tr  = buildExemplar(key, csym)
       symExemplars.put(csym, tr)
       exemplars.put(tr.c, tr)
@@ -651,13 +719,15 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
   }
 
+  /**
+   * @must-single-thread
+   **/
   def clearBCodeTypes() {
     symExemplars.clear()
     exemplars.clear()
     innerChainsMap.clear()
   }
 
-  // in keeping with ICode's tradition of calling out boxed types.
   val BOXED_UNIT    = brefType("java/lang/Void")
   val BOXED_BOOLEAN = brefType("java/lang/Boolean")
   val BOXED_BYTE    = brefType("java/lang/Byte")
@@ -669,7 +739,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
   val BOXED_DOUBLE  = brefType("java/lang/Double")
 
   /** Map from type kinds to the Java reference types.
-   *  It is used to push class literals onto the operand stack.
+   *  Useful when pushing class literals onto the operand stack (ldc instruction taking a class literal).
    *  @see Predef.classOf
    *  @see genConstant()
    */
@@ -713,16 +783,17 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     )
   }
 
-  final def hasInternalName(sym: Symbol) = { sym.isClass || (sym.isModule && !sym.isMethod) }
+  // ------------------------------------------------
+  // accessory maps tracking the isInterface, innerClasses, superClass, and supportedInterfaces relations,
+  // allowing answering `conforms()` resorting to typer.
+  // ------------------------------------------------
 
-   // ------------------------------------------------
-   // accessory maps tracking the isInterface, innerClasses, superClass, and supportedInterfaces relations,
-   // allowing answering `conforms()` resorting to typer.
-   // ------------------------------------------------
-
-  val exemplars    = mutable.Map.empty[BType, Tracked]
+  val exemplars    = mutable.Map.empty[BType,  Tracked]
   val symExemplars = mutable.Map.empty[Symbol, Tracked]
 
+  /**
+   *  All methods of this class @can-multi-thread
+   **/
   case class Tracked(c: BType, flags: Int, sc: Tracked, ifaces: Array[Tracked]) {
 
     /* `isCompilingStdLib` saves the day when compiling:
@@ -749,10 +820,12 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     def isSuper      = hasFlags(ACC_SUPER)
     def isDeprecated = hasFlags(ACC_DEPRECATED)
 
+    /** @can-multi-thread */
     def superClasses: List[Tracked] = {
       if(sc == null) Nil else sc :: sc.superClasses
     }
 
+    /** @can-multi-thread */
     def isSubtypeOf(other: BType): Boolean = {
       assert(other.isNonSpecial, "so called special cases have to be handled in BCodeTypes.conforms()")
 
@@ -781,8 +854,13 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
   }
 
-  def isDeprecated(sym: Symbol): Boolean = { sym.annotations exists (_ matches definitions.DeprecatedAttr) }
+  /** @must-single-thread */
+  final def isDeprecated(sym: Symbol): Boolean = { sym.annotations exists (_ matches definitions.DeprecatedAttr) }
 
+  /** @must-single-thread */
+  final def hasInternalName(sym: Symbol) = { sym.isClass || (sym.isModule && !sym.isMethod) }
+
+  /** @must-single-thread */
   private def getSuperInterfaces(csym: Symbol): List[Symbol] = {
 
       // Additional interface parents based on annotations and other cues
@@ -821,9 +899,11 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
   }
 
   /**
-   * Records in accessory maps the superClass and supportedInterfaces relations,
+   * Records the superClass and supportedInterfaces relations,
    * so that afterwards queries can be answered without resorting to typer.
    * This method does not add to `innerClassesBuffer`, use `asmType()` or `toTypeKind()` for that.
+   *
+   * @must-single-thread
    */
   final def exemplar(csym0: Symbol): Tracked = {
     assert(csym0 != NoSymbol, "NoSymbol can't be tracked")
@@ -847,7 +927,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       return opt.get
     }
 
-    val key = brefType(csym.javaBinaryName)
+    val key = brefType(csym.javaBinaryName.toTypeName)
     assert(key.isNonSpecial || isCompilingStdLib, "Not a class to track: " + csym.fullName)
 
     exemplars.get(key) match {
@@ -866,6 +946,9 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
   val EMPTY_INT_ARRAY      = Array.empty[Int]
   val EMPTY_LABEL_ARRAY    = Array.empty[asm.Label]
 
+  /**
+   * @must-single-thread
+   */
   private def buildExemplar(key: BType, csym: Symbol): Tracked = {
     val sc =
      if(csym.isImplClass) definitions.ObjectClass
@@ -899,17 +982,23 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
   // ---------------- inspector methods on BType  ----------------
 
+  /**
+   * @must-single-thread
+   */
   final def asmMethodType(s: Symbol): BType = {
     assert(s.isMethod, "not a method-symbol: " + s)
     val resT: BType = if (s.isClassConstructor) BType.VOID_TYPE else toTypeKind(s.tpe.resultType);
     BType.getMethodType( resT, mkArray(s.tpe.paramTypes map toTypeKind) )
   }
 
-  final def mkArray(xs: List[BType]):     Array[BType]     = { val a = new Array[BType](xs.size);     xs.copyToArray(a); a }
-  final def mkArray(xs: List[String]):    Array[String]    = { val a = new Array[String](xs.size);    xs.copyToArray(a); a }
-  final def mkArray(xs: List[asm.Label]): Array[asm.Label] = { val a = new Array[asm.Label](xs.size); xs.copyToArray(a); a }
-  final def mkArray(xs: List[Int]):       Array[Int]       = { val a = new Array[Int](xs.size);       xs.copyToArray(a); a }
+  final def mkArray(xs: List[BType]):     Array[BType]     = { val a = new Array[BType](xs.size);     xs.copyToArray(a); a } // @can-multi-thread
+  final def mkArray(xs: List[String]):    Array[String]    = { val a = new Array[String](xs.size);    xs.copyToArray(a); a } // @can-multi-thread
+  final def mkArray(xs: List[asm.Label]): Array[asm.Label] = { val a = new Array[asm.Label](xs.size); xs.copyToArray(a); a } // @can-multi-thread
+  final def mkArray(xs: List[Int]):       Array[Int]       = { val a = new Array[Int](xs.size);       xs.copyToArray(a); a } // @can-multi-thread
 
+  /**
+   * @can-multi-thread
+   */
   final def mkArrayReverse(xs: List[String]): Array[String] = {
     val len = xs.size
     if(len == 0) { return EMPTY_STRING_ARRAY }
@@ -924,6 +1013,9 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     a
   }
 
+  /**
+   * @can-multi-thread
+   */
   final def mkArrayReverse(xs: List[Int]): Array[Int] = {
     val len = xs.size
     if(len == 0) { return EMPTY_INT_ARRAY }
@@ -938,6 +1030,9 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     a
   }
 
+  /**
+   * @can-multi-thread
+   */
   final def mkArrayReverse(xs: List[asm.Label]): Array[asm.Label] = {
     val len = xs.size
     if(len == 0) { return EMPTY_LABEL_ARRAY }
@@ -952,13 +1047,19 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     a
   }
 
-  /* the type of 1-dimensional arrays of `elem` type. */
+  /* the type of 1-dimensional arrays of `elem` type.
+   *
+   * @must-single-thread
+   **/
   final def arrayOf(elem: BType): BType = {
     assert(!(elem.isUnitType), "The element type of an array can't be: " + elem)
     brefType("[" + elem.getDescriptor)
   }
 
-  /* the type of N-dimensional arrays of `elem` type. */
+  /* the type of N-dimensional arrays of `elem` type.
+   *
+   * @must-single-thread
+   **/
   final def arrayN(elem: BType, dims: Int): BType = {
     assert(dims > 0)
     assert(!(elem.isUnitType) && !(elem.isPhantomType),
@@ -968,6 +1069,8 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
   }
 
   /** Returns the BType for the given type
+   *
+   * @must-single-thread
    **/
   final def toTypeKind(t: Type): BType = {
 
@@ -1073,6 +1176,8 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
    * Subtype check `a <:< b` on BTypes that takes into account the JVM built-in numeric promotions (e.g. BYTE to INT).
    * Its operation can be visualized more easily in terms of the Java bytecode type hierarchy.
    * This method used to be called, in the ICode world, TypeKind.<:<()
+   *
+   * @can-multi-thread
    **/
   final def conforms(a: BType, b: BType): Boolean = {
     if(a.isArray) { // may be null
@@ -1080,7 +1185,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       if((b == jlCloneableReference)     ||
          (b == jioSerializableReference) ||
          (b == AnyRefReference))    { true  }
-      else if(b.isArray)            { conforms(a.componentType, b.componentType) }
+      else if(b.isArray)            { conforms(a.getComponentType, b.getComponentType) }
       else                          { false }
     }
     else if(a.isBoxed) { // may be null
@@ -1120,7 +1225,10 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     }
   }
 
-  /** The maxValueType of (Char, Byte) and of (Char, Short) is Int, to encompass the negative values of Byte and Short. See ticket #2087. */
+  /** The maxValueType of (Char, Byte) and of (Char, Short) is Int, to encompass the negative values of Byte and Short. See ticket #2087.
+   *
+   * @can-multi-thread
+   **/
   private def maxValueType(a: BType, other: BType): BType = {
     assert(a.isValueType, "maxValueType() is defined only for 1st arg valuetypes (2nd arg doesn't matter).")
 
@@ -1182,7 +1290,10 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     }
   }
 
-  /* Takes promotions of numeric primitives into account. */
+  /** Takes promotions of numeric primitives into account.
+   *
+   *  @can-multi-thread
+   **/
   final def maxType(a: BType, other: BType): BType = {
     if(a.isValueType) { maxValueType(a, other) }
     else {
@@ -1195,7 +1306,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       // TODO For some reason, ICode thinks `REFERENCE(...).maxType(BOXED(whatever))` is `uncomparable`. Here, that has maxType AnyRefReference.
       //      BTW, when swapping arguments, ICode says BOXED(whatever).maxType(REFERENCE(...)) == AnyRefReference, so I guess the above was an oversight in REFERENCE.maxType()
       if(other.isRefOrArrayType) { AnyRefReference }
-      else                        { abort("Uncomparable BTypes: " + a.toString + " with " + other.toString) }
+      else                       { abort("Uncomparable BTypes: " + a.toString + " with " + other.toString) }
     }
   }
 
@@ -1214,6 +1325,9 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
     @inline final def emit(opc: Int) { jmethod.visitInsn(opc) }
 
+    /**
+     * TODO improve threadability
+     **/
     final def genCallMethod(method:      Symbol, style: InvokeStyle,
                             jMethodName: String,
                             siteSymbol:  Symbol, hostSymbol: Symbol,
@@ -1283,6 +1397,9 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
     } // end of genCallMethod
 
+    /**
+     * @can-multi-thread
+     **/
     final def genPrimitiveArithmetic(op: icodes.ArithmeticOp, kind: BType) {
 
       import icodes.{ ADD, SUB, MUL, DIV, REM, NOT }
@@ -1409,12 +1526,19 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       invokevirtual(StringBuilderClassName, "toString", "()Ljava/lang/String;")
     }
 
+    val fromByteT2T  = { import asm.Opcodes._; Array( -1,  -1, I2C,  -1, I2L, I2F, I2D) } // do nothing for (BYTE -> SHORT) and for (BYTE -> INT)
+    val fromCharT2T  = { import asm.Opcodes._; Array(I2B, I2S,  -1,  -1, I2L, I2F, I2D) } // for (CHAR  -> INT) do nothing
+    val fromShortT2T = { import asm.Opcodes._; Array(I2B,  -1, I2C,  -1, I2L, I2F, I2D) } // for (SHORT -> INT) do nothing
+    val fromIntT2T   = { import asm.Opcodes._; Array(I2B, I2S, I2C,  -1, I2L, I2F, I2D) }
+
     /**
      * Emits one or more conversion instructions based on the types given as arguments.
      *
      * @param from The type of the value to be converted into another type.
      * @param to   The type the value will be converted into.
-     */
+     *
+     * @can-multi-thread
+     **/
     final def emitT2T(from: BType, to: BType) {
 
           def msg = "(from: " + from + ", to: " + to + ")"
@@ -1441,50 +1565,45 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
         throw new Error("inconvertible types : " + from.toString + " -> " + to.toString)
       }
 
-      if(from.isIntSizedType) { // BYTE, CHAR, SHORT, and INT. (we're done with BOOL already)
+      // We're done with BOOL already
+      (from.sort: @switch) match {
 
-        val fromByte  = { import asm.Opcodes._; Array( -1,  -1, I2C,  -1, I2L, I2F, I2D) } // do nothing for (BYTE -> SHORT) and for (BYTE -> INT)
-        val fromChar  = { import asm.Opcodes._; Array(I2B, I2S,  -1,  -1, I2L, I2F, I2D) } // for (CHAR  -> INT) do nothing
-        val fromShort = { import asm.Opcodes._; Array(I2B,  -1, I2C,  -1, I2L, I2F, I2D) } // for (SHORT -> INT) do nothing
-        val fromInt   = { import asm.Opcodes._; Array(I2B, I2S, I2C,  -1, I2L, I2F, I2D) }
+        case BType.BYTE  => pickOne(fromByteT2T)
+        case BType.SHORT => pickOne(fromShortT2T)
+        case BType.CHAR  => pickOne(fromCharT2T)
+        case BType.INT   => pickOne(fromIntT2T)
 
-        (from: @unchecked) match {
-          case BYTE  => pickOne(fromByte)
-          case SHORT => pickOne(fromShort)
-          case CHAR  => pickOne(fromChar)
-          case INT   => pickOne(fromInt)
-        }
+        case BType.FLOAT  =>
+          import asm.Opcodes.{ F2L, F2D, F2I }
+          (to.sort: @switch) match {
+            case BType.LONG    => emit(F2L)
+            case BType.DOUBLE  => emit(F2D)
+            case _             => emit(F2I); emitT2T(INT, to)
+          }
 
-      } else { // FLOAT, LONG, DOUBLE
+        case BType.LONG   =>
+          import asm.Opcodes.{ L2F, L2D, L2I }
+          (to.sort: @switch) match {
+            case BType.FLOAT   => emit(L2F)
+            case BType.DOUBLE  => emit(L2D)
+            case _             => emit(L2I); emitT2T(INT, to)
+          }
 
-        (from: @unchecked) match {
-          case FLOAT           =>
-            import asm.Opcodes.{ F2L, F2D, F2I }
-            (to: @unchecked) match {
-              case LONG    => emit(F2L)
-              case DOUBLE  => emit(F2D)
-              case _       => emit(F2I); emitT2T(INT, to)
-            }
-
-          case LONG            =>
-            import asm.Opcodes.{ L2F, L2D, L2I }
-            (to: @unchecked) match {
-              case FLOAT   => emit(L2F)
-              case DOUBLE  => emit(L2D)
-              case _       => emit(L2I); emitT2T(INT, to)
-            }
-
-          case DOUBLE          =>
-            import asm.Opcodes.{ D2L, D2F, D2I }
-            (to: @unchecked) match {
-              case FLOAT   => emit(D2F)
-              case LONG    => emit(D2L)
-              case _       => emit(D2I); emitT2T(INT, to)
-            }
-        }
+        case BType.DOUBLE =>
+          import asm.Opcodes.{ D2L, D2F, D2I }
+          (to.sort: @switch) match {
+            case BType.FLOAT   => emit(D2F)
+            case BType.LONG    => emit(D2L)
+            case _             => emit(D2I); emitT2T(INT, to)
+          }
       }
     } // end of emitT2T()
 
+    /**
+     * For const.tag in {ClazzTag, EnumTag}
+     *   @must-single-thread
+     * Otherwise it's safe to call from multiple threads.
+     **/
     final def genConstant(const: Constant) {
       (const.tag: @switch) match {
 
@@ -1527,13 +1646,16 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       }
     }
 
+    // @can-multi-thread
     final def aconst(cst: AnyRef) {
       if (cst == null) { emit(Opcodes.ACONST_NULL) }
       else             { jmethod.visitLdcInsn(cst) }
     }
 
+    // @can-multi-thread
     final def boolconst(b: Boolean) { iconst(if(b) 1 else 0) }
 
+    // @can-multi-thread
     final def iconst(cst: Int) {
       if (cst >= -1 && cst <= 5) {
         emit(Opcodes.ICONST_0 + cst)
@@ -1546,6 +1668,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       }
     }
 
+    // @can-multi-thread
     final def lconst(cst: Long) {
       if (cst == 0L || cst == 1L) {
         emit(Opcodes.LCONST_0 + cst.asInstanceOf[Int])
@@ -1554,6 +1677,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       }
     }
 
+    // @can-multi-thread
     final def fconst(cst: Float) {
       val bits: Int = java.lang.Float.floatToIntBits(cst)
       if (bits == 0L || bits == 0x3f800000 || bits == 0x40000000) { // 0..2
@@ -1563,6 +1687,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       }
     }
 
+    // @can-multi-thread
     final def dconst(cst: Double) {
       val bits: Long = java.lang.Double.doubleToLongBits(cst)
       if (bits == 0L || bits == 0x3ff0000000000000L) { // +0.0d and 1.0d
@@ -1572,26 +1697,22 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       }
     }
 
+    // @can-multi-thread
     final def newarray(elem: BType) { // TODO switch on elem.getSort
       if(elem.isRefOrArrayType || elem.isPhantomType ) {
         /* phantom type at play in `Array(null)`, SI-1513. On the other hand, Array(()) has element type `scala.runtime.BoxedUnit` which hasObjectSort. */
         jmethod.visitTypeInsn(Opcodes.ANEWARRAY, elem.getInternalName)
       } else {
         val rand = {
-          if(elem.isIntSizedType) {
-            (elem: @unchecked) match {
-              case BOOL   => Opcodes.T_BOOLEAN
-              case BYTE   => Opcodes.T_BYTE
-              case SHORT  => Opcodes.T_SHORT
-              case CHAR   => Opcodes.T_CHAR
-              case INT    => Opcodes.T_INT
-            }
-          } else {
-            (elem: @unchecked) match {
-              case LONG   => Opcodes.T_LONG
-              case FLOAT  => Opcodes.T_FLOAT
-              case DOUBLE => Opcodes.T_DOUBLE
-            }
+          (elem.sort: @switch) match { // TODO use BType.getOpcode instead
+            case BType.BOOLEAN => Opcodes.T_BOOLEAN
+            case BType.BYTE    => Opcodes.T_BYTE
+            case BType.SHORT   => Opcodes.T_SHORT
+            case BType.CHAR    => Opcodes.T_CHAR
+            case BType.INT     => Opcodes.T_INT
+            case BType.LONG    => Opcodes.T_LONG
+            case BType.FLOAT   => Opcodes.T_FLOAT
+            case BType.DOUBLE  => Opcodes.T_DOUBLE
           }
         }
         jmethod.visitIntInsn(Opcodes.NEWARRAY, rand)
@@ -1599,49 +1720,63 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     }
 
 
-    final def load( idx: Int, tk: BType) { emitVarInsn(Opcodes.ILOAD,  idx, tk) }
-    final def store(idx: Int, tk: BType) { emitVarInsn(Opcodes.ISTORE, idx, tk) }
+    final def load( idx: Int, tk: BType) { emitVarInsn(Opcodes.ILOAD,  idx, tk) } // @can-multi-thread
+    final def store(idx: Int, tk: BType) { emitVarInsn(Opcodes.ISTORE, idx, tk) } // @can-multi-thread
 
-    final def aload( tk: BType) { emitTypeBased(aloadOpcodes,  tk) }
-    final def astore(tk: BType) { emitTypeBased(astoreOpcodes, tk) }
+    final def aload( tk: BType) { emitTypeBased(aloadOpcodes,  tk) } // @can-multi-thread
+    final def astore(tk: BType) { emitTypeBased(astoreOpcodes, tk) } // @can-multi-thread
 
-    final def neg(tk: BType) { emitPrimitive(negOpcodes, tk) }
-    final def add(tk: BType) { emitPrimitive(addOpcodes, tk) }
-    final def sub(tk: BType) { emitPrimitive(subOpcodes, tk) }
-    final def mul(tk: BType) { emitPrimitive(mulOpcodes, tk) }
-    final def div(tk: BType) { emitPrimitive(divOpcodes, tk) }
-    final def rem(tk: BType) { emitPrimitive(remOpcodes, tk) }
+    final def neg(tk: BType) { emitPrimitive(negOpcodes, tk) } // @can-multi-thread
+    final def add(tk: BType) { emitPrimitive(addOpcodes, tk) } // @can-multi-thread
+    final def sub(tk: BType) { emitPrimitive(subOpcodes, tk) } // @can-multi-thread
+    final def mul(tk: BType) { emitPrimitive(mulOpcodes, tk) } // @can-multi-thread
+    final def div(tk: BType) { emitPrimitive(divOpcodes, tk) } // @can-multi-thread
+    final def rem(tk: BType) { emitPrimitive(remOpcodes, tk) } // @can-multi-thread
 
-    final def invokespecial(owner: String, name: String, desc: String) {
+     // @can-multi-thread
+     final def invokespecial(owner: String, name: String, desc: String) {
       jmethod.visitMethodInsn(Opcodes.INVOKESPECIAL, owner, name, desc)
     }
+    // @can-multi-thread
     final def invokestatic(owner: String, name: String, desc: String) {
       jmethod.visitMethodInsn(Opcodes.INVOKESTATIC, owner, name, desc)
     }
+    // @can-multi-thread
     final def invokeinterface(owner: String, name: String, desc: String) {
       jmethod.visitMethodInsn(Opcodes.INVOKEINTERFACE, owner, name, desc)
     }
+    // @can-multi-thread
     final def invokevirtual(owner: String, name: String, desc: String) {
       jmethod.visitMethodInsn(Opcodes.INVOKEVIRTUAL, owner, name, desc)
     }
 
+    // @can-multi-thread
     final def goTo(label: asm.Label) { jmethod.visitJumpInsn(Opcodes.GOTO, label) }
+    // @can-multi-thread
     final def emitIF(cond: icodes.TestOp, label: asm.Label)      { jmethod.visitJumpInsn(cond.opcodeIF,     label) }
+    // @can-multi-thread
     final def emitIF_ICMP(cond: icodes.TestOp, label: asm.Label) { jmethod.visitJumpInsn(cond.opcodeIFICMP, label) }
+    // @can-multi-thread
     final def emitIF_ACMP(cond: icodes.TestOp, label: asm.Label) {
       assert((cond == icodes.EQ) || (cond == icodes.NE), cond)
       val opc = (if(cond == icodes.EQ) Opcodes.IF_ACMPEQ else Opcodes.IF_ACMPNE)
       jmethod.visitJumpInsn(opc, label)
     }
+    // @can-multi-thread
     final def emitIFNONNULL(label: asm.Label) { jmethod.visitJumpInsn(Opcodes.IFNONNULL, label) }
+    // @can-multi-thread
     final def emitIFNULL   (label: asm.Label) { jmethod.visitJumpInsn(Opcodes.IFNULL,    label) }
 
+    // @can-multi-thread
     final def emitRETURN(tk: BType) {
       if(tk == UNIT) { emit(Opcodes.RETURN) }
       else           { emitTypeBased(returnOpcodes, tk)      }
     }
 
-    /** Emits one of tableswitch or lookoupswitch. */
+    /**Emits one of tableswitch or lookoupswitch.
+     *
+     * @can-multi-thread
+     **/
     final def emitSWITCH(keys: Array[Int], branches: Array[asm.Label], defaultBranch: asm.Label, minDensity: Double) {
       assert(keys.length == branches.length)
 
@@ -1717,6 +1852,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     // internal helpers -- not part of the public API of `jcode`
     // don't make private otherwise inlining will suffer
 
+    // @can-multi-thread
     final def emitVarInsn(opc: Int, idx: Int, tk: BType) {
       assert((opc == Opcodes.ILOAD) || (opc == Opcodes.ISTORE), opc)
       jmethod.visitVarInsn(tk.getOpcode(opc), idx)
@@ -1729,7 +1865,8 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
     val returnOpcodes = { import Opcodes._; Array(ARETURN, IRETURN, IRETURN, IRETURN, IRETURN, LRETURN, FRETURN, DRETURN) }
 
-    final def emitTypeBased(opcs: Array[Int], tk: BType) { // TODO index on tk.sort
+    // @can-multi-thread
+    final def emitTypeBased(opcs: Array[Int], tk: BType) { // TODO index on tk.sort , or use tk.getOpcode
       assert(tk != UNIT, tk)
       val opc = {
         if(tk.isRefOrArrayType) {  opcs(0) }
@@ -1760,33 +1897,43 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     val divOpcodes: Array[Int] = { import Opcodes._; Array(IDIV, LDIV, FDIV, DDIV) }
     val remOpcodes: Array[Int] = { import Opcodes._; Array(IREM, LREM, FREM, DREM) }
 
-    final def emitPrimitive(opcs: Array[Int], tk: BType) { // TODO index on tk.sort
+     // @can-multi-thread
+    final def emitPrimitive(opcs: Array[Int], tk: BType) {
       val opc = {
-        if(tk.isIntSizedType) { opcs(0) }
-        else {
-          (tk: @unchecked) match {
-            case LONG   => opcs(1)
-            case FLOAT  => opcs(2)
-            case DOUBLE => opcs(3)
-          }
+        (tk.sort: @switch) match {
+          case BType.LONG   => opcs(1)
+          case BType.FLOAT  => opcs(2)
+          case BType.DOUBLE => opcs(3)
+          case _ => opcs(0)
         }
       }
       emit(opc)
     }
 
+    // @can-multi-thread
     final def drop(tk: BType) { emit(if(tk.isWideType) Opcodes.POP2 else Opcodes.POP) }
 
+    // @can-multi-thread
     final def dup(tk: BType)  { emit(if(tk.isWideType) Opcodes.DUP2 else Opcodes.DUP) }
 
     // ---------------- field load and store ----------------
 
+    /**
+     * @must-single-thread
+     **/
     final def fieldLoad( field: Symbol, hostClass: Symbol = null) { // TODO GenASM could use this method
       fieldOp(field, isLoad = true,  hostClass)
     }
+    /**
+     * @must-single-thread
+     **/
     final def fieldStore(field: Symbol, hostClass: Symbol = null) { // TODO GenASM could use this method
       fieldOp(field, isLoad = false, hostClass)
     }
 
+    /**
+     * @must-single-thread
+     **/
     private def fieldOp(field: Symbol, isLoad: Boolean, hostClass: Symbol = null) {
       // LOAD_FIELD.hostClass , CALL_METHOD.hostClass , and #4283
       val owner      =
@@ -1804,10 +1951,12 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
     // ---------------- type checks and casts ----------------
 
+    // @can-multi-thread
     final def isInstance(tk: BType) {
       jmethod.visitTypeInsn(Opcodes.INSTANCEOF, tk.getInternalName)
     }
 
+    // @can-multi-thread
     final def checkCast(tk: BType) { // TODO GenASM could use this method
       assert(tk.isRefOrArrayType, "checkcast on primitive type: " + tk)
       // TODO ICode also requires: but that's too much, right? assert(!isBoxedType(tk),     "checkcast on boxed type: " + tk)
@@ -1819,7 +1968,10 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
   // ---------------- adapted from scalaPrimitives ----------------
 
   /* Given `code` reports the src TypeKind of the coercion indicated by `code`.
-   * To find the dst TypeKind, `ScalaPrimitives.generatedKind(code)` can be used. */
+   * To find the dst TypeKind, `ScalaPrimitives.generatedKind(code)` can be used.
+   *
+   * @can-multi-thread
+   **/
   final def coercionFrom(code: Int): BType = {
     import scalaPrimitives._
     (code: @switch) match {
@@ -1833,7 +1985,10 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     }
   }
 
-  /** If code is a coercion primitive, the result type */
+  /** If code is a coercion primitive, the result type.
+   *
+   * @can-multi-thread
+   **/
   final def coercionTo(code: Int): BType = {
     import scalaPrimitives._
     (code: @scala.annotation.switch) match {
@@ -1904,7 +2059,9 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
    *    NoSymbol for A,
    *    the same symbol for A.B (corresponding to A$B class), and
    *    A$C$ symbol for A.C.
-   */
+   *
+   * @must-single-thread
+   **/
   private def innerClassSymbolFor(s: Symbol): Symbol =
     if (s.isClass) s else if (s.isModule) s.moduleClass else NoSymbol
 
@@ -1912,6 +2069,9 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
   private val innerChainsMap = mutable.Map.empty[/* class */ Symbol, Array[InnerClassEntry]]
 
+  /**
+   * @must-single-thread
+   **/
   final def innerClassesChain(csym: Symbol): Array[InnerClassEntry] = {
     val ics = innerClassSymbolFor(csym)
     if(ics == NoSymbol) return EMPTY_INNERCLASSENTRY_ARRAY
@@ -1942,6 +2102,9 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     innerChainsMap.getOrElseUpdate(ics, buildInnerClassesChain)
   }
 
+  /**
+   * @must-single-thread
+   **/
   private def toInnerClassEntry(innerSym: Symbol): InnerClassEntry = {
 
         /** The outer name for this inner class. Note that it returns null
@@ -1980,16 +2143,28 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
   val innerClassBufferASM = mutable.LinkedHashSet[Symbol]()
 
+  /**
+   * @must-single-thread
+   **/
   final def javaSimpleName(sym: Symbol): String = { sym.javaSimpleName.toString }
 
+  /**
+   * @must-single-thread
+   **/
   final def internalName(sym: Symbol): String = { asmClassType(sym).getInternalName }
 
+  /**
+   * @must-single-thread
+   **/
   final def asmClassType(sym: Symbol): BType = {
     assert(hasInternalName(sym), "doesn't have internal name: " + sym.fullName)
     bufferIfInner(sym)
     phantomTypeMap.getOrElse(sym, exemplar(sym).c)
   }
 
+  /**
+   * @must-single-thread
+   **/
   def bufferIfInner(sym: Symbol) {
     val ics = innerClassSymbolFor(sym)
     if(ics != NoSymbol) {
@@ -1997,6 +2172,9 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     }
   }
 
+  /**
+   * @must-single-thread
+   **/
   def addInnerClassesASM(csym: Symbol, jclass: asm.ClassVisitor) {
     // used to detect duplicates.
     val seen = mutable.Map.empty[Name, Name]
@@ -2044,10 +2222,19 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
   var pickledBytes = 0 // statistics
 
+  /**
+   * @can-multi-thread
+   **/
   def mkFlags(args: Int*) = args.foldLeft(0)(_ | _)
 
+  /**
+   * @can-multi-thread
+   **/
   @inline final def hasPublicBitSet(flags: Int) = ((flags & asm.Opcodes.ACC_PUBLIC) != 0)
 
+  /**
+   * @must-single-thread
+   **/
   @inline final def isRemote(s: Symbol) = (s hasAnnotation definitions.RemoteAttr)
 
   /**
@@ -2065,7 +2252,9 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
    *
    *  (*) protected cannot be used, since inner classes 'see' protected members,
    *      and they would fail verification after lifted.
-   */
+   *
+   * @must-single-thread
+   **/
   def javaFlags(sym: Symbol): Int = {
     // constructors of module classes should be private
     // PP: why are they only being marked private at this stage and not earlier?
@@ -2119,6 +2308,9 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     )
   }
 
+  /**
+   * @must-single-thread
+   **/
   def javaFieldFlags(sym: Symbol) = {
     javaFlags(sym) | mkFlags(
       if (sym hasAnnotation definitions.TransientAttr) asm.Opcodes.ACC_TRANSIENT else 0,
@@ -2127,9 +2319,15 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     )
   }
 
+  /**
+   * @must-single-thread
+   **/
   def isTopLevelModule(sym: Symbol): Boolean =
     afterPickler { sym.isModuleClass && !sym.isImplClass && !sym.isNestedClass }
 
+  /**
+   * @must-single-thread
+   **/
   def isStaticModule(sym: Symbol): Boolean = {
     sym.isModuleClass && !sym.isImplClass && !sym.isLifted
   }
@@ -2142,6 +2340,9 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
   //  https://issues.scala-lang.org/browse/SI-3872
   // -----------------------------------------------------------------------------------------
 
+  /**
+   * @can-multi-thread
+   **/
   def firstCommonSuffix(as: List[Tracked], bs: List[Tracked]): BType = {
     var chainA = as
     var chainB = bs
@@ -2163,6 +2364,9 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
    */
   class CClassWriter(flags: Int) extends asm.ClassWriter(flags) {
 
+    /**
+     * TODO threadability.
+     **/
     override def getCommonSuperClass(inameA: String, inameB: String): String = {
       val a = brefType(inameA)
       val b = brefType(inameB)
@@ -2181,6 +2385,9 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
   //  https://issues.scala-lang.org/browse/SI-3872
   // -----------------------------------------------------------------------------------------
 
+    /**
+     * @can-multi-thread
+     **/
     final def jvmWiseLUB(a: BType, b: BType): BType = {
 
       assert(a.isNonSpecial, "jvmWiseLUB() received a non-plain-class " + a)
@@ -2230,8 +2437,14 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
   val JAVA_LANG_OBJECT = brefType("java/lang/Object")
   val JAVA_LANG_STRING = brefType("java/lang/String")
 
+  /**
+   * @must-single-thread
+   **/
   object isJavaEntryPoint {
 
+    /**
+     * @must-single-thread
+     **/
     def apply(sym: Symbol, csymCompUnit: CompilationUnit): Boolean = {
       def fail(msg: String, pos: Position = sym.pos) = {
         csymCompUnit.warning(sym.pos,
@@ -2293,6 +2506,9 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
     val BeanInfoAttr = rootMirror.getRequiredClass("scala.beans.BeanInfo")
 
+    /**
+     * @must-single-thread
+     **/
     def initBytecodeWriter(entryPoints: List[Symbol]): BytecodeWriter = {
       settings.outputDirs.getSingleOutput match {
         case Some(f) if f hasExtension "jar" =>
@@ -2357,16 +2573,25 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       vp
     }
 
+    /**
+     * @can-multi-thread
+     **/
     def createJAttribute(name: String, b: Array[Byte], offset: Int, len: Int): asm.Attribute = {
       val dest = new Array[Byte](len);
       System.arraycopy(b, offset, dest, 0, len);
       new asm.CustomAttr(name, dest)
     }
 
+    /**
+     * @can-multi-thread
+     **/
     def pickleMarkerLocal = {
       createJAttribute(tpnme.ScalaSignatureATTR.toString, versionPickle.bytes, 0, versionPickle.writeIndex)
     }
 
+    /**
+     * @can-multi-thread
+     **/
     def pickleMarkerForeign = {
       createJAttribute(tpnme.ScalaATTR.toString, new Array[Byte](0), 0, 0)
     }
@@ -2390,6 +2615,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
      *                  instantiated with the pickle signature for sym.
      *                - empty if the jclass/sym pair must not contain a pickle.
      *
+     *  @must-single-thread
      */
     def getAnnotPickle(jclassName: String, sym: Symbol): Option[AnnotationInfo] = {
       currentRun.symData get sym match {
@@ -2432,11 +2658,15 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
     // TODO here's where innerClasses-related stuff should go , as well as javaName , and the helpers they invoke.
 
-    /** Specialized array conversion to prevent calling
-     *  java.lang.reflect.Array.newInstance via TraversableOnce.toArray
+    /**
+     *  @must-single-thread
      */
-    def descriptor(t: Type):     String = { toTypeKind(t).getDescriptor   }
-    def descriptor(s: Symbol):   String = { asmClassType(s).getDescriptor }
+    def descriptor(t: Type):   String = { toTypeKind(t).getDescriptor   }
+
+    /**
+     *  @must-single-thread
+     */
+    def descriptor(s: Symbol): String = { asmClassType(s).getDescriptor }
 
     /**
      * Returns a new ClassWriter for the class given by arguments.
@@ -2456,6 +2686,8 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
      * @param interfaces the internal names of the class's interfaces (see
      *        {@link Type#getInternalName() getInternalName}). May be
      *        <tt>null</tt>.
+     *
+     *  @can-multi-thread
      */
     def createJClass(access: Int, name: String, signature: String, superName: String, interfaces: Array[String]): asm.ClassWriter = {
       val cw = new CClassWriter(extraProc)
@@ -2470,6 +2702,9 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
   trait BCAnnotGen extends BCInnerClassGen {
 
+    /**
+     *  @can-multi-thread
+     */
     def ubytesToCharArray(bytes: Array[Byte]): Array[Char] = {
       val ca = new Array[Char](bytes.size)
       var idx = 0
@@ -2483,6 +2718,9 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       ca
     }
 
+    /**
+     *  @can-multi-thread
+     */
     private def arrEncode(sb: ScalaSigBytes): Array[String] = {
       var strs: List[String]  = Nil
       val bSeven: Array[Byte] = sb.sevenBitsMayBeZero
@@ -2512,6 +2750,9 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       mkArrayReverse(strs)
     }
 
+    /**
+     *  @can-multi-thread
+     */
     private def strEncode(sb: ScalaSigBytes): String = {
       val ca = ubytesToCharArray(sb.sevenBitsMayBeZero)
       new java.lang.String(ca)
@@ -2521,6 +2762,12 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       // debug assert(bvA.getLength == enc.size + 2)
     }
 
+    /**
+     * For arg a LiteralAnnotArg(constt) with const.tag in {ClazzTag, EnumTag}
+     * as well as for arg a NestedAnnotArg
+     *   @must-single-thread
+     * Otherwise it's safe to call from multiple threads.
+     **/
     def emitArgument(av:   asm.AnnotationVisitor,
                      name: String,
                      arg:  ClassfileAnnotArg) {
@@ -2568,6 +2815,8 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
     /** Whether an annotation should be emitted as a Java annotation
      *   .initialize: if 'annot' is read from pickle, atp might be un-initialized
+     *
+     * @must-single-thread
      */
     private def shouldEmitAnnotation(annot: AnnotationInfo) =
       annot.symbol.initialize.isJavaDefined &&
@@ -2575,6 +2824,11 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       annot.args.isEmpty &&
       !annot.matches(definitions.DeprecatedAttr)
 
+    /**
+     * In general,
+     *   @must-single-thread
+     * but not  necessarily always.
+     */
     def emitAssocs(av: asm.AnnotationVisitor, assocs: List[(Name, ClassfileAnnotArg)]) {
       for ((name, value) <- assocs) {
         emitArgument(av, name.toString(), value)
@@ -2582,6 +2836,9 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       av.visitEnd()
     }
 
+    /**
+     * @must-single-thread
+     */
     def emitAnnotations(cw: asm.ClassVisitor, annotations: List[AnnotationInfo]) {
       for(annot <- annotations; if shouldEmitAnnotation(annot)) {
         val AnnotationInfo(typ, args, assocs) = annot
@@ -2591,6 +2848,9 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       }
     }
 
+    /**
+     * @must-single-thread
+     */
     def emitAnnotations(mw: asm.MethodVisitor, annotations: List[AnnotationInfo]) {
       for(annot <- annotations; if shouldEmitAnnotation(annot)) {
         val AnnotationInfo(typ, args, assocs) = annot
@@ -2600,6 +2860,9 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       }
     }
 
+    /**
+     * @must-single-thread
+     */
     def emitAnnotations(fw: asm.FieldVisitor, annotations: List[AnnotationInfo]) {
       for(annot <- annotations; if shouldEmitAnnotation(annot)) {
         val AnnotationInfo(typ, args, assocs) = annot
@@ -2609,6 +2872,9 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       }
     }
 
+    /**
+     * @must-single-thread
+     */
     def emitParamAnnotations(jmethod: asm.MethodVisitor, pannotss: List[List[AnnotationInfo]]) {
       val annotationss = pannotss map (_ filter shouldEmitAnnotation)
       if (annotationss forall (_.isEmpty)) return
@@ -2627,6 +2893,9 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
     // @M don't generate java generics sigs for (members of) implementation
     // classes, as they are monomorphic (TODO: ok?)
+    /**
+     * @must-single-thread
+     */
     private def needsGenericSignature(sym: Symbol) = !(
       // PP: This condition used to include sym.hasExpandedName, but this leads
       // to the total loss of generic information if a private member is
@@ -2646,6 +2915,8 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     /** @return
      *   - `null` if no Java signature is to be added (`null` is what ASM expects in these cases).
      *   - otherwise the signature in question
+     *
+     * @must-single-thread
      */
     def getGenericSignature(sym: Symbol, owner: Symbol): String = {
 
@@ -2721,6 +2992,8 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     /** Adds a @remote annotation, actual use unknown.
      *
      * Invoked from genMethod() and addForwarder().
+     *
+     * @must-single-thread
      */
     def addRemoteExceptionAnnot(isRemoteClass: Boolean, isJMethodPublic: Boolean, meth: Symbol) {
       val needsAnnotation = (
@@ -2735,7 +3008,10 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       }
     }
 
-    /** Add a forwarder for method m. Used only from addForwarders(). */
+    /** Add a forwarder for method m. Used only from addForwarders().
+     *
+     * @must-single-thread
+     */
     private def addForwarder(isRemoteClass: Boolean, jclass: asm.ClassVisitor, module: Symbol, m: Symbol) {
       val moduleName     = internalName(module)
       val methodInfo     = module.thisType.memberInfo(m)
@@ -2801,6 +3077,8 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
      *  with methods in the companion class of `module`. A conflict arises when
      *  a method with the same name is defined both in a class and its companion object:
      *  method signature is not taken into account.
+     *
+     * @must-single-thread
      */
     def addForwarders(isRemoteClass: Boolean, jclass: asm.ClassVisitor, jclassName: String, moduleClass: Symbol) {
       assert(moduleClass.isModuleClass, moduleClass)
@@ -2837,6 +3115,8 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
      * The contents of that attribute are determined by the `String[] exceptions` argument to ASM's ClassVisitor.visitMethod()
      * This method returns such list of internal names.
      *
+     *
+     * @must-single-thread
      */
     def getExceptions(excs: List[AnnotationInfo]): List[String] = {
       for (AnnotationInfo(tp, List(exc), _) <- excs.distinct if tp.typeSymbol == definitions.ThrowsClass)
@@ -2863,6 +3143,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       case AnnotationInfo(_, Literal(const) :: _, _) => const.longValue
     }
 
+    // TODO improve threadability
     def addSerialVUID(csym: Symbol, jclass: asm.ClassVisitor) {
       // add static serialVersionUID field if `clasz` annotated with `@SerialVersionUID(uid: Long)`
       serialVUID(csym) foreach { value =>
@@ -2893,6 +3174,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
      *   A class must have an EnclosingMethod attribute if and only if it is a local class or an anonymous class.
      *   A class may have no more than one EnclosingMethod attribute.
      *
+     * @must-single-thread
      */
     def getEnclosingMethodAttribute(clazz: Symbol): EnclMethodEntry = { // JVMS 4.7.7
 
@@ -2934,10 +3216,16 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     with    BCForwardersGen
     with    BCPickles {
 
+    /**
+     * @can-multi-thread
+     */
     def methodSymbols(cd: ClassDef): List[Symbol] = {
       cd.impl.body collect { case dd: DefDef => dd.symbol }
     }
 
+    /**
+     * @must-single-thread
+     */
     def initJClass(jclass:        asm.ClassVisitor,
                    csym:          Symbol,
                    thisName:      String,
@@ -3007,6 +3295,9 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
     } // end of method initJClass
 
+    /**
+     * @can-multi-thread
+     */
     def addModuleInstanceField(jclass: asm.ClassVisitor, thisName: String) {
       val fv =
         jclass.visitField(PublicStaticFinal, // TODO confirm whether we really don't want ACC_SYNTHETIC nor ACC_DEPRECATED
@@ -3022,11 +3313,17 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       fv.visitEnd()
     }
 
+    /**
+     * @can-multi-thread
+     */
     def thisDescr(thisName: String): String = {
       assert(thisName != null, "thisDescr invoked too soon.")
       "L" + thisName + ";"
     }
 
+    /**
+     * @must-single-thread
+     */
     def initJMethod(jclass:           asm.ClassVisitor,
                     msym:             Symbol,
                     isNative:         Boolean,
@@ -3082,6 +3379,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
   /** basic functionality for class file building of plain, mirror, and beaninfo classes. */
   abstract class JBuilder(bytecodeWriter: BytecodeWriter) extends BCInnerClassGen {
 
+    // TODO improve threadability (invoker should deliver jclass.toByteArray)
     def writeIfNotTooBig(label: String, jclassName: String, jclass: asm.ClassWriter, sym: Symbol) {
       try {
         val arr = jclass.toByteArray()
@@ -3113,6 +3411,8 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
      *  on the MODULE instance of the given Scala object.  It will only be
      *  generated if there is no companion class: if there is, an attempt will
      *  instead be made to add the forwarder methods to the companion class.
+     *
+     *  @must-single-thread
      */
     def genMirrorClass(modsym: Symbol, cunit: CompilationUnit) {
       assert(modsym.companionClass == NoSymbol, modsym)
@@ -3159,6 +3459,8 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
      * Generate a bean info class that describes the given class.
      *
      * @author Ross Judson (ross.judson@soletta.com)
+     *
+     * @must-single-thread
      */
     def genBeanInfoClass(cls: Symbol, cunit: CompilationUnit, fieldSymbols: List[Symbol], methodSymbols: List[Symbol]) {
 
@@ -3292,12 +3594,16 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     private lazy val AndroidParcelableInterface = rootMirror.getClassIfDefined("android.os.Parcelable")
     lazy val AndroidCreatorClass        = rootMirror.getClassIfDefined("android.os.Parcelable$Creator")
 
+    /**
+     * @must-single-thread
+     */
     def isAndroidParcelableClass(sym: Symbol) =
       (AndroidParcelableInterface != NoSymbol) &&
       (sym.parentSymbols contains AndroidParcelableInterface)
 
     // TODO see JPlainBuilder.addAndroidCreatorCode()
 
+    // TODO improve threadability
     def legacyAddCreatorCode(clinit: asm.MethodVisitor, jclass: asm.ClassVisitor, csym: Symbol, thisName: String) {
       val creatorType: BType = asmClassType(AndroidCreatorClass)
       val tdesc_creator = creatorType.getDescriptor
@@ -3350,6 +3656,10 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
   class LabelDefsFinder extends Traverser {
     val result = mutable.Map.empty[Tree, List[LabelDef]]
     var acc: List[LabelDef] = Nil
+
+    /**
+     * @can-multi-thread
+     */
     override def traverse(tree: Tree) {
       val saved = acc
       acc = Nil
