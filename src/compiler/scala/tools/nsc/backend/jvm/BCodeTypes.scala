@@ -1634,19 +1634,23 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
         case NullTag    => emit(asm.Opcodes.ACONST_NULL)
 
         case ClazzTag   =>
-          val kind = toTypeKind(const.typeValue)
-          val toPush: BType =
+          val toPush: BType = {
+            val kind = toTypeKind(const.typeValue)
             if (kind.isValueType) classLiteral(kind)
             else kind;
+          }
           jmethod.visitLdcInsn(toPush.toASMType)
 
         case EnumTag   =>
-          val sym = const.symbolValue
+          val sym       = const.symbolValue
+          val ownerName = internalName(sym.owner)
+          val fieldName = sym.javaSimpleName.toString
+          val fieldDesc = toTypeKind(sym.tpe.underlying).getDescriptor
           jmethod.visitFieldInsn(
             asm.Opcodes.GETSTATIC,
-            internalName(sym.owner),
-            sym.javaSimpleName.toString,
-            toTypeKind(sym.tpe.underlying).getDescriptor
+            ownerName,
+            fieldName,
+            fieldDesc
           )
 
         case _ => abort("Unknown constant value: " + const)
