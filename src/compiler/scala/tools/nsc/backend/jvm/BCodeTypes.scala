@@ -1526,11 +1526,6 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       invokevirtual(StringBuilderClassName, "toString", "()Ljava/lang/String;")
     }
 
-    val fromByteT2T  = { import asm.Opcodes._; Array( -1,  -1, I2C,  -1, I2L, I2F, I2D) } // do nothing for (BYTE -> SHORT) and for (BYTE -> INT)
-    val fromCharT2T  = { import asm.Opcodes._; Array(I2B, I2S,  -1,  -1, I2L, I2F, I2D) } // for (CHAR  -> INT) do nothing
-    val fromShortT2T = { import asm.Opcodes._; Array(I2B,  -1, I2C,  -1, I2L, I2F, I2D) } // for (SHORT -> INT) do nothing
-    val fromIntT2T   = { import asm.Opcodes._; Array(I2B, I2S, I2C,  -1, I2L, I2F, I2D) }
-
     /**
      * Emits one or more conversion instructions based on the types given as arguments.
      *
@@ -1568,32 +1563,34 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       // We're done with BOOL already
       (from.sort: @switch) match {
 
-        case BType.BYTE  => pickOne(fromByteT2T)
-        case BType.SHORT => pickOne(fromShortT2T)
-        case BType.CHAR  => pickOne(fromCharT2T)
-        case BType.INT   => pickOne(fromIntT2T)
+        // for example, `asm.Type.SHORT` instead of `BType.SHORT` because otherwise "warning: could not emit switch for @switch annotated match"
 
-        case BType.FLOAT  =>
+        case asm.Type.BYTE  => pickOne(JCodeMethodN.fromByteT2T)
+        case asm.Type.SHORT => pickOne(JCodeMethodN.fromShortT2T)
+        case asm.Type.CHAR  => pickOne(JCodeMethodN.fromCharT2T)
+        case asm.Type.INT   => pickOne(JCodeMethodN.fromIntT2T)
+
+        case asm.Type.FLOAT  =>
           import asm.Opcodes.{ F2L, F2D, F2I }
           (to.sort: @switch) match {
-            case BType.LONG    => emit(F2L)
-            case BType.DOUBLE  => emit(F2D)
-            case _             => emit(F2I); emitT2T(INT, to)
+            case asm.Type.LONG    => emit(F2L)
+            case asm.Type.DOUBLE  => emit(F2D)
+            case _                => emit(F2I); emitT2T(INT, to)
           }
 
-        case BType.LONG   =>
+        case asm.Type.LONG   =>
           import asm.Opcodes.{ L2F, L2D, L2I }
           (to.sort: @switch) match {
-            case BType.FLOAT   => emit(L2F)
-            case BType.DOUBLE  => emit(L2D)
+            case asm.Type.FLOAT   => emit(L2F)
+            case asm.Type.DOUBLE  => emit(L2D)
             case _             => emit(L2I); emitT2T(INT, to)
           }
 
-        case BType.DOUBLE =>
+        case asm.Type.DOUBLE =>
           import asm.Opcodes.{ D2L, D2F, D2I }
           (to.sort: @switch) match {
-            case BType.FLOAT   => emit(D2F)
-            case BType.LONG    => emit(D2L)
+            case asm.Type.FLOAT   => emit(D2F)
+            case asm.Type.LONG    => emit(D2L)
             case _             => emit(D2I); emitT2T(INT, to)
           }
       }
@@ -1704,15 +1701,16 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
         jmethod.visitTypeInsn(Opcodes.ANEWARRAY, elem.getInternalName)
       } else {
         val rand = {
+          // for example, `asm.Type.SHORT` instead of `BType.SHORT` because otherwise "warning: could not emit switch for @switch annotated match"
           (elem.sort: @switch) match { // TODO use BType.getOpcode instead
-            case BType.BOOLEAN => Opcodes.T_BOOLEAN
-            case BType.BYTE    => Opcodes.T_BYTE
-            case BType.SHORT   => Opcodes.T_SHORT
-            case BType.CHAR    => Opcodes.T_CHAR
-            case BType.INT     => Opcodes.T_INT
-            case BType.LONG    => Opcodes.T_LONG
-            case BType.FLOAT   => Opcodes.T_FLOAT
-            case BType.DOUBLE  => Opcodes.T_DOUBLE
+            case asm.Type.BOOLEAN => Opcodes.T_BOOLEAN
+            case asm.Type.BYTE    => Opcodes.T_BYTE
+            case asm.Type.SHORT   => Opcodes.T_SHORT
+            case asm.Type.CHAR    => Opcodes.T_CHAR
+            case asm.Type.INT     => Opcodes.T_INT
+            case asm.Type.LONG    => Opcodes.T_LONG
+            case asm.Type.FLOAT   => Opcodes.T_FLOAT
+            case asm.Type.DOUBLE  => Opcodes.T_DOUBLE
           }
         }
         jmethod.visitIntInsn(Opcodes.NEWARRAY, rand)
@@ -1723,15 +1721,15 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     final def load( idx: Int, tk: BType) { emitVarInsn(Opcodes.ILOAD,  idx, tk) } // @can-multi-thread
     final def store(idx: Int, tk: BType) { emitVarInsn(Opcodes.ISTORE, idx, tk) } // @can-multi-thread
 
-    final def aload( tk: BType) { emitTypeBased(aloadOpcodes,  tk) } // @can-multi-thread
-    final def astore(tk: BType) { emitTypeBased(astoreOpcodes, tk) } // @can-multi-thread
+    final def aload( tk: BType) { emitTypeBased(JCodeMethodN.aloadOpcodes,  tk) } // @can-multi-thread
+    final def astore(tk: BType) { emitTypeBased(JCodeMethodN.astoreOpcodes, tk) } // @can-multi-thread
 
-    final def neg(tk: BType) { emitPrimitive(negOpcodes, tk) } // @can-multi-thread
-    final def add(tk: BType) { emitPrimitive(addOpcodes, tk) } // @can-multi-thread
-    final def sub(tk: BType) { emitPrimitive(subOpcodes, tk) } // @can-multi-thread
-    final def mul(tk: BType) { emitPrimitive(mulOpcodes, tk) } // @can-multi-thread
-    final def div(tk: BType) { emitPrimitive(divOpcodes, tk) } // @can-multi-thread
-    final def rem(tk: BType) { emitPrimitive(remOpcodes, tk) } // @can-multi-thread
+    final def neg(tk: BType) { emitPrimitive(JCodeMethodN.negOpcodes, tk) } // @can-multi-thread
+    final def add(tk: BType) { emitPrimitive(JCodeMethodN.addOpcodes, tk) } // @can-multi-thread
+    final def sub(tk: BType) { emitPrimitive(JCodeMethodN.subOpcodes, tk) } // @can-multi-thread
+    final def mul(tk: BType) { emitPrimitive(JCodeMethodN.mulOpcodes, tk) } // @can-multi-thread
+    final def div(tk: BType) { emitPrimitive(JCodeMethodN.divOpcodes, tk) } // @can-multi-thread
+    final def rem(tk: BType) { emitPrimitive(JCodeMethodN.remOpcodes, tk) } // @can-multi-thread
 
      // @can-multi-thread
      final def invokespecial(owner: String, name: String, desc: String) {
@@ -1770,7 +1768,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     // @can-multi-thread
     final def emitRETURN(tk: BType) {
       if(tk == UNIT) { emit(Opcodes.RETURN) }
-      else           { emitTypeBased(returnOpcodes, tk)      }
+      else           { emitTypeBased(JCodeMethodN.returnOpcodes, tk)      }
     }
 
     /**Emits one of tableswitch or lookoupswitch.
@@ -1860,11 +1858,6 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
     // ---------------- array load and store ----------------
 
-    val aloadOpcodes  = { import Opcodes._; Array(AALOAD,  BALOAD,  SALOAD,  CALOAD,  IALOAD,  LALOAD,  FALOAD,  DALOAD)  }
-    val astoreOpcodes = { import Opcodes._; Array(AASTORE, BASTORE, SASTORE, CASTORE, IASTORE, LASTORE, FASTORE, DASTORE) }
-
-    val returnOpcodes = { import Opcodes._; Array(ARETURN, IRETURN, IRETURN, IRETURN, IRETURN, LRETURN, FRETURN, DRETURN) }
-
     // @can-multi-thread
     final def emitTypeBased(opcs: Array[Int], tk: BType) { // TODO index on tk.sort , or use tk.getOpcode
       assert(tk != UNIT, tk)
@@ -1890,20 +1883,14 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
     // ---------------- primitive operations ----------------
 
-    val negOpcodes: Array[Int] = { import Opcodes._; Array(INEG, LNEG, FNEG, DNEG) }
-    val addOpcodes: Array[Int] = { import Opcodes._; Array(IADD, LADD, FADD, DADD) }
-    val subOpcodes: Array[Int] = { import Opcodes._; Array(ISUB, LSUB, FSUB, DSUB) }
-    val mulOpcodes: Array[Int] = { import Opcodes._; Array(IMUL, LMUL, FMUL, DMUL) }
-    val divOpcodes: Array[Int] = { import Opcodes._; Array(IDIV, LDIV, FDIV, DDIV) }
-    val remOpcodes: Array[Int] = { import Opcodes._; Array(IREM, LREM, FREM, DREM) }
-
      // @can-multi-thread
     final def emitPrimitive(opcs: Array[Int], tk: BType) {
       val opc = {
+        // for example, `asm.Type.SHORT` instead of `BType.SHORT` because otherwise "warning: could not emit switch for @switch annotated match"
         (tk.sort: @switch) match {
-          case BType.LONG   => opcs(1)
-          case BType.FLOAT  => opcs(2)
-          case BType.DOUBLE => opcs(3)
+          case asm.Type.LONG   => opcs(1)
+          case asm.Type.FLOAT  => opcs(2)
+          case asm.Type.DOUBLE => opcs(3)
           case _ => opcs(0)
         }
       }
@@ -1964,6 +1951,35 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     }
 
   } // end of class JCodeMethodN
+
+  /* Constant-valued val-members of JCodeMethodN at the companion object, so as to avoid re-initializing them multiple times. */
+  object JCodeMethodN {
+
+    import asm.Opcodes._
+
+    // ---------------- conversions ----------------
+
+    val fromByteT2T  = { Array( -1,  -1, I2C,  -1, I2L, I2F, I2D) } // do nothing for (BYTE -> SHORT) and for (BYTE -> INT)
+    val fromCharT2T  = { Array(I2B, I2S,  -1,  -1, I2L, I2F, I2D) } // for (CHAR  -> INT) do nothing
+    val fromShortT2T = { Array(I2B,  -1, I2C,  -1, I2L, I2F, I2D) } // for (SHORT -> INT) do nothing
+    val fromIntT2T   = { Array(I2B, I2S, I2C,  -1, I2L, I2F, I2D) }
+
+    // ---------------- array load and store ----------------
+
+    val aloadOpcodes  = { Array(AALOAD,  BALOAD,  SALOAD,  CALOAD,  IALOAD,  LALOAD,  FALOAD,  DALOAD)  }
+    val astoreOpcodes = { Array(AASTORE, BASTORE, SASTORE, CASTORE, IASTORE, LASTORE, FASTORE, DASTORE) }
+    val returnOpcodes = { Array(ARETURN, IRETURN, IRETURN, IRETURN, IRETURN, LRETURN, FRETURN, DRETURN) }
+
+    // ---------------- primitive operations ----------------
+
+    val negOpcodes: Array[Int] = { Array(INEG, LNEG, FNEG, DNEG) }
+    val addOpcodes: Array[Int] = { Array(IADD, LADD, FADD, DADD) }
+    val subOpcodes: Array[Int] = { Array(ISUB, LSUB, FSUB, DSUB) }
+    val mulOpcodes: Array[Int] = { Array(IMUL, LMUL, FMUL, DMUL) }
+    val divOpcodes: Array[Int] = { Array(IDIV, LDIV, FDIV, DDIV) }
+    val remOpcodes: Array[Int] = { Array(IREM, LREM, FREM, DREM) }
+
+  } // end of object JCodeMethodN
 
   // ---------------- adapted from scalaPrimitives ----------------
 
