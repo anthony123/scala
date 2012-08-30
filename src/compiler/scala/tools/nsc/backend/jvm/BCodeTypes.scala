@@ -783,6 +783,16 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     )
   }
 
+  val mdesc_arglessvoid = "()V"
+
+  val CLASS_CONSTRUCTOR_NAME    = "<clinit>"
+  val INSTANCE_CONSTRUCTOR_NAME = "<init>"
+
+  val PublicStatic      = asm.Opcodes.ACC_PUBLIC | asm.Opcodes.ACC_STATIC
+  val PublicStaticFinal = asm.Opcodes.ACC_PUBLIC | asm.Opcodes.ACC_STATIC | asm.Opcodes.ACC_FINAL
+
+  val strMODULE_INSTANCE_FIELD = nme.MODULE_INSTANCE_FIELD.toString
+
   // ------------------------------------------------
   // accessory maps tracking the isInterface, innerClasses, superClass, and supportedInterfaces relations,
   // allowing answering `conforms()` resorting to typer.
@@ -1316,7 +1326,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
    *  but the methods here allow choosing when to transition from ICode to ASM types
    *  (including not at all, e.g. for performance).
    */
-  abstract class JCodeMethodN extends BCInnerClassGen {
+  abstract class JCodeMethodN {
 
     def jmethod: asm.MethodVisitor
 
@@ -2652,19 +2662,6 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
   } // end of trait BCPickles
 
   trait BCInnerClassGen {
-
-    val EMPTY_JTYPE_ARRAY  = Array.empty[BType]
-    val EMPTY_STRING_ARRAY = Array.empty[String]
-
-    val mdesc_arglessvoid = "()V"
-
-    val CLASS_CONSTRUCTOR_NAME    = "<clinit>"
-    val INSTANCE_CONSTRUCTOR_NAME = "<init>"
-
-    val PublicStatic      = asm.Opcodes.ACC_PUBLIC | asm.Opcodes.ACC_STATIC
-    val PublicStaticFinal = asm.Opcodes.ACC_PUBLIC | asm.Opcodes.ACC_STATIC | asm.Opcodes.ACC_FINAL
-
-    val strMODULE_INSTANCE_FIELD = nme.MODULE_INSTANCE_FIELD.toString
 
     def debugLevel = settings.debuginfo.indexOfChoice
 
