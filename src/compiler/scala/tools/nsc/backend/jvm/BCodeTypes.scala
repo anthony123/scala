@@ -675,6 +675,8 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
   var AndroidCreatorClass       : Symbol = null // this is an inner class, use asmType() to get hold of its BType while tracking in innerClassBufferASM
   var androidCreatorType        : BType  = null
 
+  var BeanInfoAttr: Symbol = null
+
   /**
    * @must-single-thread
    **/
@@ -727,6 +729,8 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
     AndroidParcelableInterface = rootMirror.getClassIfDefined("android.os.Parcelable")
     AndroidCreatorClass        = rootMirror.getClassIfDefined("android.os.Parcelable$Creator")
+
+    BeanInfoAttr = rootMirror.getRequiredClass("scala.beans.BeanInfo")
 
   }
 
@@ -2221,51 +2225,66 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
   }
 
-  trait BCCommonPhase extends global.GlobalPhase {
-
-    val BeanInfoAttr = rootMirror.getRequiredClass("scala.beans.BeanInfo")
-
-    /**
-     * @must-single-thread
-     **/
-    def initBytecodeWriter(entryPoints: List[Symbol]): BytecodeWriter = {
-      settings.outputDirs.getSingleOutput match {
-        case Some(f) if f hasExtension "jar" =>
-          // If no main class was specified, see if there's only one
-          // entry point among the classes going into the jar.
-          if (settings.mainClass.isDefault) {
-            entryPoints map (_.fullName('.')) match {
-              case Nil      =>
-                log("No Main-Class designated or discovered.")
-              case name :: Nil =>
-                log("Unique entry point: setting Main-Class to " + name)
-                settings.mainClass.value = name
-              case names =>
-                log("No Main-Class due to multiple entry points:\n  " + names.mkString("\n  "))
-            }
+  /**
+   * @must-single-thread
+   **/
+  def initBytecodeWriter(entryPoints: List[Symbol]): BytecodeWriter = {
+    settings.outputDirs.getSingleOutput match {
+      case Some(f) if f hasExtension "jar" =>
+        // If no main class was specified, see if there's only one
+        // entry point among the classes going into the jar.
+        if (settings.mainClass.isDefault) {
+          entryPoints map (_.fullName('.')) match {
+            case Nil      =>
+              log("No Main-Class designated or discovered.")
+            case name :: Nil =>
+              log("Unique entry point: setting Main-Class to " + name)
+              settings.mainClass.value = name
+            case names =>
+              log("No Main-Class due to multiple entry points:\n  " + names.mkString("\n  "))
           }
-          else log("Main-Class was specified: " + settings.mainClass.value)
+        }
+        else log("Main-Class was specified: " + settings.mainClass.value)
 
-          new DirectToJarfileWriter(f.file)
+        new DirectToJarfileWriter(f.file)
 
-        case _                               =>
-          if (settings.Ygenjavap.isDefault) {
-            if(settings.Ydumpclasses.isDefault)
-              new ClassBytecodeWriter { }
-            else
-              new ClassBytecodeWriter with DumpBytecodeWriter { }
-          }
-          else new ClassBytecodeWriter with JavapBytecodeWriter { }
+      case _                               =>
+        if (settings.Ygenjavap.isDefault) {
+          if(settings.Ydumpclasses.isDefault)
+            new ClassBytecodeWriter { }
+          else
+            new ClassBytecodeWriter with DumpBytecodeWriter { }
+        }
+        else new ClassBytecodeWriter with JavapBytecodeWriter { }
 
-          // TODO A ScalapBytecodeWriter could take asm.util.Textifier as starting point.
-          //      Three areas where javap ouput is less than ideal (e.g. when comparing versions of the same classfile) are:
-          //        (a) unreadable pickle;
-          //        (b) two constant pools, while having identical contents, are displayed differently due to physical layout.
-          //        (c) stack maps (classfile version 50 and up) are displayed in encoded form by javap, their expansion makes more sense instead.
-      }
+        // TODO A ScalapBytecodeWriter could take asm.util.Textifier as starting point.
+        //      Three areas where javap ouput is less than ideal (e.g. when comparing versions of the same classfile) are:
+        //        (a) unreadable pickle;
+        //        (b) two constant pools, while having identical contents, are displayed differently due to physical layout.
+        //        (c) stack maps (classfile version 50 and up) are displayed in encoded form by javap, their expansion makes more sense instead.
     }
+  }
 
-  } // end of trait BCCommonPhase
+  /**
+   *  @must-single-thread
+   */
+  def isStaticField(fsym: Symbol) = { fsym.owner.isModuleClass && fsym.hasStaticAnnotation }
+
+  /**
+   *  @must-single-thread
+   */
+  def fieldSymbols(cls: Symbol): List[Symbol] = {
+    for (f <- cls.info.decls.toList ;
+         if !f.isMethod && f.isTerm && !f.isModule && !isStaticField(f)
+    ) yield f;
+  }
+
+  /**
+   * @can-multi-thread
+   */
+  def methodSymbols(cd: ClassDef): List[Symbol] = {
+    cd.impl.body collect { case dd: DefDef => dd.symbol }
+  }
 
   /*
    * Custom attribute (JVMS 4.7.1) "ScalaSig" used as marker only
@@ -3125,13 +3144,6 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     with    JAndroidBuilder
     with    BCForwardersGen
     with    BCPickles {
-
-    /**
-     * @can-multi-thread
-     */
-    def methodSymbols(cd: ClassDef): List[Symbol] = {
-      cd.impl.body collect { case dd: DefDef => dd.symbol }
-    }
 
     /**
      * @must-single-thread
