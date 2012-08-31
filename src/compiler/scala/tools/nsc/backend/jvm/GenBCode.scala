@@ -314,7 +314,9 @@ abstract class GenBCode extends BCodeTypes {
 
     } // end of method genPlainClass()
 
-    /** TODO document, explain interplay with `appendToStaticCtor()` */
+    /**
+     * @must-single-thread
+     */
     private def fabricateStaticInit() {
 
       val clinit: asm.MethodVisitor = cnode.visitMethod(
@@ -598,7 +600,7 @@ abstract class GenBCode extends BCodeTypes {
           if (!isStatic) { genLoadQualifier(lhs) }
           genLoad(rhs, toTypeKind(lhs.symbol.info))
           lineNumber(tree)
-          bc fieldStore lhs.symbol
+          fieldStore(lhs.symbol)
 
         case Assign(lhs, rhs) =>
           val s = lhs.symbol
@@ -1061,7 +1063,7 @@ abstract class GenBCode extends BCodeTypes {
           /* most of the time, !locals.contains(sym), unless the current activation of genLoad() is being called
              while duplicating a finalizer that contains this ValDef. */
           val Local(tk, _, idx) = locals.getOrElseUpdate(sym, makeLocal(sym, toTypeKind(sym.info)))
-          if (rhs == EmptyTree) { bc.genConstant(getZeroOf(tk)) }
+          if (rhs == EmptyTree) { genConstant(getZeroOf(tk)) }
           else { genLoad(rhs, tk) }
           bc.store(idx, tk)
           if(!sym.isSynthetic) { // there are case <synthetic> ValDef's emitted by patmat
@@ -1114,10 +1116,10 @@ abstract class GenBCode extends BCodeTypes {
           log(s"Host class of $sym with qual $qualifier (${qualifier.tpe}) is $hostClass")
 
           if (sym.isModule)            { genLoadModule(tree) }
-          else if (sym.isStaticMember) { bc.fieldLoad(sym, hostClass) }
+          else if (sym.isStaticMember) { fieldLoad(sym, hostClass) }
           else {
             genLoadQualifier(tree)
-            bc.fieldLoad(sym, hostClass)
+            fieldLoad(sym, hostClass)
           }
 
         case Ident(name) =>
@@ -1134,7 +1136,7 @@ abstract class GenBCode extends BCodeTypes {
             case (IntTag,   LONG  ) => bc.lconst(value.longValue);       generatedType = LONG
             case (FloatTag, DOUBLE) => bc.dconst(value.doubleValue);     generatedType = DOUBLE
             case (NullTag,  _     ) => bc.emit(asm.Opcodes.ACONST_NULL); generatedType = RT_NULL
-            case _                  => bc.genConstant(value);            generatedType = toTypeKind(tree.tpe)
+            case _                  => genConstant(value);               generatedType = toTypeKind(tree.tpe)
           }
 
         case blck : Block => genBlock(blck, expectedType)
@@ -1153,7 +1155,7 @@ abstract class GenBCode extends BCodeTypes {
         case mtch : Match =>
           generatedType = genMatch(mtch)
 
-        case EmptyTree => if (expectedType != UNIT) { bc genConstant getZeroOf(expectedType) }
+        case EmptyTree => if (expectedType != UNIT) { genConstant(getZeroOf(expectedType)) }
 
         case _ => abort("Unexpected tree in genLoad: " + tree + "/" + tree.getClass + " at: " + tree.pos)
       }
@@ -1164,6 +1166,92 @@ abstract class GenBCode extends BCodeTypes {
       }
 
     } // end of GenBCode.genLoad()
+
+    // ---------------- field load and store ----------------
+
+    /**
+     * @must-single-thread
+     **/
+    final def fieldLoad( field: Symbol, hostClass: Symbol = null) { // TODO GenASM could use this method
+      fieldOp(field, isLoad = true,  hostClass)
+    }
+    /**
+     * @must-single-thread
+     **/
+    final def fieldStore(field: Symbol, hostClass: Symbol = null) { // TODO GenASM could use this method
+      fieldOp(field, isLoad = false, hostClass)
+    }
+
+    /**
+     * @must-single-thread
+     **/
+    private def fieldOp(field: Symbol, isLoad: Boolean, hostClass: Symbol = null) {
+      // LOAD_FIELD.hostClass , CALL_METHOD.hostClass , and #4283
+      val owner      =
+        if(hostClass == null) internalName(field.owner)
+        else                  internalName(hostClass)
+      val fieldJName = field.javaSimpleName.toString
+      val fieldDescr = toTypeKind(field.tpe).getDescriptor
+      val isStatic   = field.isStaticMember
+      val opc =
+        if(isLoad) { if (isStatic) asm.Opcodes.GETSTATIC else asm.Opcodes.GETFIELD }
+        else       { if (isStatic) asm.Opcodes.PUTSTATIC else asm.Opcodes.PUTFIELD }
+      mnode.visitFieldInsn(opc, owner, fieldJName, fieldDescr)
+
+    }
+
+    // ---------------- emitting constant values ----------------
+
+    /**
+     * For const.tag in {ClazzTag, EnumTag}
+     *   @must-single-thread
+     * Otherwise it's safe to call from multiple threads.
+     **/
+    final def genConstant(const: Constant) {
+      (const.tag: @switch) match {
+
+        case BooleanTag => bc.boolconst(const.booleanValue)
+
+        case ByteTag    => bc.iconst(const.byteValue)
+        case ShortTag   => bc.iconst(const.shortValue)
+        case CharTag    => bc.iconst(const.charValue)
+        case IntTag     => bc.iconst(const.intValue)
+
+        case LongTag    => bc.lconst(const.longValue)
+        case FloatTag   => bc.fconst(const.floatValue)
+        case DoubleTag  => bc.dconst(const.doubleValue)
+
+        case UnitTag    => ()
+
+        case StringTag  =>
+          assert(const.value != null, const) // TODO this invariant isn't documented in `case class Constant`
+          mnode.visitLdcInsn(const.stringValue) // `stringValue` special-cases null, but not for a const with StringTag
+
+        case NullTag    => emit(asm.Opcodes.ACONST_NULL)
+
+        case ClazzTag   =>
+          val toPush: BType = {
+            val kind = toTypeKind(const.typeValue)
+            if (kind.isValueType) classLiteral(kind)
+            else kind;
+          }
+          mnode.visitLdcInsn(toPush.toASMType)
+
+        case EnumTag   =>
+          val sym       = const.symbolValue
+          val ownerName = internalName(sym.owner)
+          val fieldName = sym.javaSimpleName.toString
+          val fieldDesc = toTypeKind(sym.tpe.underlying).getDescriptor
+          mnode.visitFieldInsn(
+            asm.Opcodes.GETSTATIC,
+            ownerName,
+            fieldName,
+            fieldDesc
+          )
+
+        case _ => abort("Unknown constant value: " + const)
+      }
+    }
 
     private def genLabelDef(lblDf: LabelDef, expectedType: BType) {
       // duplication of `finally`-contained LabelDefs is handled when emitting a RET. No bookkeeping for that required here.
@@ -1688,15 +1776,68 @@ abstract class GenBCode extends BCodeTypes {
 
     def genCallMethod(method: Symbol, style: InvokeStyle, hostClass0: Symbol = null) {
 
-      val hostClass = if(hostClass0 == null) method.owner else hostClass0;
+      val siteSymbol = claszSymbol
+      val hostSymbol = if(hostClass0 == null) method.owner else hostClass0;
+      val methodOwner = method.owner
+      // info calls so that types are up to date; erasure may add lateINTERFACE to traits
+      hostSymbol.info ; methodOwner.info
 
-      isModuleInitialized =
-        bc.genCallMethod(
-          method,      style,     jMethodName,
-          claszSymbol, hostClass, thisName,    isModuleInitialized
-        )
+          def isInterfaceCall(sym: Symbol) = (
+               sym.isInterface && methodOwner != definitions.ObjectClass
+            || sym.isJavaDefined && sym.isNonBottomSubClass(definitions.ClassfileAnnotationClass)
+          )
 
-    } // end of genCode()'s genCallMethod()
+          def isAccessibleFrom(target: Symbol, site: Symbol): Boolean = {
+            target.isPublic || target.isProtected && {
+              (site.enclClass isSubClass target.enclClass) ||
+              (site.enclosingPackage == target.privateWithin)
+            }
+          }
+
+      // whether to reference the type of the receiver or
+      // the type of the method owner (if not an interface!)
+      val useMethodOwner = (
+           style != Dynamic
+        || !isInterfaceCall(hostSymbol) && isAccessibleFrom(methodOwner, siteSymbol)
+        || hostSymbol.isBottomClass
+      )
+      val receiver = if (useMethodOwner) methodOwner else hostSymbol
+      val jowner   = internalName(receiver)
+      val jname    = method.javaSimpleName.toString
+      val jtype    = asmMethodType(method).getDescriptor
+
+          def dbg(invoke: String) {
+            debuglog("%s %s %s.%s:%s".format(invoke, receiver.accessString, jowner, jname, jtype))
+          }
+
+          def initModule() {
+            // we initialize the MODULE$ field immediately after the super ctor
+            if (isStaticModule(siteSymbol) && !isModuleInitialized &&
+                jMethodName == INSTANCE_CONSTRUCTOR_NAME &&
+                jname == INSTANCE_CONSTRUCTOR_NAME) {
+              isModuleInitialized = true
+              mnode.visitVarInsn(asm.Opcodes.ALOAD, 0)
+              mnode.visitFieldInsn(
+                asm.Opcodes.PUTSTATIC,
+                thisName,
+                strMODULE_INSTANCE_FIELD,
+                "L" + thisName + ";"
+              )
+            }
+          }
+
+      style match {
+        case Static(true)                         => dbg("invokespecial");  bc.invokespecial  (jowner, jname, jtype)
+        case Static(false)                        => dbg("invokestatic");   bc.invokestatic   (jowner, jname, jtype)
+        case Dynamic if isInterfaceCall(receiver) => dbg("invokinterface"); bc.invokeinterface(jowner, jname, jtype)
+        case Dynamic                              => dbg("invokevirtual");  bc.invokevirtual  (jowner, jname, jtype)
+        case SuperCall(_)                         =>
+          dbg("invokespecial")
+          bc.invokespecial(jowner, jname, jtype)
+          initModule()
+      }
+
+    } // end of genCallMethod()
 
     /** Generate the scala ## method. */
     def genScalaHash(tree: Tree): BType = {

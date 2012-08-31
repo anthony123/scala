@@ -672,7 +672,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
   var hashMethodSym: Symbol = null // scala.runtime.ScalaRunTime.hash
 
   var AndroidParcelableInterface: Symbol = null
-  var AndroidCreatorClass       : Symbol = null
+  var AndroidCreatorClass       : Symbol = null // this is an inner class, use asmType() to get hold of its BType while tracking in innerClassBufferASM
   var androidCreatorType        : BType  = null
 
   /**
@@ -727,7 +727,6 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
     AndroidParcelableInterface = rootMirror.getClassIfDefined("android.os.Parcelable")
     AndroidCreatorClass        = rootMirror.getClassIfDefined("android.os.Parcelable$Creator")
-    androidCreatorType         = if(AndroidCreatorClass != NoSymbol) asmClassType(AndroidCreatorClass) else null
 
   }
 
@@ -1004,15 +1003,6 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
   // ---------------- inspector methods on BType  ----------------
 
-  /**
-   * @must-single-thread
-   */
-  final def asmMethodType(s: Symbol): BType = {
-    assert(s.isMethod, "not a method-symbol: " + s)
-    val resT: BType = if (s.isClassConstructor) BType.VOID_TYPE else toTypeKind(s.tpe.resultType);
-    BType.getMethodType( resT, mkArray(s.tpe.paramTypes map toTypeKind) )
-  }
-
   final def mkArray(xs: List[BType]):     Array[BType]     = { val a = new Array[BType](xs.size);     xs.copyToArray(a); a } // @can-multi-thread
   final def mkArray(xs: List[String]):    Array[String]    = { val a = new Array[String](xs.size);    xs.copyToArray(a); a } // @can-multi-thread
   final def mkArray(xs: List[asm.Label]): Array[asm.Label] = { val a = new Array[asm.Label](xs.size); xs.copyToArray(a); a } // @can-multi-thread
@@ -1078,7 +1068,9 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     brefType("[" + elem.getDescriptor)
   }
 
-  /* the type of N-dimensional arrays of `elem` type.
+  /*
+   * The type of N-dimensional arrays of `elem` type.
+   * The invoker is responsible for tracking (if needed) the inner class given by the elem BType.
    *
    * @must-single-thread
    **/
@@ -1089,110 +1081,6 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     val desc = ("[" * dims) + elem.getDescriptor
     brefType(desc)
   }
-
-  /** Returns the BType for the given type
-   *
-   * @must-single-thread
-   **/
-  final def toTypeKind(t: Type): BType = {
-
-        /** Interfaces have to be handled delicately to avoid introducing spurious errors,
-         *  but if we treat them all as AnyRef we lose too much information.
-         **/
-        def newReference(sym0: Symbol): BType = {
-          assert(!primitiveTypeMap.contains(sym0), "Use primitiveTypeMap instead.")
-          assert(sym0 != definitions.ArrayClass,   "Use arrayOf() instead.")
-
-          if(sym0 == definitions.NullClass)    return RT_NULL;
-          if(sym0 == definitions.NothingClass) return RT_NOTHING;
-
-          // Working around SI-5604.  Rather than failing the compile when we see
-          // a package here, check if there's a package object.
-          val sym = (
-            if (!sym0.isPackageClass) sym0
-            else sym0.info.member(nme.PACKAGE) match {
-              case NoSymbol => assert(false, "Cannot use package as value: " + sym0.fullName) ; NoSymbol
-              case s        => debugwarn("Bug: found package class where package object expected.  Converting.") ; s.moduleClass
-            }
-          )
-
-          // Can't call .toInterface (at this phase) or we trip an assertion.
-          // See PackratParser#grow for a method which fails with an apparent mismatch
-          // between "object PackratParsers$class" and "trait PackratParsers"
-          if (sym.isImplClass) {
-            // pos/spec-List.scala is the sole failure if we don't check for NoSymbol
-            val traitSym = sym.owner.info.decl(tpnme.interfaceName(sym.name))
-            if (traitSym != NoSymbol)
-              bufferIfInner(traitSym)
-              return asmClassType(traitSym)
-          }
-
-          assert(hasInternalName(sym), "Invoked for a symbol lacking JVM internal name: " + sym.fullName)
-          assert(!phantomTypeMap.contains(sym), "phantom types not supposed to reach here.")
-
-          bufferIfInner(sym)
-
-          exemplar(sym).c
-
-        }
-
-        def primitiveOrRefType(sym: Symbol): BType = {
-          assert(sym != definitions.ArrayClass, "Use primitiveOrArrayOrRefType() instead.")
-
-          primitiveTypeMap.getOrElse(sym, newReference(sym))
-        }
-
-        def primitiveOrRefType2(sym: Symbol): BType = {
-          primitiveTypeMap.get(sym) match {
-            case Some(pt) => pt
-            case None =>
-              sym match {
-                case definitions.NullClass    => RT_NULL
-                case definitions.NothingClass => RT_NOTHING
-                case _ if sym.isClass         => newReference(sym)
-                case _ =>
-                  assert(sym.isType, sym) // it must be compiling Array[a]
-                  ObjectReference
-              }
-          }
-        }
-
-    import definitions.ArrayClass
-
-    // Call to .normalize fixes #3003 (follow type aliases). Otherwise, primitiveOrArrayOrRefType() would return ObjectReference.
-    t.normalize match {
-
-      case ThisType(sym) =>
-        if(sym == ArrayClass) ObjectReference
-        else                  phantomTypeMap.getOrElse(sym, exemplar(sym).c)
-
-      case SingleType(_, sym) => primitiveOrRefType(sym)
-
-      case _: ConstantType    => toTypeKind(t.underlying)
-
-      case TypeRef(_, sym, args)    =>
-        if(sym == ArrayClass) arrayOf(toTypeKind(args.head))
-        else                  primitiveOrRefType2(sym)
-
-      case ClassInfoType(_, _, sym) =>
-        assert(sym != ArrayClass, "ClassInfoType to ArrayClass!")
-        primitiveOrRefType(sym)
-
-      // !!! Iulian says types which make no sense after erasure should not reach here, which includes the ExistentialType, AnnotatedType, RefinedType.
-      case _: ExistentialType     => abort("ExistentialType reached GenBCode: " + t)
-      case AnnotatedType(_, w, _) => toTypeKind(w) // TODO test/files/jvm/annotations.scala causes an AnnotatedType to reach here.
-      case _: RefinedType         => abort("RefinedType reached GenBCode: "     + t) // defensive: parents map toTypeKind reduceLeft lub
-
-      // For sure WildcardTypes shouldn't reach here either, but when debugging such situations this may come in handy.
-      // case WildcardType    => REFERENCE(ObjectClass)
-      case norm => abort(
-        "Unknown type: %s, %s [%s, %s] TypeRef? %s".format(
-          t, norm, t.getClass, norm.getClass, t.isInstanceOf[TypeRef]
-        )
-      )
-    }
-
-  } // end of method toTypeKind()
 
   /**
    * Subtype check `a <:< b` on BTypes that takes into account the JVM built-in numeric promotions (e.g. BYTE to INT).
@@ -1346,78 +1234,6 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     import icodes.opcodes.{ InvokeStyle, Static, Dynamic,  SuperCall }
 
     @inline final def emit(opc: Int) { jmethod.visitInsn(opc) }
-
-    /**
-     * TODO improve threadability
-     **/
-    final def genCallMethod(method:      Symbol, style: InvokeStyle,
-                            jMethodName: String,
-                            siteSymbol:  Symbol, hostSymbol: Symbol,
-                            thisName:    String, isModuleInitialized0: Boolean): Boolean = {
-
-      var isModuleInitialized = isModuleInitialized0
-      val methodOwner = method.owner
-      // info calls so that types are up to date; erasure may add lateINTERFACE to traits
-      hostSymbol.info ; methodOwner.info
-
-          def isInterfaceCall(sym: Symbol) = (
-               sym.isInterface && methodOwner != definitions.ObjectClass
-            || sym.isJavaDefined && sym.isNonBottomSubClass(definitions.ClassfileAnnotationClass)
-          )
-
-          def isAccessibleFrom(target: Symbol, site: Symbol): Boolean = {
-            target.isPublic || target.isProtected && {
-              (site.enclClass isSubClass target.enclClass) ||
-              (site.enclosingPackage == target.privateWithin)
-            }
-          }
-
-      // whether to reference the type of the receiver or
-      // the type of the method owner (if not an interface!)
-      val useMethodOwner = (
-           style != Dynamic
-        || !isInterfaceCall(hostSymbol) && isAccessibleFrom(methodOwner, siteSymbol)
-        || hostSymbol.isBottomClass
-      )
-      val receiver = if (useMethodOwner) methodOwner else hostSymbol
-      val jowner   = internalName(receiver)
-      val jname    = method.javaSimpleName.toString
-      val jtype    = asmMethodType(method).getDescriptor
-
-          def dbg(invoke: String) {
-            debuglog("%s %s %s.%s:%s".format(invoke, receiver.accessString, jowner, jname, jtype))
-          }
-
-          def initModule() {
-            // we initialize the MODULE$ field immediately after the super ctor
-            if (isStaticModule(siteSymbol) && !isModuleInitialized &&
-                jMethodName == INSTANCE_CONSTRUCTOR_NAME &&
-                jname == INSTANCE_CONSTRUCTOR_NAME) {
-              isModuleInitialized = true
-              jmethod.visitVarInsn(asm.Opcodes.ALOAD, 0)
-              jmethod.visitFieldInsn(
-                asm.Opcodes.PUTSTATIC,
-                thisName,
-                strMODULE_INSTANCE_FIELD,
-                "L" + thisName + ";"
-              )
-            }
-          }
-
-      style match {
-        case Static(true)                         => dbg("invokespecial");  invokespecial  (jowner, jname, jtype)
-        case Static(false)                        => dbg("invokestatic");   invokestatic   (jowner, jname, jtype)
-        case Dynamic if isInterfaceCall(receiver) => dbg("invokinterface"); invokeinterface(jowner, jname, jtype)
-        case Dynamic                              => dbg("invokevirtual");  invokevirtual  (jowner, jname, jtype)
-        case SuperCall(_)                         =>
-          dbg("invokespecial")
-          invokespecial(jowner, jname, jtype)
-          initModule()
-      }
-
-      isModuleInitialized
-
-    } // end of genCallMethod
 
     /**
      * @can-multi-thread
@@ -1638,57 +1454,6 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
           }
       }
     } // end of emitT2T()
-
-    /**
-     * For const.tag in {ClazzTag, EnumTag}
-     *   @must-single-thread
-     * Otherwise it's safe to call from multiple threads.
-     **/
-    final def genConstant(const: Constant) {
-      (const.tag: @switch) match {
-
-        case BooleanTag => boolconst(const.booleanValue)
-
-        case ByteTag    => iconst(const.byteValue)
-        case ShortTag   => iconst(const.shortValue)
-        case CharTag    => iconst(const.charValue)
-        case IntTag     => iconst(const.intValue)
-
-        case LongTag    => lconst(const.longValue)
-        case FloatTag   => fconst(const.floatValue)
-        case DoubleTag  => dconst(const.doubleValue)
-
-        case UnitTag    => ()
-
-        case StringTag  =>
-          assert(const.value != null, const) // TODO this invariant isn't documented in `case class Constant`
-          jmethod.visitLdcInsn(const.stringValue) // `stringValue` special-cases null, but not for a const with StringTag
-
-        case NullTag    => emit(asm.Opcodes.ACONST_NULL)
-
-        case ClazzTag   =>
-          val toPush: BType = {
-            val kind = toTypeKind(const.typeValue)
-            if (kind.isValueType) classLiteral(kind)
-            else kind;
-          }
-          jmethod.visitLdcInsn(toPush.toASMType)
-
-        case EnumTag   =>
-          val sym       = const.symbolValue
-          val ownerName = internalName(sym.owner)
-          val fieldName = sym.javaSimpleName.toString
-          val fieldDesc = toTypeKind(sym.tpe.underlying).getDescriptor
-          jmethod.visitFieldInsn(
-            asm.Opcodes.GETSTATIC,
-            ownerName,
-            fieldName,
-            fieldDesc
-          )
-
-        case _ => abort("Unknown constant value: " + const)
-      }
-    }
 
     // @can-multi-thread
     final def aconst(cst: AnyRef) {
@@ -1950,39 +1715,6 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     // @can-multi-thread
     final def dup(tk: BType)  { emit(if(tk.isWideType) Opcodes.DUP2 else Opcodes.DUP) }
 
-    // ---------------- field load and store ----------------
-
-    /**
-     * @must-single-thread
-     **/
-    final def fieldLoad( field: Symbol, hostClass: Symbol = null) { // TODO GenASM could use this method
-      fieldOp(field, isLoad = true,  hostClass)
-    }
-    /**
-     * @must-single-thread
-     **/
-    final def fieldStore(field: Symbol, hostClass: Symbol = null) { // TODO GenASM could use this method
-      fieldOp(field, isLoad = false, hostClass)
-    }
-
-    /**
-     * @must-single-thread
-     **/
-    private def fieldOp(field: Symbol, isLoad: Boolean, hostClass: Symbol = null) {
-      // LOAD_FIELD.hostClass , CALL_METHOD.hostClass , and #4283
-      val owner      =
-        if(hostClass == null) internalName(field.owner)
-        else                  internalName(hostClass)
-      val fieldJName = field.javaSimpleName.toString
-      val fieldDescr = toTypeKind(field.tpe).getDescriptor
-      val isStatic   = field.isStaticMember
-      val opc =
-        if(isLoad) { if (isStatic) Opcodes.GETSTATIC else Opcodes.GETFIELD }
-        else       { if (isStatic) Opcodes.PUTSTATIC else Opcodes.PUTFIELD }
-      jmethod.visitFieldInsn(opc, owner, fieldJName, fieldDescr)
-
-    }
-
     // ---------------- type checks and casts ----------------
 
     // @can-multi-thread
@@ -2203,85 +1935,6 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
     InnerClassEntry(jname, oname, iname, access)
   }
-
-  val innerClassBufferASM = mutable.LinkedHashSet[Symbol]()
-
-  /**
-   * @must-single-thread
-   **/
-  final def javaSimpleName(sym: Symbol): String = { sym.javaSimpleName.toString }
-
-  /**
-   * @must-single-thread
-   **/
-  final def internalName(sym: Symbol): String = { asmClassType(sym).getInternalName }
-
-  /**
-   * @must-single-thread
-   **/
-  final def asmClassType(sym: Symbol): BType = {
-    assert(hasInternalName(sym), "doesn't have internal name: " + sym.fullName)
-    bufferIfInner(sym)
-    phantomTypeMap.getOrElse(sym, exemplar(sym).c)
-  }
-
-  /**
-   * @must-single-thread
-   **/
-  def bufferIfInner(sym: Symbol) {
-    val ics = innerClassSymbolFor(sym)
-    if(ics != NoSymbol) {
-      innerClassBufferASM += ics
-    }
-  }
-
-  /**
-   * @must-single-thread
-   **/
-  def addInnerClassesASM(csym: Symbol, jclass: asm.ClassVisitor) {
-    // used to detect duplicates.
-    val seen = mutable.Map.empty[Name, Name]
-    // result without duplicates, not yet sorted.
-    val result = mutable.Set.empty[InnerClassEntry]
-
-    // add inner classes which might not have been referenced yet TODO this should be done in genPlainClass()
-    afterErasure {
-      for (sym <- List(csym, csym.linkedClassOfClass); memberc <- sym.info.decls.map(innerClassSymbolFor) if memberc.isClass) {
-        innerClassBufferASM += memberc
-      }
-    }
-
-    for(s <- innerClassBufferASM; e <- innerClassesChain(s)) {
-
-      assert(e.name != null, "javaName is broken.") // documentation
-      val doAdd = seen.get(e.name) match {
-        // TODO is it ok for prevOName to be null? (Someone should really document the invariants of the InnerClasses bytecode attribute)
-        case Some(prevOName) =>
-          // this occurs e.g. when innerClassBuffer contains both class Thread$State, object Thread$State,
-          // i.e. for them it must be the case that oname == java/lang/Thread
-          assert(prevOName == e.outerName, "duplicate")
-          false
-        case None => true
-      }
-
-      if(doAdd) {
-        seen   += (e.name -> e.outerName)
-        result += e
-      }
-
-    }
-    // sort them so inner classes succeed their enclosing class to satisfy the Eclipse Java compiler
-    for(e <- result.toList sortBy (_.name.length)) {
-      jclass.visitInnerClass(
-        e.name.toString,
-        if(e.outerName != null) e.outerName.toString else null,
-        e.innerName,
-        e.access)
-    }
-
-  }
-
-  // what follows used to live in BCodeUtils
 
   var pickledBytes = 0 // statistics
 
@@ -2711,15 +2364,215 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
     // TODO here's where innerClasses-related stuff should go , as well as javaName , and the helpers they invoke.
 
+    val innerClassBufferASM = mutable.LinkedHashSet[Symbol]()
+
     /**
+     * @must-single-thread
+     **/
+    def bufferIfInner(sym: Symbol) {
+      val ics = innerClassSymbolFor(sym)
+      if(ics != NoSymbol) {
+        innerClassBufferASM += ics
+      }
+    }
+
+    /**
+     * @must-single-thread
+     **/
+    final def javaSimpleName(sym: Symbol): String = { sym.javaSimpleName.toString }
+
+    /**
+     *  Tracks (if needed) the inner class given by sym.
+     *
+     *  @must-single-thread
+     **/
+    final def internalName(sym: Symbol): String = { asmClassType(sym).getInternalName }
+
+    /**
+     *  Tracks (if needed) the inner class given by `sym`.
+     *
+     *  @must-single-thread
+     **/
+    final def asmClassType(sym: Symbol): BType = {
+      assert(hasInternalName(sym), "doesn't have internal name: " + sym.fullName)
+      bufferIfInner(sym)
+      phantomTypeMap.getOrElse(sym, exemplar(sym).c)
+    }
+
+    /**
+     *  Returns the BType for the given type.
+     *  Tracks (if needed) the inner class given by `t`.
+     *
+     * @must-single-thread
+     **/
+    final def toTypeKind(t: Type): BType = {
+
+          /** Interfaces have to be handled delicately to avoid introducing spurious errors,
+           *  but if we treat them all as AnyRef we lose too much information.
+           **/
+          def newReference(sym0: Symbol): BType = {
+            assert(!primitiveTypeMap.contains(sym0), "Use primitiveTypeMap instead.")
+            assert(sym0 != definitions.ArrayClass,   "Use arrayOf() instead.")
+
+            if(sym0 == definitions.NullClass)    return RT_NULL;
+            if(sym0 == definitions.NothingClass) return RT_NOTHING;
+
+            // Working around SI-5604.  Rather than failing the compile when we see
+            // a package here, check if there's a package object.
+            val sym = (
+              if (!sym0.isPackageClass) sym0
+              else sym0.info.member(nme.PACKAGE) match {
+                case NoSymbol => assert(false, "Cannot use package as value: " + sym0.fullName) ; NoSymbol
+                case s        => debugwarn("Bug: found package class where package object expected.  Converting.") ; s.moduleClass
+              }
+            )
+
+            // Can't call .toInterface (at this phase) or we trip an assertion.
+            // See PackratParser#grow for a method which fails with an apparent mismatch
+            // between "object PackratParsers$class" and "trait PackratParsers"
+            if (sym.isImplClass) {
+              // pos/spec-List.scala is the sole failure if we don't check for NoSymbol
+              val traitSym = sym.owner.info.decl(tpnme.interfaceName(sym.name))
+              if (traitSym != NoSymbol)
+                bufferIfInner(traitSym)
+                return asmClassType(traitSym)
+            }
+
+            assert(hasInternalName(sym), "Invoked for a symbol lacking JVM internal name: " + sym.fullName)
+            assert(!phantomTypeMap.contains(sym), "phantom types not supposed to reach here.")
+
+            bufferIfInner(sym)
+
+            exemplar(sym).c
+
+          }
+
+          def primitiveOrRefType(sym: Symbol): BType = {
+            assert(sym != definitions.ArrayClass, "Use primitiveOrArrayOrRefType() instead.")
+
+            primitiveTypeMap.getOrElse(sym, newReference(sym))
+          }
+
+          def primitiveOrRefType2(sym: Symbol): BType = {
+            primitiveTypeMap.get(sym) match {
+              case Some(pt) => pt
+              case None =>
+                sym match {
+                  case definitions.NullClass    => RT_NULL
+                  case definitions.NothingClass => RT_NOTHING
+                  case _ if sym.isClass         => newReference(sym)
+                  case _ =>
+                    assert(sym.isType, sym) // it must be compiling Array[a]
+                    ObjectReference
+                }
+            }
+          }
+
+      import definitions.ArrayClass
+
+      // Call to .normalize fixes #3003 (follow type aliases). Otherwise, primitiveOrArrayOrRefType() would return ObjectReference.
+      t.normalize match {
+
+        case ThisType(sym) =>
+          if(sym == ArrayClass) ObjectReference
+          else                  phantomTypeMap.getOrElse(sym, exemplar(sym).c)
+
+        case SingleType(_, sym) => primitiveOrRefType(sym)
+
+        case _: ConstantType    => toTypeKind(t.underlying)
+
+        case TypeRef(_, sym, args)    =>
+          if(sym == ArrayClass) arrayOf(toTypeKind(args.head))
+          else                  primitiveOrRefType2(sym)
+
+        case ClassInfoType(_, _, sym) =>
+          assert(sym != ArrayClass, "ClassInfoType to ArrayClass!")
+          primitiveOrRefType(sym)
+
+        // !!! Iulian says types which make no sense after erasure should not reach here, which includes the ExistentialType, AnnotatedType, RefinedType.
+        case _: ExistentialType     => abort("ExistentialType reached GenBCode: " + t)
+        case AnnotatedType(_, w, _) => toTypeKind(w) // TODO test/files/jvm/annotations.scala causes an AnnotatedType to reach here.
+        case _: RefinedType         => abort("RefinedType reached GenBCode: "     + t) // defensive: parents map toTypeKind reduceLeft lub
+
+        // For sure WildcardTypes shouldn't reach here either, but when debugging such situations this may come in handy.
+        // case WildcardType    => REFERENCE(ObjectClass)
+        case norm => abort(
+          "Unknown type: %s, %s [%s, %s] TypeRef? %s".format(
+            t, norm, t.getClass, norm.getClass, t.isInstanceOf[TypeRef]
+          )
+        )
+      }
+
+    } // end of method toTypeKind()
+
+    /**
+     * @must-single-thread
+     */
+    final def asmMethodType(s: Symbol): BType = {
+      assert(s.isMethod, "not a method-symbol: " + s)
+      val resT: BType = if (s.isClassConstructor) BType.VOID_TYPE else toTypeKind(s.tpe.resultType);
+      BType.getMethodType( resT, mkArray(s.tpe.paramTypes map toTypeKind) )
+    }
+
+    /**
+     * @must-single-thread
+     **/
+    def addInnerClassesASM(csym: Symbol, jclass: asm.ClassVisitor) {
+      // used to detect duplicates.
+      val seen = mutable.Map.empty[Name, Name]
+      // result without duplicates, not yet sorted.
+      val result = mutable.Set.empty[InnerClassEntry]
+
+      // add inner classes which might not have been referenced yet TODO this should be done in genPlainClass()
+      afterErasure {
+        for (sym <- List(csym, csym.linkedClassOfClass); memberc <- sym.info.decls.map(innerClassSymbolFor) if memberc.isClass) {
+          innerClassBufferASM += memberc
+        }
+      }
+
+      for(s <- innerClassBufferASM; e <- innerClassesChain(s)) {
+
+        assert(e.name != null, "javaName is broken.") // documentation
+        val doAdd = seen.get(e.name) match {
+          // TODO is it ok for prevOName to be null? (Someone should really document the invariants of the InnerClasses bytecode attribute)
+          case Some(prevOName) =>
+            // this occurs e.g. when innerClassBuffer contains both class Thread$State, object Thread$State,
+            // i.e. for them it must be the case that oname == java/lang/Thread
+            assert(prevOName == e.outerName, "duplicate")
+            false
+          case None => true
+        }
+
+        if(doAdd) {
+          seen   += (e.name -> e.outerName)
+          result += e
+        }
+
+      }
+      // sort them so inner classes succeed their enclosing class to satisfy the Eclipse Java compiler
+      for(e <- result.toList sortBy (_.name.length)) {
+        jclass.visitInnerClass(
+          e.name.toString,
+          if(e.outerName != null) e.outerName.toString else null,
+          e.innerName,
+          e.access)
+      }
+
+    } // end of method addInnerClassesASM()
+
+    /**
+     *  Tracks (if needed) the inner class given by `t`.
+     *
      *  @must-single-thread
      */
     def descriptor(t: Type):   String = { toTypeKind(t).getDescriptor   }
 
     /**
+     *  Tracks (if needed) the inner class given by `sym`.
+     *
      *  @must-single-thread
      */
-    def descriptor(s: Symbol): String = { asmClassType(s).getDescriptor }
+    def descriptor(sym: Symbol): String = { asmClassType(sym).getDescriptor }
 
     /**
      * Returns a new ClassWriter for the class given by arguments.
@@ -3651,9 +3504,10 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       (sym.parentSymbols contains AndroidParcelableInterface)
 
     /**
-     * @can-multi-thread
+     * @must-single-thread
      */
     def legacyAddCreatorCode(clinit: asm.MethodVisitor, jclass: asm.ClassVisitor, thisName: String) {
+      val androidCreatorType = asmClassType(AndroidCreatorClass) // this tracks the inner class in innerClassBufferASM
       val tdesc_creator = androidCreatorType.getDescriptor
 
       jclass.visitField(
