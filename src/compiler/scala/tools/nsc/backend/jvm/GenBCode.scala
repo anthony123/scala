@@ -35,85 +35,116 @@ abstract class GenBCode extends BCodeTypes {
     override def erasedTypes = true
 
     private var bytecodeWriter  : BytecodeWriter   = null
-    private var needsOutfileForSymbol: Boolean     = false
     private var mirrorCodeGen   : JMirrorBuilder   = null
     private var beanInfoCodeGen : JBeanInfoBuilder = null
 
-    override def run() {
-      scalaPrimitives.init
-      initBCodeTypes()
-      bytecodeWriter  = initBytecodeWriter(cleanup.getEntryPoints)
-      needsOutfileForSymbol = bytecodeWriter.isInstanceOf[ClassBytecodeWriter]
-      mirrorCodeGen   = new JMirrorBuilder(  bytecodeWriter, needsOutfileForSymbol)
-      beanInfoCodeGen = new JBeanInfoBuilder(bytecodeWriter, needsOutfileForSymbol)
-      super.run()
-      bytecodeWriter.close()
-      clearBCodeTypes()
-    }
-
-    // current compilation unit and package
-    private var cunit: CompilationUnit     = null
-    private val pkg = new mutable.Stack[String]
-
-    override def apply(unit: CompilationUnit): Unit = {
-      this.cunit = unit
-      gen(unit.body)
-      this.cunit = NoCompilationUnit
-    }
+    case class CDetCU(cd: ClassDef, cunit: CompilationUnit)
+    private val q1 = new _root_.java.util.concurrent.LinkedBlockingQueue[CDetCU]
+    // q2
+    private val q3 = new _root_.java.util.concurrent.LinkedBlockingQueue[ClassfileRepr]
 
     /**
-     *  If you look closely, you'll notice almost no code duplication with JBuilder's `writeIfNotTooBig()`
+     *  Pipeline that takes ClassDefs from q1, prepares their classfile representation, placing those classfiles in q3
      *
-     *  @must-single-thread
+     *  @must-single-thread (because it relies on typer).
      */
-    def writeIfNotTooBig(jclassName: String, arr: Array[Byte], sym: Symbol) {
-      val label = "" + sym.name
-      val outF: scala.tools.nsc.io.AbstractFile = {
-        if(needsOutfileForSymbol) getFile(sym, jclassName, ".class") else null
+    class CDVisitor(needsOutfileForSymbol: Boolean) extends _root_.java.lang.Runnable {
+
+      def run() {
+        var stop = false
+        while (!stop) {
+          val CDetCU(cd, cunit) = q1.take
+          if(cd eq null) { stop = true }
+          else { visit(cd, cunit) }
+        }
+        q3 put ClassfileRepr(null, null, null, null)
       }
-      bytecodeWriter.writeClass(label, jclassName, arr, outF)
-    }
 
-    def gen(tree: Tree) {
-
-      tree match {
-
-        case EmptyTree => ()
-
-        case PackageDef(pid, stats) =>
-          pkg push pid.name.toString
-          stats foreach gen
-          pkg.pop()
-
-        case cd: ClassDef =>
-          val claszSymbol = cd.symbol
-          // mirror class, if needed
-          if (isStaticModule(claszSymbol) && isTopLevelModule(claszSymbol)) {
-            if (claszSymbol.companionClass == NoSymbol) {
+      def visit(cd: ClassDef, cunit: CompilationUnit) {
+        val claszSymbol = cd.symbol
+        // mirror class, if needed
+        if (isStaticModule(claszSymbol) && isTopLevelModule(claszSymbol)) {
+          if (claszSymbol.companionClass == NoSymbol) {
+            q3 put (
               mirrorCodeGen.genMirrorClass(claszSymbol, cunit)
-            } else {
-              log("No mirror class for module with linked class: " + claszSymbol.fullName)
-            }
+            )
+          } else {
+            log("No mirror class for module with linked class: " + claszSymbol.fullName)
           }
-          // "plain" class
-          val pcb = new PlainClassBuilder(cunit)
-          pcb.genPlainClass(cd)
-          // This is a good time to collapse jump-chains, perform dce and remove unused locals, on the asm.tree.ClassNode.
-          // See Ch. 8. "Method Analysis" in the ASM User Guide, http://download.forge.objectweb.org/asm/asm4-guide.pdf
-          val cw = new CClassWriter(extraProc)
-          pcb.cnode.accept(cw)
-          writeIfNotTooBig(pcb.thisName, cw.toByteArray, cd.symbol)
-          // bean info class, if needed
-          if (claszSymbol hasAnnotation BeanInfoAttr) {
+        }
+        // "plain" class
+        val pcb = new PlainClassBuilder(cunit)
+        pcb.genPlainClass(cd)
+        // This is a good time to collapse jump-chains, perform dce and remove unused locals, on the asm.tree.ClassNode.
+        // See Ch. 8. "Method Analysis" in the ASM User Guide, http://download.forge.objectweb.org/asm/asm4-guide.pdf
+        val cw = new CClassWriter(extraProc)
+        pcb.cnode.accept(cw)
+        q3 put {
+          val label = "" + cd.symbol.name
+          val outF: _root_.scala.tools.nsc.io.AbstractFile = {
+            if(needsOutfileForSymbol) getFile(cd.symbol, pcb.thisName, ".class") else null
+          }
+          ClassfileRepr(label, pcb.thisName, cw.toByteArray, outF)
+        }
+        // bean info class, if needed
+        if (claszSymbol hasAnnotation BeanInfoAttr) {
+          q3 put {
             beanInfoCodeGen.genBeanInfoClass(
               claszSymbol, cunit,
               fieldSymbols(claszSymbol),
               methodSymbols(cd)
             )
           }
+        }
       }
 
-    } // end of BCodePhase's gen() method
+    }
+
+    override def run() {
+      scalaPrimitives.init
+      initBCodeTypes()
+      bytecodeWriter  = initBytecodeWriter(cleanup.getEntryPoints)
+      val needsOutfileForSymbol = bytecodeWriter.isInstanceOf[ClassBytecodeWriter]
+      mirrorCodeGen   = new JMirrorBuilder(  bytecodeWriter, needsOutfileForSymbol)
+      beanInfoCodeGen = new JBeanInfoBuilder(bytecodeWriter, needsOutfileForSymbol)
+      // ------------------------------------------------------------------------------------------------------------------
+      // Pipeline from q1 to q3
+      // ------------------------------------------------------------------------------------------------------------------
+      new _root_.java.lang.Thread(new CDVisitor(needsOutfileForSymbol)).start()
+      // -------------------------------------------------------------------
+      // Place all ClassDefs on q1, without any processing, so as to free this main thread for classfile writing.
+      // If not performed by this thread, the Eclipse IDE doesn't notice disk writing activity.
+      // -------------------------------------------------------------------
+      super.run()
+      q1 put CDetCU(null, null)
+      // ------------------------------------------------------------------------------------------------------------------
+      // Pipeline that writes classfile representations to disk.
+      // ------------------------------------------------------------------------------------------------------------------
+      var stop = false
+      while (!stop) {
+        val ClassfileRepr(label, jclassName, jclassBytes, outF) = q3.take
+        if(jclassBytes eq null) { stop = true }
+        else { bytecodeWriter.writeClass(label, jclassName, jclassBytes, outF) }
+      }
+      assert(q1.isEmpty, "Not all ClassDefs had their class files built: " + q1.toString)
+      // assert(q2.isEmpty, "Not all classfiles were built: " + q2.toString)
+      assert(q3.isEmpty, "Not all classfiles were written to disk: " + q3.toString)
+      bytecodeWriter.close()
+      clearBCodeTypes()
+    }
+
+    override def apply(cunit: CompilationUnit): Unit = {
+
+          def gen(tree: Tree) {
+            tree match {
+              case EmptyTree            => ()
+              case PackageDef(_, stats) => stats foreach gen
+              case cd: ClassDef         => q1 put CDetCU(cd, cunit)
+            }
+          }
+
+      gen(cunit.body)
+    }
 
     class PlainClassBuilder(cunit: CompilationUnit)
       extends BCInitGen
