@@ -341,7 +341,11 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
      */
     def emitClass(jclass: JClass, sym: Symbol) {
       addInnerClasses(jclass)
-      writeClass("" + sym.name, jclass.getName(), toByteArray(jclass), sym)
+      val outF: AbstractFile = {
+        val needsOutfileForSymbol = bytecodeWriter.isInstanceOf[ClassBytecodeWriter]
+        if(needsOutfileForSymbol) getFile(sym, jclass.getName(), ".class") else null
+      }
+      writeClass("" + sym.name, jclass.getName(), toByteArray(jclass), outF)
     }
 
     /** Returns the ScalaSignature annotation if it must be added to this class,
@@ -590,7 +594,11 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
       jcode.emitRETURN()
 
       // write the bean information class file.
-      writeClass("BeanInfo ", beanInfoClass.getName(), toByteArray(beanInfoClass), c.symbol)
+      val outF: AbstractFile = {
+        val needsOutfileForSymbol = bytecodeWriter.isInstanceOf[ClassBytecodeWriter]
+        if(needsOutfileForSymbol) getFile(c.symbol, beanInfoClass.getName(), ".class") else null
+      }
+      writeClass("BeanInfo ", beanInfoClass.getName(), toByteArray(beanInfoClass), outF)
     }
 
     /** Add the given 'throws' attributes to jmethod */

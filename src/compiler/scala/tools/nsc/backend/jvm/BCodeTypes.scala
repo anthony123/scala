@@ -9,6 +9,7 @@ package backend.jvm
 import scala.tools.asm
 import scala.annotation.switch
 import scala.collection.{ immutable, mutable }
+import scala.tools.nsc.io.AbstractFile
 
 /**
  *  Utilities to mediate between types as represented in Scala ASTs and ASM trees.
@@ -22,6 +23,30 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
   // when compiling the Scala library, some assertions don't hold (e.g., scala.Boolean has null superClass although it's not an interface)
   val isCompilingStdLib = !(settings.sourcepath.isDefault)
+
+  /**
+   * @must-single-thread
+   **/
+  private def outputDirectory(sym: Symbol): AbstractFile =
+    settings.outputDirs outputDirFor beforeFlatten(sym.sourceFile)
+
+  /**
+   * @must-single-thread
+   **/
+  private def getFile(base: AbstractFile, clsName: String, suffix: String): AbstractFile = {
+    var dir = base
+    val pathParts = clsName.split("[./]").toList
+    for (part <- pathParts.init) {
+      dir = dir.subdirectoryNamed(part)
+    }
+    dir.fileNamed(pathParts.last + suffix)
+  }
+
+  /**
+   * @must-single-thread
+   **/
+  def getFile(sym: Symbol, clsName: String, suffix: String): AbstractFile =
+    getFile(outputDirectory(sym), clsName, suffix)
 
   object BType {
 
@@ -3299,26 +3324,29 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
   }
 
   /** basic functionality for class file building of plain, mirror, and beaninfo classes. */
-  abstract class JBuilder(bytecodeWriter: BytecodeWriter) extends BCInnerClassGen {
+  abstract class JBuilder(bytecodeWriter: BytecodeWriter, needsOutfileForSymbol: Boolean) extends BCInnerClassGen {
 
     /**
      *  @must-single-thread
      */
     def writeIfNotTooBig(label: String, jclassName: String, arr: Array[Byte], sym: Symbol) {
-      bytecodeWriter.writeClass(label, jclassName, arr, sym)
+      val outF: AbstractFile = {
+        if(needsOutfileForSymbol) getFile(sym, jclassName, ".class") else null
+      }
+      bytecodeWriter.writeClass(label, jclassName, arr, outF)
     }
 
   } // end of class JBuilder
 
   /** functionality for building plain and mirror classes */
-  abstract class JCommonBuilder(bytecodeWriter: BytecodeWriter)
-    extends JBuilder(bytecodeWriter)
+  abstract class JCommonBuilder(bytecodeWriter: BytecodeWriter, needsOutfileForSymbol: Boolean)
+    extends JBuilder(bytecodeWriter, needsOutfileForSymbol)
     with    BCAnnotGen
     with    BCForwardersGen
     with    BCPickles { }
 
   /** builder of mirror classes */
-  class JMirrorBuilder(bytecodeWriter: BytecodeWriter) extends JCommonBuilder(bytecodeWriter) {
+  class JMirrorBuilder(bytecodeWriter: BytecodeWriter, needsOutfileForSymbol: Boolean) extends JCommonBuilder(bytecodeWriter, needsOutfileForSymbol) {
 
     private var cunit: CompilationUnit = _
     def getCurrentCUnit(): CompilationUnit = cunit;
@@ -3370,7 +3398,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
   } // end of class JMirrorBuilder
 
   /** builder of bean info classes */
-  class JBeanInfoBuilder(bytecodeWriter: BytecodeWriter) extends JBuilder(bytecodeWriter) {
+  class JBeanInfoBuilder(bytecodeWriter: BytecodeWriter, needsOutfileForSymbol: Boolean) extends JBuilder(bytecodeWriter, needsOutfileForSymbol) {
 
     /**
      * Generate a bean info class that describes the given class.

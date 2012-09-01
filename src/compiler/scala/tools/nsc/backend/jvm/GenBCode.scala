@@ -35,6 +35,7 @@ abstract class GenBCode extends BCodeTypes {
     override def erasedTypes = true
 
     private var bytecodeWriter  : BytecodeWriter   = null
+    private var needsOutfileForSymbol: Boolean     = false
     private var mirrorCodeGen   : JMirrorBuilder   = null
     private var beanInfoCodeGen : JBeanInfoBuilder = null
 
@@ -42,8 +43,9 @@ abstract class GenBCode extends BCodeTypes {
       scalaPrimitives.init
       initBCodeTypes()
       bytecodeWriter  = initBytecodeWriter(cleanup.getEntryPoints)
-      mirrorCodeGen   = new JMirrorBuilder(bytecodeWriter)
-      beanInfoCodeGen = new JBeanInfoBuilder(bytecodeWriter)
+      needsOutfileForSymbol = bytecodeWriter.isInstanceOf[ClassBytecodeWriter]
+      mirrorCodeGen   = new JMirrorBuilder(  bytecodeWriter, needsOutfileForSymbol)
+      beanInfoCodeGen = new JBeanInfoBuilder(bytecodeWriter, needsOutfileForSymbol)
       super.run()
       bytecodeWriter.close()
       clearBCodeTypes()
@@ -66,7 +68,10 @@ abstract class GenBCode extends BCodeTypes {
      */
     def writeIfNotTooBig(jclassName: String, arr: Array[Byte], sym: Symbol) {
       val label = "" + sym.name
-      bytecodeWriter.writeClass(label, jclassName, arr, sym)
+      val outF: scala.tools.nsc.io.AbstractFile = {
+        if(needsOutfileForSymbol) getFile(sym, jclassName, ".class") else null
+      }
+      bytecodeWriter.writeClass(label, jclassName, arr, outF)
     }
 
     def gen(tree: Tree) {
