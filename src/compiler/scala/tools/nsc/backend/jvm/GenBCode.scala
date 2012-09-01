@@ -13,10 +13,58 @@ import scala.tools.nsc.symtab._
 import scala.annotation.switch
 import scala.tools.asm
 
-/** Prepare in-memory representations of classfiles using the ASM Tree API, and serialize them to disk.
+/**
+ *  Prepare in-memory representations of classfiles using the ASM Tree API, and serialize them to disk.
+ *
+ *  Three pipelines are at work, each taking work items from one of three different (concurrent) queues:
+ *
+ *    (1) In the first queue, an item consists of a ClassDef along with its arrival position.
+ *        This position is used later when serializing classfiles to disk,
+ *        to send classfiles to disk in the same order as if the input had been processed sequentially.
+ *        Thus, for example, two runs of the compiler on the same files produce jars that are identical on a byte basis.
+ *        See `ant test.stability`
+ *
+ *    (2) The second queue contains items where a ClassDef has been lowered into:
+ *          (a) an optional mirror class,
+ *          (b) a half-based plain class, and
+ *          (c) an optional bean class.
+ *
+ *        Both the mirror and the bean classes (if any) are ready to be written to disk,
+ *        but that has to wait until the plain class is turned into an ASM Tree.
+ *
+ *        The processing that took place between queues 1 and 2 relied on typer, and thus had to be performed by a single thread.
+ *        The thread in question is different from the main thread, for reasons that will become apparent under (3) below.
+ *        As long as all operations on typer are carried out under a single thread (not necessarily the main thread), everything is fine.
+ *
+ *        The processing descried above is what we call pipeline-1,
+ *        ie the activities carried out by the single thread in charge of moving items from queue 1 to queue 2.
+ *
+ *        Rather than performing all the work involved in lowering a ClassDef, "pipeline 1" focuses on operations requiring typer.
+ *        Typer operations can't be performed by the next pipeline because that pipeline consists of parallel worker threads.
+ *
+ *        The operations that a worker thread of pipeline-2 can perform are those that rely only on the following abstractions:
+ *          - BType:   a typer-independent representation of a JVM-level type,
+ *          - Tracked: a bundle of a BType B, its superclass (as a BType), and B's interfaces (as BTypes).
+ *          - the tree-based representation of classfiles provided by the ASM Tree API.
+ *        For example, it's possible to determine whether one BType conforms to another without resorting to typer.
+ *
+ *        In the future, a pipeline-2 worker could also perform basic optimizations on the ASM tree before handing it over to queue-3,
+ *        e.g. collapsing jump-chains, dead-code elimination, removing unused locals, etc.
+ *        See Ch. 8. "Method Analysis" in the ASM User Guide, http://download.forge.objectweb.org/asm/asm4-guide.pdf
+ *
+ *    (3) The third queue contains items ready for serialization.
+ *        It's a priority queue that follows the original arrival order, for `ant test.stability` reasons.
+ *        This pipeline consist of just the main thread, which is the thread that some tools (including the Eclipse IDE)
+ *        expect to be the sole performer of file-system modifications.
+ *
+ *    Summing up, the three pipelines can run in parallel, thus allowing finishing faster.
+ *    Only pipeline-2 uses task-parallelism itself (moreoevr, each of the N workers is limited to invoking ASM and BType operations).
+ *    Pipelines 1 and 3 are sequential.
+ *
  *
  *  @author  Miguel Garcia, http://lamp.epfl.ch/~magarcia/ScalaCompilerCornerReloaded/
  *  @version 1.0
+ *
  */
 abstract class GenBCode extends BCodeTypes {
   import global._
@@ -38,99 +86,155 @@ abstract class GenBCode extends BCodeTypes {
     private var mirrorCodeGen   : JMirrorBuilder   = null
     private var beanInfoCodeGen : JBeanInfoBuilder = null
 
-    case class CDetCU(cd: ClassDef, cunit: CompilationUnit)
-    private val q1 = new _root_.java.util.concurrent.LinkedBlockingQueue[CDetCU]
+    // q1
+    case class Item1(arrivalPos: Int, cd: ClassDef, cunit: CompilationUnit)
+    private val poison1 = Item1(Int.MaxValue, null, null)
+    private val q1 = new _root_.java.util.concurrent.LinkedBlockingQueue[Item1]
+
     // q2
-    private val q3 = new _root_.java.util.concurrent.LinkedBlockingQueue[ClassfileRepr]
+    trait InFlight {}
+    case class Item2(arrivalPos: Int, mirror: ClassfileRepr, inFlight: InFlight, bean: ClassfileRepr)
+    private val q2 = new _root_.java.util.concurrent.LinkedBlockingQueue[Item2]
+
+    // q3
+    case class Item3(arrivalPos: Int, mirror: ClassfileRepr, plain: ClassfileRepr, bean: ClassfileRepr) extends java.lang.Comparable[Item3] {
+      override def compareTo(other: Item3): Int = {
+        arrivalPos - other.arrivalPos
+      }
+    }
+    private val q3 = new _root_.java.util.concurrent.PriorityBlockingQueue[Item3]
 
     /**
      *  Pipeline that takes ClassDefs from q1, prepares their classfile representation, placing those classfiles in q3
      *
      *  @must-single-thread (because it relies on typer).
      */
-    class CDVisitor(needsOutfileForSymbol: Boolean) extends _root_.java.lang.Runnable {
+    class Worker1(needsOutfileForSymbol: Boolean) extends _root_.java.lang.Runnable {
 
       def run() {
         var stop = false
         while (!stop) {
-          val CDetCU(cd, cunit) = q1.take
-          if(cd eq null) { stop = true }
-          else { visit(cd, cunit) }
+          val item = q1.take
+          if(item eq poison1) { stop = true }
+          else { visit(item) }
         }
-        q3 put ClassfileRepr(null, null, null, null)
+        q3 put Item3(Int.MaxValue, null, null, null)
       }
 
-      def visit(cd: ClassDef, cunit: CompilationUnit) {
+      def visit(item: Item1) {
+        val Item1(arrivalPos, cd, cunit) = item
         val claszSymbol = cd.symbol
-        // mirror class, if needed
+
+        // -------------- mirror class, if needed --------------
+        var mirrorC: ClassfileRepr = null
         if (isStaticModule(claszSymbol) && isTopLevelModule(claszSymbol)) {
           if (claszSymbol.companionClass == NoSymbol) {
-            q3 put (
-              mirrorCodeGen.genMirrorClass(claszSymbol, cunit)
-            )
+            mirrorC = mirrorCodeGen.genMirrorClass(claszSymbol, cunit)
           } else {
             log("No mirror class for module with linked class: " + claszSymbol.fullName)
           }
         }
-        // "plain" class
+
+        // -------------- "plain" class --------------
         val pcb = new PlainClassBuilder(cunit)
         pcb.genPlainClass(cd)
         // This is a good time to collapse jump-chains, perform dce and remove unused locals, on the asm.tree.ClassNode.
         // See Ch. 8. "Method Analysis" in the ASM User Guide, http://download.forge.objectweb.org/asm/asm4-guide.pdf
         val cw = new CClassWriter(extraProc)
         pcb.cnode.accept(cw)
-        q3 put {
+        val plainC: ClassfileRepr = {
           val label = "" + cd.symbol.name
           val outF: _root_.scala.tools.nsc.io.AbstractFile = {
             if(needsOutfileForSymbol) getFile(cd.symbol, pcb.thisName, ".class") else null
           }
           ClassfileRepr(label, pcb.thisName, cw.toByteArray, outF)
         }
-        // bean info class, if needed
+
+        // -------------- bean info class, if needed --------------
+        var beanC: ClassfileRepr = null
         if (claszSymbol hasAnnotation BeanInfoAttr) {
-          q3 put {
+          beanC =
             beanInfoCodeGen.genBeanInfoClass(
               claszSymbol, cunit,
               fieldSymbols(claszSymbol),
               methodSymbols(cd)
             )
-          }
         }
+
+        q3 put Item3(arrivalPos, mirrorC, plainC, beanC)
       }
 
     }
 
+    var arrivalPos = 0
+
     override def run() {
+      arrivalPos = 0 // just in case
       scalaPrimitives.init
       initBCodeTypes()
       bytecodeWriter  = initBytecodeWriter(cleanup.getEntryPoints)
       val needsOutfileForSymbol = bytecodeWriter.isInstanceOf[ClassBytecodeWriter]
       mirrorCodeGen   = new JMirrorBuilder(  bytecodeWriter, needsOutfileForSymbol)
       beanInfoCodeGen = new JBeanInfoBuilder(bytecodeWriter, needsOutfileForSymbol)
-      // ------------------------------------------------------------------------------------------------------------------
-      // Pipeline from q1 to q3
-      // ------------------------------------------------------------------------------------------------------------------
-      new _root_.java.lang.Thread(new CDVisitor(needsOutfileForSymbol)).start()
+      // -----------------------
+      // Pipeline from q1 to q3.
+      // -----------------------
+      new _root_.java.lang.Thread(new Worker1(needsOutfileForSymbol)).start()
       // -------------------------------------------------------------------
-      // Place all ClassDefs on q1, without any processing, so as to free this main thread for classfile writing.
+      // Place all ClassDefs on q1, recording their arrival position.
+      // By so doing, this main thread becomes free for classfile writing.
       // If not performed by this thread, the Eclipse IDE doesn't notice disk writing activity.
       // -------------------------------------------------------------------
       super.run()
-      q1 put CDetCU(null, null)
-      // ------------------------------------------------------------------------------------------------------------------
+      q1 put poison1
+      // -------------------------------------------------------
       // Pipeline that writes classfile representations to disk.
-      // ------------------------------------------------------------------------------------------------------------------
-      var stop = false
-      while (!stop) {
-        val ClassfileRepr(label, jclassName, jclassBytes, outF) = q3.take
-        if(jclassBytes eq null) { stop = true }
-        else { bytecodeWriter.writeClass(label, jclassName, jclassBytes, outF) }
-      }
+      // -------------------------------------------------------
+      drainQ3()
+      // we're done
       assert(q1.isEmpty, "Not all ClassDefs had their class files built: " + q1.toString)
       // assert(q2.isEmpty, "Not all classfiles were built: " + q2.toString)
       assert(q3.isEmpty, "Not all classfiles were written to disk: " + q3.toString)
       bytecodeWriter.close()
       clearBCodeTypes()
+    }
+
+    private def drainQ3() {
+
+          def sendToDisk(cfr: ClassfileRepr) {
+            if(cfr != null){
+              val ClassfileRepr(label, jclassName, jclassBytes, outF) = cfr
+              bytecodeWriter.writeClass(label, jclassName, jclassBytes, outF)
+            }
+          }
+
+      var stop = false
+      var expected = 0
+      while (!stop) {
+        var incoming: Int = -1
+        var canQuit = false
+        do {
+          while(q3.peek == null) {
+            _root_.java.lang.Thread.sleep(10)
+          }
+          incoming = q3.peek.arrivalPos
+          assert(expected <= incoming, "Head of queue is less than what we're waiting for, what's going on?")
+          stop        = (incoming == Int.MaxValue)
+          val isMatch = (incoming == expected)
+          canQuit     = (stop || isMatch)
+          if(!canQuit) {
+            _root_.java.lang.Thread.sleep(10)
+          }
+        } while(!canQuit)
+        val item = q3.poll
+        if(!stop) {
+          assert(item.arrivalPos == expected, "GenBCode's queue 3 doesn't deliver items in the expected order.")
+          sendToDisk(item.mirror)
+          sendToDisk(item.plain); assert(item.plain != null, "One plain class per Item3, that's the rule.")
+          sendToDisk(item.bean)
+          expected += 1
+        }
+      }
     }
 
     override def apply(cunit: CompilationUnit): Unit = {
@@ -139,7 +243,9 @@ abstract class GenBCode extends BCodeTypes {
             tree match {
               case EmptyTree            => ()
               case PackageDef(_, stats) => stats foreach gen
-              case cd: ClassDef         => q1 put CDetCU(cd, cunit)
+              case cd: ClassDef         =>
+                q1 put Item1(arrivalPos, cd, cunit)
+                arrivalPos += 1
             }
           }
 
@@ -520,7 +626,14 @@ abstract class GenBCode extends BCodeTypes {
               val onePastLastProgramPoint = currProgramPoint()
               val hasStaticBitSet = ((flags & asm.Opcodes.ACC_STATIC) != 0)
               if (!hasStaticBitSet) {
-                mnode.visitLocalVariable("this", thisDescr(thisName), null, veryFirstProgramPoint, onePastLastProgramPoint, 0)
+                mnode.visitLocalVariable(
+                  "this",
+                  "L" + thisName + ";",
+                  null,
+                  veryFirstProgramPoint,
+                  onePastLastProgramPoint,
+                  0
+                )
               }
               for (p <- params) { emitLocalVarScope(p.symbol, veryFirstProgramPoint, onePastLastProgramPoint, force = true) }
             }
@@ -1131,7 +1244,9 @@ abstract class GenBCode extends BCodeTypes {
             }
             else {
               mnode.visitVarInsn(asm.Opcodes.ALOAD, 0)
-              generatedType = if (tree.symbol == ArrayClass) ObjectReference else brefType(thisName)
+              generatedType =
+                if (tree.symbol == ArrayClass) ObjectReference
+                else brefType(thisName) // inner class (if any) for claszSymbol already tracked.
             }
 
           case Select(Ident(nme.EMPTY_PACKAGE_NAME), module) =>

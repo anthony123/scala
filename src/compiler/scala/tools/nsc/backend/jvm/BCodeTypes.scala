@@ -82,12 +82,9 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     val DOUBLE_TYPE  = new BType(DOUBLE,  ('D' << 24) | (3 << 16) | (3 << 8) | 2, 1)
 
     /**
-     * Returns the Java type corresponding to the given type descriptor. For
-     * method descriptors, buf is supposed to contain nothing more than the
-     * descriptor itself.
+     * Returns the Java type corresponding to the given type descriptor.
      *
-     * @param chrs a buffer containing a type descriptor.
-     * @param off the offset of this descriptor in the previous buffer.
+     * @param off the offset of this descriptor in the chrs buffer.
      * @return the Java type corresponding to the given type descriptor.
      *
      * @can-multi-thread
@@ -285,7 +282,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
      **/
     def toASMType: scala.tools.asm.Type = {
       import scala.tools.asm
-      sort match {
+      (sort: @switch) match {
         case BType.VOID    => asm.Type.VOID_TYPE
         case BType.BOOLEAN => asm.Type.BOOLEAN_TYPE
         case BType.CHAR    => asm.Type.CHAR_TYPE
@@ -638,7 +635,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
   /**
    * Creates a TypeName and the BType token for it.
-   * This method does not add to `innerClassesBuffer`
+   * This method does not add to `innerClassesBuffer`, use `internalName()` or `asmType()` or `toTypeKind()` for that.
    *
    * @must-single-thread
    **/
@@ -646,7 +643,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
   /**
    * Creates a BType token for the TypeName received as argument.
-   * This method does not add to `innerClassesBuffer`
+   * This method does not add to `innerClassesBuffer`, use `internalName()` or `asmType()` or `toTypeKind()` for that.
    *
    *  @can-multi-thread
    **/
@@ -852,14 +849,13 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
      *     (1) scala.Nothing (the test `c.isNonSpecial` fails for it)
      *     (2) scala.Boolean (it has null superClass and is not an interface)
      **/
+    assert(c.isNonSpecial || isCompilingStdLib /*(1)*/, "non well-formed plain-type: " + this)
     assert(
-      (c.isNonSpecial || isCompilingStdLib /*(1)*/ ) &&
-      ( if(sc == null) { (c == ObjectReference) || isInterface || isCompilingStdLib /*(2)*/ }
+        if(sc == null) { (c == ObjectReference) || isInterface || isCompilingStdLib /*(2)*/ }
         else           { (c != ObjectReference) && !sc.isInterface }
-      ) &&
-      (ifaces.forall(i => i.c.isNonSpecial && i.isInterface)),
-      "non well-formed plain-type: " + this
+      , "non well-formed plain-type: " + this
     )
+    assert(ifaces.forall(i => i.c.isNonSpecial && i.isInterface), "non well-formed plain-type: " + this)
 
     import asm.Opcodes._
     def hasFlags(mask: Int) = (flags & mask) != 0
@@ -953,7 +949,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
   /**
    * Records the superClass and supportedInterfaces relations,
    * so that afterwards queries can be answered without resorting to typer.
-   * This method does not add to `innerClassesBuffer`, use `asmType()` or `toTypeKind()` for that.
+   * This method does not add to `innerClassesBuffer`, use `internalName()` or `asmType()` or `toTypeKind()` for that.
    *
    * @must-single-thread
    */
@@ -1857,10 +1853,6 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
    *
    * This method also adds as member classes those inner classes that have been declared, but otherwise not referred in instructions.
    *
-   * TODO the invoker is responsible to sort them so inner classes succeed their enclosing class to satisfy the Eclipse Java compiler
-   * TODO the invoker is responsible to add member classes not referred in instructions.
-   * TODO remove duplicate entries.
-   *
    * TODO: some beforeFlatten { ... } which accounts for being nested in parameterized classes (if we're going to selectively flatten.)
    *
    * TODO assert (JVMS 4.7.6 The InnerClasses attribute)
@@ -2423,11 +2415,6 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     }
 
     /**
-     * @must-single-thread
-     **/
-    final def javaSimpleName(sym: Symbol): String = { sym.javaSimpleName.toString }
-
-    /**
      *  Tracks (if needed) the inner class given by sym.
      *
      *  @must-single-thread
@@ -2578,7 +2565,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
       for(s <- innerClassBufferASM; e <- innerClassesChain(s)) {
 
-        assert(e.name != null, "javaName is broken.") // documentation
+        assert(e.name != null, "innerClassesChain is broken.") // documentation
         val doAdd = seen.get(e.name) match {
           // TODO is it ok for prevOName to be null? (Someone should really document the invariants of the InnerClasses bytecode attribute)
           case Some(prevOName) =>
@@ -3084,11 +3071,9 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
     val MIN_SWITCH_DENSITY = 0.7
 
-    val StringBuilderClassName = definitions.StringBuilderClass.javaBinaryName.toString
+    // val StringBuilderClassName = definitions.StringBuilderClass.javaBinaryName.toString
     val BoxesRunTime = "scala/runtime/BoxesRunTime"
-
     val mdesc_arrayClone  = "()Ljava/lang/Object;"
-
     val tdesc_long        = BType.LONG_TYPE.getDescriptor // ie. "J"
 
     /**
@@ -3251,7 +3236,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       val fv =
         jclass.visitField(PublicStaticFinal, // TODO confirm whether we really don't want ACC_SYNTHETIC nor ACC_DEPRECATED
                           strMODULE_INSTANCE_FIELD,
-                          thisDescr(thisName),
+                          "L" + thisName + ";",
                           null, // no java-generic-signature
                           null  // no initial value
         )
@@ -3260,14 +3245,6 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       //   ( visitAnnotation | visitAttribute )* visitEnd.
 
       fv.visitEnd()
-    }
-
-    /**
-     * @can-multi-thread
-     */
-    def thisDescr(thisName: String): String = {
-      assert(thisName != null, "thisDescr invoked too soon.")
-      "L" + thisName + ";"
     }
 
     /**
@@ -3302,7 +3279,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
       val jMethodName =
         if(msym.isStaticConstructor) CLASS_CONSTRUCTOR_NAME
-        else javaSimpleName(msym)
+        else msym.javaSimpleName.toString
       val mdesc = BType.getMethodDescriptor(resTpe, mkArray(paramTypes))
       val jmethod = jclass.visitMethod(
         flags,
@@ -3404,11 +3381,8 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
      */
     def genBeanInfoClass(cls: Symbol, cunit: CompilationUnit, fieldSymbols: List[Symbol], methodSymbols: List[Symbol]): ClassfileRepr = {
 
-      // val BeanInfoSkipAttr    = definitions.getRequiredClass("scala.beans.BeanInfoSkip")
-      // val BeanDisplayNameAttr = definitions.getRequiredClass("scala.beans.BeanDisplayName")
-      // val BeanDescriptionAttr = definitions.getRequiredClass("scala.beans.BeanDescription")
-      // val description = c.symbol getAnnotation BeanDescriptionAttr
-      // informProgress(description.toString)
+          def javaSimpleName(s: Symbol): String = { s.javaSimpleName.toString }
+
       innerClassBufferASM.clear()
 
       val flags = mkFlags(
