@@ -24,7 +24,23 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
   // when compiling the Scala library, some assertions don't hold (e.g., scala.Boolean has null superClass although it's not an interface)
   val isCompilingStdLib = !(settings.sourcepath.isDefault)
 
-  case class ClassfileRepr(label: String, jclassName: String, jclassBytes: Array[Byte], outF: _root_.scala.tools.nsc.io.AbstractFile)
+  // an item of queue-2 (the queue where the typer-dependent pass dumps its intermediate output) contains two of these (for mirror and bean classes).
+  case class SubItem2NonPlain(
+    label:      String,
+    jclassName: String,
+    jclass:     asm.ClassWriter,
+    outF:       _root_.scala.tools.nsc.io.AbstractFile
+  )
+  // an item of queue-2 (the queue where the typer-dependent pass dumps its intermediate output) contains one of these.
+  case class SubItem2Plain(
+    label:      String,
+    jclassName: String,
+    cnode:      asm.tree.ClassNode,
+    outF:       _root_.scala.tools.nsc.io.AbstractFile
+  )
+
+  // an item of queue-3 (the last queue before serializing to disk) contains three of these (one for each of mirror, plain, and bean classes).
+  case class SubItem3(label: String, jclassName: String, jclassBytes: Array[Byte], outF: _root_.scala.tools.nsc.io.AbstractFile)
 
   /**
    * @must-single-thread
@@ -3302,19 +3318,19 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
   }
 
   /** basic functionality for class file building of plain, mirror, and beaninfo classes. */
-  abstract class JBuilder(bytecodeWriter: BytecodeWriter) extends BCInnerClassGen {
+  abstract class JBuilder extends BCInnerClassGen {
 
   } // end of class JBuilder
 
   /** functionality for building plain and mirror classes */
-  abstract class JCommonBuilder(bytecodeWriter: BytecodeWriter, needsOutfileForSymbol: Boolean)
-    extends JBuilder(bytecodeWriter)
+  abstract class JCommonBuilder(needsOutfileForSymbol: Boolean)
+    extends JBuilder
     with    BCAnnotGen
     with    BCForwardersGen
     with    BCPickles { }
 
   /** builder of mirror classes */
-  class JMirrorBuilder(bytecodeWriter: BytecodeWriter, needsOutfileForSymbol: Boolean) extends JCommonBuilder(bytecodeWriter, needsOutfileForSymbol) {
+  class JMirrorBuilder(needsOutfileForSymbol: Boolean) extends JCommonBuilder(needsOutfileForSymbol) {
 
     private var cunit: CompilationUnit = _
     def getCurrentCUnit(): CompilationUnit = cunit;
@@ -3327,7 +3343,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
      *
      *  @must-single-thread
      */
-    def genMirrorClass(modsym: Symbol, cunit: CompilationUnit): ClassfileRepr = {
+    def genMirrorClass(modsym: Symbol, cunit: CompilationUnit): SubItem2NonPlain = {
       assert(modsym.companionClass == NoSymbol, modsym)
       innerClassBufferASM.clear()
       this.cunit = cunit
@@ -3360,16 +3376,17 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
       addInnerClassesASM(modsym, mirrorClass)
       mirrorClass.visitEnd()
+      // leaving for later on purpose invoking `toByteArray()` on mirrorClass (pipeline-2 will do that).
       val outF: _root_.scala.tools.nsc.io.AbstractFile = {
         if(needsOutfileForSymbol) getFile(modsym, mirrorName, ".class") else null
       }
-      ClassfileRepr("" + modsym.name, mirrorName, mirrorClass.toByteArray(), outF)
+      SubItem2NonPlain("" + modsym.name, mirrorName, mirrorClass, outF)
     }
 
   } // end of class JMirrorBuilder
 
   /** builder of bean info classes */
-  class JBeanInfoBuilder(bytecodeWriter: BytecodeWriter, needsOutfileForSymbol: Boolean) extends JBuilder(bytecodeWriter) {
+  class JBeanInfoBuilder(needsOutfileForSymbol: Boolean) extends JBuilder {
 
     /**
      * Generate a bean info class that describes the given class.
@@ -3378,7 +3395,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
      *
      * @must-single-thread
      */
-    def genBeanInfoClass(cls: Symbol, cunit: CompilationUnit, fieldSymbols: List[Symbol], methodSymbols: List[Symbol]): ClassfileRepr = {
+    def genBeanInfoClass(cls: Symbol, cunit: CompilationUnit, fieldSymbols: List[Symbol], methodSymbols: List[Symbol]): SubItem2NonPlain = {
 
           def javaSimpleName(s: Symbol): String = { s.javaSimpleName.toString }
 
@@ -3488,11 +3505,12 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
       addInnerClassesASM(cls, beanInfoClass)
       beanInfoClass.visitEnd()
+      // leaving for later on purpose (to be done by pipeline-2): invoking `visitEnd()` and `toByteArray()` on beanInfoClass.
 
       val outF: _root_.scala.tools.nsc.io.AbstractFile = {
         if(needsOutfileForSymbol) getFile(cls, beanInfoName, ".class") else null
       }
-      ClassfileRepr("BeanInfo ", beanInfoName, beanInfoClass.toByteArray(), outF)
+      SubItem2NonPlain("BeanInfo ", beanInfoName, beanInfoClass, outF)
     }
 
   } // end of class JBeanInfoBuilder

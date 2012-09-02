@@ -39,11 +39,10 @@ import scala.tools.asm
  *        The thread in question is different from the main thread, for reasons that will become apparent below.
  *        As long as all operations on typer are carried out under a single thread (not necessarily the main thread), everything is fine.
  *
- *        The processing described above is what we call pipeline-1,
- *        ie the activities carried out by the single thread in charge of moving items from queue 1 to queue 2.
- *
- *        Rather than performing all the work involved in lowering a ClassDef, pipeline-1 focuses on operations requiring typer.
- *        Typer operations can't be performed by the next pipeline because that pipeline consists of parallel worker threads.
+ *        Rather than performing all the work involved in lowering a ClassDef,
+ *        pipeline-1 leaves in general for later those operations that don't require typer.
+ *        All the @can-multi-thread operations that pipeline-2 performs can also run during pipeline-1, in fact some of them do.
+ *        In contrast, typer operations can't be performed by pipeline-2, which consists of MAX_THREADS worker threads running concurrently.
  *
  *        Pipeline 2
  *        ----------
@@ -53,7 +52,9 @@ import scala.tools.asm
  *          - Tracked: a bundle of a BType B, its superclass (as a BType), and B's interfaces (as BTypes).
  *          - exemplars: a concurrent map to obtain the Tracked structure for a internal class name used as key.
  *          - the tree-based representation of classfiles provided by the ASM Tree API.
- *        For example, it's possible to determine whether one BType conforms to another without resorting to typer.
+ *        For example:
+ *          - it's possible to determine whether one BType conforms to another without resorting to typer.
+ *          - `CClassWriter.getCommonSuperclass()` (as a result of invoking `MethodNode.visitMaxs()` is also thread-reentrant.
  *
  *        In the future, a pipeline-2 worker could also perform basic optimizations on the ASM tree before handing it over to queue-3,
  *        e.g. collapsing jump-chains, unreachable-code elimination, and removing unused locals.
@@ -62,8 +63,14 @@ import scala.tools.asm
  *
  *    (3) The third queue contains items ready for serialization.
  *        It's a priority queue that follows the original arrival order, for `ant test.stability` reasons.
+ *
+ *        Pipeline 3
+ *        ----------
+ *
  *        This pipeline consist of just the main thread, which is the thread that some tools (including the Eclipse IDE)
  *        expect to be the sole performer of file-system modifications.
+ *
+ * ---------------------------------------------------------------------------------------------------------------------
  *
  *    Summing up, the key facts about this phase are:
  *
@@ -76,8 +83,8 @@ import scala.tools.asm
  *     (iv) Queue-1 connects a single producer (BCodePhase) to a single consumer (Worker-1),
  *          but given they run on different threads, queue-1 has to be concurrent.
  *
- *      (v) Queue-2 is concurrent because concurrent workers of pipeline-2 take items from it.
- *          Simimlarly, queue-3 is concurrent (it's in fact a priority queue) because those same workers add items to it.
+ *      (v) Queue-2 is concurrent because several concurrent workers of pipeline-2 take items from it.
+ *          Simimlarly, queue-3 is concurrent (it's in fact a priority queue) because those same concurrent workers add items to it.
  *
  *
  *  @author  Miguel Garcia, http://lamp.epfl.ch/~magarcia/ScalaCompilerCornerReloaded/
@@ -100,44 +107,62 @@ abstract class GenBCode extends BCodeTypes {
     override def description = "Generate bytecode from ASTs"
     override def erasedTypes = true
 
+    val MAX_THREADS = scala.math.min(
+      4,
+      java.lang.Runtime.getRuntime.availableProcessors
+    )
+
+    private val woStarted = new java.util.concurrent.ConcurrentHashMap[Long, Long]  // debug
+    private val woExited  = new java.util.concurrent.ConcurrentHashMap[Long, Item2] // debug
+
     private var bytecodeWriter  : BytecodeWriter   = null
     private var mirrorCodeGen   : JMirrorBuilder   = null
     private var beanInfoCodeGen : JBeanInfoBuilder = null
 
     // q1
-    case class Item1(arrivalPos: Int, cd: ClassDef, cunit: CompilationUnit)
+    case class Item1(arrivalPos: Int, cd: ClassDef, cunit: CompilationUnit) {
+      def isPoison = { arrivalPos == Int.MaxValue }
+    }
     private val poison1 = Item1(Int.MaxValue, null, null)
     private val q1 = new _root_.java.util.concurrent.LinkedBlockingQueue[Item1]
 
     // q2
-    trait InFlight {}
-    case class Item2(arrivalPos: Int, mirror: ClassfileRepr, inFlight: InFlight, bean: ClassfileRepr)
+    case class Item2(arrivalPos: Int, mirror: SubItem2NonPlain, plain: SubItem2Plain, bean: SubItem2NonPlain) {
+      def isPoison = { arrivalPos == Int.MaxValue }
+    }
+    private val poison2 = Item2(Int.MaxValue, null, null, null)
     private val q2 = new _root_.java.util.concurrent.LinkedBlockingQueue[Item2]
 
     // q3
-    case class Item3(arrivalPos: Int, mirror: ClassfileRepr, plain: ClassfileRepr, bean: ClassfileRepr)
+    case class Item3(arrivalPos: Int, mirror: SubItem3, plain: SubItem3, bean: SubItem3) {
+      def isPoison = { arrivalPos == Int.MaxValue }
+    }
     private val i3comparator = new _root_.java.util.Comparator[Item3] {
       override def compare(a: Item3, b: Item3) = {
-        a.arrivalPos - b.arrivalPos
+        if(a.arrivalPos < b.arrivalPos) -1
+        else if(a.arrivalPos == b.arrivalPos) 0
+        else 1
       }
     }
+    private val poison3 = Item3(Int.MaxValue, null, null, null)
     private val q3 = new _root_.java.util.concurrent.PriorityBlockingQueue[Item3](1000, i3comparator)
 
     /**
-     *  Pipeline that takes ClassDefs from q1, prepares their classfile representation, placing those classfiles in q3
+     *  Pipeline that takes ClassDefs from queue-1, lowers them into an intermediate form, placing them on queue-2
      *
      *  @must-single-thread (because it relies on typer).
      */
     class Worker1(needsOutfileForSymbol: Boolean) extends _root_.java.lang.Runnable {
 
       def run() {
-        var stop = false
-        while (!stop) {
+        while (true) {
           val item = q1.take
-          if(item eq poison1) { stop = true }
+          if(item.isPoison) {
+            for(i <- 1 to MAX_THREADS) { q2 put poison2 } // Worker2.run() comments why MAX_THREADS poison pills are needed on queue-2.
+            return
+          }
           else { visit(item) }
         }
-        q3 put Item3(Int.MaxValue, null, null, null)
       }
 
       def visit(item: Item1) {
@@ -145,7 +170,7 @@ abstract class GenBCode extends BCodeTypes {
         val claszSymbol = cd.symbol
 
         // -------------- mirror class, if needed --------------
-        var mirrorC: ClassfileRepr = null
+        var mirrorC: SubItem2NonPlain = null
         if (isStaticModule(claszSymbol) && isTopLevelModule(claszSymbol)) {
           if (claszSymbol.companionClass == NoSymbol) {
             mirrorC = mirrorCodeGen.genMirrorClass(claszSymbol, cunit)
@@ -157,20 +182,16 @@ abstract class GenBCode extends BCodeTypes {
         // -------------- "plain" class --------------
         val pcb = new PlainClassBuilder(cunit)
         pcb.genPlainClass(cd)
-        // This is a good time to collapse jump-chains, perform dce and remove unused locals, on the asm.tree.ClassNode.
-        // See Ch. 8. "Method Analysis" in the ASM User Guide, http://download.forge.objectweb.org/asm/asm4-guide.pdf
-        val cw = new CClassWriter(extraProc)
-        pcb.cnode.accept(cw)
-        val plainC: ClassfileRepr = {
+        val plainC: SubItem2Plain = {
           val label = "" + cd.symbol.name
           val outF: _root_.scala.tools.nsc.io.AbstractFile = {
             if(needsOutfileForSymbol) getFile(cd.symbol, pcb.thisName, ".class") else null
           }
-          ClassfileRepr(label, pcb.thisName, cw.toByteArray, outF)
+          SubItem2Plain(label, pcb.thisName, pcb.cnode, outF)
         }
 
         // -------------- bean info class, if needed --------------
-        var beanC: ClassfileRepr = null
+        var beanC: SubItem2NonPlain = null
         if (claszSymbol hasAnnotation BeanInfoAttr) {
           beanC =
             beanInfoCodeGen.genBeanInfoClass(
@@ -179,6 +200,56 @@ abstract class GenBCode extends BCodeTypes {
               methodSymbols(cd)
             )
         }
+
+        q2 put Item2(arrivalPos, mirrorC, plainC, beanC)
+      }
+
+    }
+
+    /**
+     *  Pipeline that takes items from queue-2, lowers them into byte array classfiles, placing them on queue-3
+     *
+     *  @can-multi-thread
+     */
+    class Worker2 extends _root_.java.lang.Runnable {
+
+      def run() {
+        val id = java.lang.Thread.currentThread.getId
+        woStarted.put(id, id)
+
+        while (true) {
+          val item = q2.take
+          if(item.isPoison) {
+            woExited.put(id, item)
+            q3 put poison3 // therefore queue-3 will contain as many poison pills as worker threads in pipeline-2
+            return // in order to terminate all workers, queue-1 must contain as many poison pills as worker threads in pipeline-2
+          }
+          else {
+            visit(item)
+          }
+        }
+      }
+
+      def visit(item: Item2) {
+        val Item2(arrivalPos, mirror, plain, bean) = item
+
+        // -------------- mirror class, if needed --------------
+        val mirrorC: SubItem3 =
+          if (mirror != null) {
+            SubItem3(mirror.label, mirror.jclassName, mirror.jclass.toByteArray(), mirror.outF)
+          } else null;
+
+        // -------------- "plain" class --------------
+        val cw = new CClassWriter(extraProc)
+        plain.cnode.accept(cw)
+        val plainC =
+          SubItem3(plain.label, plain.jclassName, cw.toByteArray, plain.outF)
+
+        // -------------- bean info class, if needed --------------
+        val beanC: SubItem3 =
+          if (bean != null) {
+            SubItem3(bean.label, bean.jclassName, bean.jclass.toByteArray(), bean.outF)
+          } else null;
 
         q3 put Item3(arrivalPos, mirrorC, plainC, beanC)
       }
@@ -191,18 +262,23 @@ abstract class GenBCode extends BCodeTypes {
       arrivalPos = 0 // just in case
       scalaPrimitives.init
       initBCodeTypes()
+      // initBytecodeWriter invokes fullName, thus we have to run it before the typer-dependent thread is activated.
       bytecodeWriter  = initBytecodeWriter(cleanup.getEntryPoints)
       val needsOutfileForSymbol = bytecodeWriter.isInstanceOf[ClassBytecodeWriter]
-      mirrorCodeGen   = new JMirrorBuilder(  bytecodeWriter, needsOutfileForSymbol)
-      beanInfoCodeGen = new JBeanInfoBuilder(bytecodeWriter, needsOutfileForSymbol)
+      mirrorCodeGen   = new JMirrorBuilder(  needsOutfileForSymbol)
+      beanInfoCodeGen = new JBeanInfoBuilder(needsOutfileForSymbol)
       // -----------------------
-      // Pipeline from q1 to q3.
+      // Pipeline from q1 to q2.
       // -----------------------
       new _root_.java.lang.Thread(new Worker1(needsOutfileForSymbol)).start()
+      // -----------------------
+      // Pipeline from q2 to q3.
+      // -----------------------
+      // val exec = _root_.java.util.concurrent.Executors.newFixedThreadPool(MAX_THREADS)
+      val workers = for(i <- 1 to MAX_THREADS) yield { val w = new Worker2; val t = new _root_.java.lang.Thread(w); t.start(); t }
+      // exec.shutdown()
       // -------------------------------------------------------------------
-      // Place all ClassDefs on q1, recording their arrival position.
-      // By so doing, this main thread becomes free for classfile writing.
-      // If not performed by this thread, the Eclipse IDE doesn't notice disk writing activity.
+      // Feed pipeline-1: place all ClassDefs on q1, recording their arrival position.
       // -------------------------------------------------------------------
       super.run()
       q1 put poison1
@@ -211,39 +287,48 @@ abstract class GenBCode extends BCodeTypes {
       // -------------------------------------------------------
       drainQ3()
       // we're done
-      assert(q1.isEmpty, "Not all ClassDefs had their class files built: " + q1.toString)
-      // assert(q2.isEmpty, "Not all classfiles were built: " + q2.toString)
-      assert(q3.isEmpty, "Not all classfiles were written to disk: " + q3.toString)
+      assert(q1.isEmpty, "Some ClassDefs remained in the first queue: "   + q1.toString)
+      assert(q2.isEmpty, "Some classfiles remained in the second queue: " + q2.toString)
+      assert(q3.isEmpty, "Some classfiles weren't written to disk: "      + q3.toString)
+      // assert(exec.isTerminated, "Some workers just keep working.")
+
+      for(t <- workers) { assert(woExited.containsKey(t.getId)) } // debug
+      assert(woExited.size == MAX_THREADS)                        // debug
+
+      // clearing maps, closing output files.
       bytecodeWriter.close()
       clearBCodeTypes()
     }
 
     private def drainQ3() {
 
-          def sendToDisk(cfr: ClassfileRepr) {
+          def sendToDisk(cfr: SubItem3) {
             if(cfr != null){
-              val ClassfileRepr(label, jclassName, jclassBytes, outF) = cfr
+              val SubItem3(label, jclassName, jclassBytes, outF) = cfr
               bytecodeWriter.writeClass(label, jclassName, jclassBytes, outF)
             }
           }
 
       var moreComing = true
+      var remainingWorkers = MAX_THREADS
       // arrivalPos whose Item3 should be serialized next
       var expected = 0
       // items to sent to disk once a previous item can be polled from queue-3
       // (ie "followers" contains items that arrived too soon).
-      val followers = new java.util.PriorityQueue[Item3]
+      val followers = new java.util.PriorityQueue[Item3](100, i3comparator)
 
       while (moreComing) {
         val incoming = q3.take
-        moreComing = (incoming.arrivalPos != Int.MaxValue)
+        if(incoming.isPoison) {
+          remainingWorkers -= 1
+          moreComing = (remainingWorkers != 0)
+        } else {
+          followers.add(incoming)
+        }
         assert(
           if(!moreComing) { q3.isEmpty && followers.isEmpty } else true,
           "These queues can be tricky sometimes."
         )
-        if(moreComing) {
-          followers.add(incoming)
-        }
         while(!followers.isEmpty && followers.peek.arrivalPos == expected) {
           val item = followers.poll
           sendToDisk(item.mirror)
