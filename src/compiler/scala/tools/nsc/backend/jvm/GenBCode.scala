@@ -16,40 +16,48 @@ import scala.tools.asm
 /**
  *  Prepare in-memory representations of classfiles using the ASM Tree API, and serialize them to disk.
  *
- *  Three pipelines are at work, each taking work items from one of three different (concurrent) queues:
+ *  Three pipelines are at work, each taking work items from one of three different queues:
  *
  *    (1) In the first queue, an item consists of a ClassDef along with its arrival position.
- *        This position is used later when serializing classfiles to disk,
- *        to send classfiles to disk in the same order as if the input had been processed sequentially.
- *        Thus, for example, two runs of the compiler on the same files produce jars that are identical on a byte basis.
+ *        This position is needed at the time classfiles are serialized to disk,
+ *        so as to emit classfiles in the same order CleanUp handed them over.
+ *        As a result, two runs of the compiler on the same files produce jars that are identical on a byte basis.
  *        See `ant test.stability`
  *
  *    (2) The second queue contains items where a ClassDef has been lowered into:
  *          (a) an optional mirror class,
- *          (b) a half-based plain class, and
+ *          (b) a half-baked plain class, and
  *          (c) an optional bean class.
  *
  *        Both the mirror and the bean classes (if any) are ready to be written to disk,
  *        but that has to wait until the plain class is turned into an ASM Tree.
  *
- *        The processing that took place between queues 1 and 2 relied on typer, and thus had to be performed by a single thread.
- *        The thread in question is different from the main thread, for reasons that will become apparent under (3) below.
+ *        Pipeline 1
+ *        ----------
+ *
+ *        The processing that takes place between queues 1 and 2 relies on typer, and thus has to be performed by a single thread.
+ *        The thread in question is different from the main thread, for reasons that will become apparent below.
  *        As long as all operations on typer are carried out under a single thread (not necessarily the main thread), everything is fine.
  *
- *        The processing descried above is what we call pipeline-1,
+ *        The processing described above is what we call pipeline-1,
  *        ie the activities carried out by the single thread in charge of moving items from queue 1 to queue 2.
  *
- *        Rather than performing all the work involved in lowering a ClassDef, "pipeline 1" focuses on operations requiring typer.
+ *        Rather than performing all the work involved in lowering a ClassDef, pipeline-1 focuses on operations requiring typer.
  *        Typer operations can't be performed by the next pipeline because that pipeline consists of parallel worker threads.
+ *
+ *        Pipeline 2
+ *        ----------
  *
  *        The operations that a worker thread of pipeline-2 can perform are those that rely only on the following abstractions:
  *          - BType:   a typer-independent representation of a JVM-level type,
  *          - Tracked: a bundle of a BType B, its superclass (as a BType), and B's interfaces (as BTypes).
+ *          - exemplars: a concurrent map to obtain the Tracked structure for a internal class name used as key.
  *          - the tree-based representation of classfiles provided by the ASM Tree API.
  *        For example, it's possible to determine whether one BType conforms to another without resorting to typer.
  *
  *        In the future, a pipeline-2 worker could also perform basic optimizations on the ASM tree before handing it over to queue-3,
- *        e.g. collapsing jump-chains, dead-code elimination, removing unused locals, etc.
+ *        e.g. collapsing jump-chains, unreachable-code elimination, and removing unused locals.
+ *        Many intra-method optimizations are amenable to this approach.
  *        See Ch. 8. "Method Analysis" in the ASM User Guide, http://download.forge.objectweb.org/asm/asm4-guide.pdf
  *
  *    (3) The third queue contains items ready for serialization.
@@ -57,9 +65,19 @@ import scala.tools.asm
  *        This pipeline consist of just the main thread, which is the thread that some tools (including the Eclipse IDE)
  *        expect to be the sole performer of file-system modifications.
  *
- *    Summing up, the three pipelines can run in parallel, thus allowing finishing faster.
- *    Only pipeline-2 uses task-parallelism itself (moreoevr, each of the N workers is limited to invoking ASM and BType operations).
- *    Pipelines 1 and 3 are sequential.
+ *    Summing up, the key facts about this phase are:
+ *
+ *      (i) The three pipelines can run in parallel, thus allowing finishing earlier.
+ *
+ *     (ii) Only pipeline-2 uses task-parallelism itself (moreover, each of the N workers is limited to invoking ASM and BType operations).
+ *
+ *    (iii) Pipelines 1 and 3 are sequential.
+ *
+ *     (iv) Queue-1 connects a single producer (BCodePhase) to a single consumer (Worker-1),
+ *          but given they run on different threads, queue-1 has to be concurrent.
+ *
+ *      (v) Queue-2 is concurrent because concurrent workers of pipeline-2 take items from it.
+ *          Simimlarly, queue-3 is concurrent (it's in fact a priority queue) because those same workers add items to it.
  *
  *
  *  @author  Miguel Garcia, http://lamp.epfl.ch/~magarcia/ScalaCompilerCornerReloaded/
@@ -97,12 +115,13 @@ abstract class GenBCode extends BCodeTypes {
     private val q2 = new _root_.java.util.concurrent.LinkedBlockingQueue[Item2]
 
     // q3
-    case class Item3(arrivalPos: Int, mirror: ClassfileRepr, plain: ClassfileRepr, bean: ClassfileRepr) extends java.lang.Comparable[Item3] {
-      override def compareTo(other: Item3): Int = {
-        arrivalPos - other.arrivalPos
+    case class Item3(arrivalPos: Int, mirror: ClassfileRepr, plain: ClassfileRepr, bean: ClassfileRepr)
+    private val i3comparator = new _root_.java.util.Comparator[Item3] {
+      override def compare(a: Item3, b: Item3) = {
+        a.arrivalPos - b.arrivalPos
       }
     }
-    private val q3 = new _root_.java.util.concurrent.PriorityBlockingQueue[Item3]
+    private val q3 = new _root_.java.util.concurrent.PriorityBlockingQueue[Item3](1000, i3comparator)
 
     /**
      *  Pipeline that takes ClassDefs from q1, prepares their classfile representation, placing those classfiles in q3
@@ -208,27 +227,25 @@ abstract class GenBCode extends BCodeTypes {
             }
           }
 
-      var stop = false
+      var moreComing = true
+      // arrivalPos whose Item3 should be serialized next
       var expected = 0
-      while (!stop) {
-        var incoming: Int = -1
-        var canQuit = false
-        do {
-          while(q3.peek == null) {
-            _root_.java.lang.Thread.sleep(10)
-          }
-          incoming = q3.peek.arrivalPos
-          assert(expected <= incoming, "Head of queue is less than what we're waiting for, what's going on?")
-          stop        = (incoming == Int.MaxValue)
-          val isMatch = (incoming == expected)
-          canQuit     = (stop || isMatch)
-          if(!canQuit) {
-            _root_.java.lang.Thread.sleep(10)
-          }
-        } while(!canQuit)
-        val item = q3.poll
-        if(!stop) {
-          assert(item.arrivalPos == expected, "GenBCode's queue 3 doesn't deliver items in the expected order.")
+      // items to sent to disk once a previous item can be polled from queue-3
+      // (ie "followers" contains items that arrived too soon).
+      val followers = new java.util.PriorityQueue[Item3]
+
+      while (moreComing) {
+        val incoming = q3.take
+        moreComing = (incoming.arrivalPos != Int.MaxValue)
+        assert(
+          if(!moreComing) { q3.isEmpty && followers.isEmpty } else true,
+          "These queues can be tricky sometimes."
+        )
+        if(moreComing) {
+          followers.add(incoming)
+        }
+        while(!followers.isEmpty && followers.peek.arrivalPos == expected) {
+          val item = followers.poll
           sendToDisk(item.mirror)
           sendToDisk(item.plain); assert(item.plain != null, "One plain class per Item3, that's the rule.")
           sendToDisk(item.bean)

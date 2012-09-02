@@ -138,6 +138,11 @@ trait Names extends api.Names with LowPriorityNames {
   def nameChars: Array[Char] = chrs
   @deprecated("", "2.9.0") def view(s: String): TermName = newTermName(s)
 
+  /**
+   *  Used only by the GenBCode backend (in particular, by CClassWriter).
+   *
+   *  @can-multi-thread
+   */
   def lookupTypeName(cs: Array[Char]): TypeName = {
 
     val hterm = hashValue(cs, 0, cs.size) & HASH_MASK

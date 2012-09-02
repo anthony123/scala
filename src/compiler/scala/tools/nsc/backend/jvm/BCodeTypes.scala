@@ -282,19 +282,20 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
      **/
     def toASMType: scala.tools.asm.Type = {
       import scala.tools.asm
+      // TODO using `asm.Type.SHORT` instead of `BType.SHORT` because otherwise "warning: could not emit switch for @switch annotated match"
       (sort: @switch) match {
-        case BType.VOID    => asm.Type.VOID_TYPE
-        case BType.BOOLEAN => asm.Type.BOOLEAN_TYPE
-        case BType.CHAR    => asm.Type.CHAR_TYPE
-        case BType.BYTE    => asm.Type.BYTE_TYPE
-        case BType.SHORT   => asm.Type.SHORT_TYPE
-        case BType.INT     => asm.Type.INT_TYPE
-        case BType.FLOAT   => asm.Type.FLOAT_TYPE
-        case BType.LONG    => asm.Type.LONG_TYPE
-        case BType.DOUBLE  => asm.Type.DOUBLE_TYPE
-        case BType.ARRAY   |
-             BType.OBJECT  => asm.Type.getObjectType(getInternalName)
-        case BType.METHOD  => asm.Type.getMethodType(getDescriptor)
+        case asm.Type.VOID    => asm.Type.VOID_TYPE
+        case asm.Type.BOOLEAN => asm.Type.BOOLEAN_TYPE
+        case asm.Type.CHAR    => asm.Type.CHAR_TYPE
+        case asm.Type.BYTE    => asm.Type.BYTE_TYPE
+        case asm.Type.SHORT   => asm.Type.SHORT_TYPE
+        case asm.Type.INT     => asm.Type.INT_TYPE
+        case asm.Type.FLOAT   => asm.Type.FLOAT_TYPE
+        case asm.Type.LONG    => asm.Type.LONG_TYPE
+        case asm.Type.DOUBLE  => asm.Type.DOUBLE_TYPE
+        case asm.Type.ARRAY   |
+             asm.Type.OBJECT  => asm.Type.getObjectType(getInternalName)
+        case asm.Type.METHOD  => asm.Type.getMethodType(getDescriptor)
       }
     }
 
@@ -837,8 +838,8 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
   // allowing answering `conforms()` resorting to typer.
   // ------------------------------------------------
 
-  val exemplars    = mutable.Map.empty[BType,  Tracked]
-  val symExemplars = mutable.Map.empty[Symbol, Tracked]
+  val exemplars    = new java.util.concurrent.ConcurrentHashMap[BType,  Tracked]
+  val symExemplars = new java.util.concurrent.ConcurrentHashMap[Symbol, Tracked]
 
   /**
    *  All methods of this class @can-multi-thread
@@ -879,7 +880,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
       if(c == other) return true;
 
-      val otherIsIface = exemplars(other).isInterface
+      val otherIsIface = exemplars.get(other).isInterface
 
       if(this.isInterface) {
         if(other == ObjectReference) return true;
@@ -971,22 +972,20 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     assert(!phantomTypeMap.contains(csym),   "phantom types not tracked here: " + csym.fullName)
 
     val opt = symExemplars.get(csym)
-    if(opt.isDefined) {
-      return opt.get
+    if(opt != null) {
+      return opt
     }
 
     val key = brefType(csym.javaBinaryName.toTypeName)
     assert(key.isNonSpecial || isCompilingStdLib, "Not a class to track: " + csym.fullName)
 
-    exemplars.get(key) match {
-      case Some(tr) =>
-        abort("Maps `symExemplars` and `exemplars` got out of synch.")
-      case _ =>
-        val tr = buildExemplar(key, csym)
-        symExemplars.put(csym, tr)
-        exemplars.put(tr.c, tr) // tr.c is the hash-consed, internalized, canonical representative for csym's key.
-        tr
+    if(exemplars.containsKey(key)) {
+      abort("Maps `symExemplars` and `exemplars` got out of synch.")
     }
+    val tr = buildExemplar(key, csym)
+    symExemplars.put(csym, tr)
+    exemplars.put(tr.c, tr) // tr.c is the hash-consed, internalized, canonical representative for csym's key.
+    tr
   }
 
   val EMPTY_TRACKED_ARRAY  = Array.empty[Tracked]
@@ -1129,7 +1128,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       if(b.isBoxed)                 { a == b }
       else if(b == AnyRefReference) { true  }
       else if(!(b.hasObjectSort))   { false }
-      else                          { exemplars(a).isSubtypeOf(b) } // e.g., java/lang/Double conforms to java/lang/Number
+      else                          { exemplars.get(a).isSubtypeOf(b) } // e.g., java/lang/Double conforms to java/lang/Number
     }
     else if(a.isNullType) { // known to be null
       if(b.isNothingType)      { false }
@@ -1144,7 +1143,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     }
     else if(a.hasObjectSort) { // may be null
       if(a.isNothingType)      { true  }
-      else if(b.hasObjectSort) { exemplars(a).isSubtypeOf(b) }
+      else if(b.hasObjectSort) { exemplars.get(a).isSubtypeOf(b) }
       else if(b.isArray)       { a.isNullType } // documentation only, because `if(a.isNullType)` (above) covers this case already.
       else                     { false }
     }
@@ -1449,7 +1448,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       // We're done with BOOL already
       (from.sort: @switch) match {
 
-        // for example, `asm.Type.SHORT` instead of `BType.SHORT` because otherwise "warning: could not emit switch for @switch annotated match"
+        // TODO using `asm.Type.SHORT` instead of `BType.SHORT` because otherwise "warning: could not emit switch for @switch annotated match"
 
         case asm.Type.BYTE  => pickOne(JCodeMethodN.fromByteT2T)
         case asm.Type.SHORT => pickOne(JCodeMethodN.fromShortT2T)
@@ -1540,7 +1539,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
         jmethod.visitTypeInsn(Opcodes.ANEWARRAY, elem.getInternalName)
       } else {
         val rand = {
-          // for example, `asm.Type.SHORT` instead of `BType.SHORT` because otherwise "warning: could not emit switch for @switch annotated match"
+          // TODO using `asm.Type.SHORT` instead of `BType.SHORT` because otherwise "warning: could not emit switch for @switch annotated match"
           (elem.sort: @switch) match { // TODO use BType.getOpcode instead
             case asm.Type.BOOLEAN => Opcodes.T_BOOLEAN
             case asm.Type.BYTE    => Opcodes.T_BYTE
@@ -1725,7 +1724,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
      // @can-multi-thread
     final def emitPrimitive(opcs: Array[Int], tk: BType) {
       val opc = {
-        // for example, `asm.Type.SHORT` instead of `BType.SHORT` because otherwise "warning: could not emit switch for @switch annotated match"
+        // TODO using `asm.Type.SHORT` instead of `BType.SHORT` because otherwise "warning: could not emit switch for @switch annotated match"
         (tk.sort: @switch) match {
           case asm.Type.LONG   => opcs(1)
           case asm.Type.FLOAT  => opcs(2)
@@ -2135,8 +2134,8 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       assert(a.isNonSpecial, "jvmWiseLUB() received a non-plain-class " + a)
       assert(b.isNonSpecial, "jvmWiseLUB() received a non-plain-class " + b)
 
-      val ta = exemplars(a)
-      val tb = exemplars(b)
+      val ta = exemplars.get(a)
+      val tb = exemplars.get(b)
 
       val res = Pair(ta.isInterface, tb.isInterface) match {
         case (true, true) =>
