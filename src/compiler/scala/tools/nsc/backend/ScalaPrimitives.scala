@@ -453,6 +453,10 @@ abstract class ScalaPrimitives {
         else code)
   }
 
+  /**
+   *  @can-multi-thread
+   *
+   **/
   def isCoercion(code: Int): Boolean = (code >= B2B) && (code <= D2D)
 
   final val typeOfArrayOp: Map[Int, TypeKind] = Map(
@@ -467,10 +471,18 @@ abstract class ScalaPrimitives {
     (List(OARRAY_LENGTH, OARRAY_GET, OARRAY_SET) map (_ -> REFERENCE(AnyRefClass))) : _*
   )
 
-  /** Check whether the given operation code is an array operation. */
+  /** Check whether the given operation code is an array operation.
+   *
+   *  @can-multi-thread
+   *
+   **/
   def isArrayOp(code: Int): Boolean =
     isArrayNew(code) | isArrayLength(code) | isArrayGet(code) | isArraySet(code)
 
+  /**
+   *  @can-multi-thread
+   *
+   **/
   def isArrayNew(code: Int): Boolean = code match {
     case NEW_ZARRAY | NEW_BARRAY | NEW_SARRAY | NEW_CARRAY |
          NEW_IARRAY | NEW_LARRAY | NEW_FARRAY | NEW_DARRAY |
@@ -478,6 +490,10 @@ abstract class ScalaPrimitives {
     case _ => false
   }
 
+  /**
+   *  @can-multi-thread
+   *
+   **/
   def isArrayLength(code: Int): Boolean = code match {
     case ZARRAY_LENGTH | BARRAY_LENGTH | SARRAY_LENGTH | CARRAY_LENGTH |
          IARRAY_LENGTH | LARRAY_LENGTH | FARRAY_LENGTH | DARRAY_LENGTH |
@@ -485,6 +501,10 @@ abstract class ScalaPrimitives {
     case _ => false
   }
 
+  /**
+   *  @can-multi-thread
+   *
+   **/
   def isArrayGet(code: Int): Boolean = code match {
     case ZARRAY_GET | BARRAY_GET | SARRAY_GET | CARRAY_GET |
          IARRAY_GET | LARRAY_GET | FARRAY_GET | DARRAY_GET |
@@ -492,6 +512,10 @@ abstract class ScalaPrimitives {
     case _ => false
   }
 
+  /**
+   *  @can-multi-thread
+   *
+   **/
   def isArraySet(code: Int): Boolean = code match {
     case ZARRAY_SET | BARRAY_SET | SARRAY_SET | CARRAY_SET |
          IARRAY_SET | LARRAY_SET | FARRAY_SET | DARRAY_SET |
@@ -499,7 +523,11 @@ abstract class ScalaPrimitives {
     case _ => false;
   }
 
-  /** Check whether the given code is a comparison operator */
+  /** Check whether the given code is a comparison operator
+   *
+   *  @can-multi-thread
+   *
+   **/
   def isComparisonOp(code: Int): Boolean = code match {
     case ID | NI | EQ | NE |
          LT | LE | GT | GE => true
@@ -509,6 +537,10 @@ abstract class ScalaPrimitives {
   def isUniversalEqualityOp(code: Int): Boolean = (code == EQ) || (code == NE)
   def isReferenceEqualityOp(code: Int): Boolean = (code == ID) || (code == NI)
 
+  /**
+   *  @can-multi-thread
+   *
+   **/
   def isArithmeticOp(code: Int): Boolean = code match {
     case POS | NEG | NOT => true; // unary
     case ADD | SUB | MUL |
@@ -518,6 +550,10 @@ abstract class ScalaPrimitives {
     case _ => false;
   }
 
+  /**
+   *  @can-multi-thread
+   *
+   **/
   def isLogicalOp(code: Int): Boolean = code match {
     case ZNOT | ZAND | ZOR => true
     case _ => false

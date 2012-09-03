@@ -995,9 +995,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     val key = brefType(csym.javaBinaryName.toTypeName)
     assert(key.isNonSpecial || isCompilingStdLib, "Not a class to track: " + csym.fullName)
 
-    if(exemplars.containsKey(key)) {
-      abort("Maps `symExemplars` and `exemplars` got out of synch.")
-    }
+    assert(!exemplars.containsKey(key), "Maps `symExemplars` and `exemplars` got out of synch.")
     val tr = buildExemplar(key, csym)
     symExemplars.put(csym, tr)
     exemplars.put(tr.c, tr) // tr.c is the hash-consed, internalized, canonical representative for csym's key.
@@ -1839,6 +1837,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     }
   }
 
+  // TODO make concurrent (less desirable: Worker2-owned). With that change, @can-multi-thread.
   final val typeOfArrayOp: Map[Int, BType] = {
     import scalaPrimitives._
     Map(

@@ -311,10 +311,9 @@ abstract class GenBCode extends BCodeTypes {
 
       var moreComing = true
       var remainingWorkers = MAX_THREADS
-      // arrivalPos whose Item3 should be serialized next
+      // `expected` denotes the arrivalPos whose Item3 should be serialized next
       var expected = 0
-      // items to sent to disk once a previous item can be polled from queue-3
-      // (ie "followers" contains items that arrived too soon).
+      // `followers` contains items that arrived too soon, they're parked here waiting for `expected` to be polled from queue-3
       val followers = new java.util.PriorityQueue[Item3](100, i3comparator)
 
       while (moreComing) {
@@ -1281,7 +1280,8 @@ abstract class GenBCode extends BCodeTypes {
           genSynchronized(tree, expectedType)
         else if (scalaPrimitives.isCoercion(code)) {
           genLoad(receiver, toTypeKind(receiver.tpe))
-          genCoercion(tree, code)
+          lineNumber(tree)
+          genCoercion(code)
           coercionTo(code)
         }
         else abort(
@@ -1624,7 +1624,7 @@ abstract class GenBCode extends BCodeTypes {
                 }
 
               case rt if generatedType.hasObjectSort =>
-                // TODO RE-ENABLE assert(ctor.owner == classSymbol(rt), "Symbol " + ctor.owner.fullName + " is different than " + tpt)
+                assert(exemplar(ctor.owner).c == rt, "Symbol " + ctor.owner.fullName + " is different from " + rt)
                 mnode.visitTypeInsn(asm.Opcodes.NEW, rt.getInternalName)
                 bc dup generatedType
                 genLoadArguments(args, ctor.info.paramTypes map toTypeKind)
@@ -1976,9 +1976,12 @@ abstract class GenBCode extends BCodeTypes {
       /** Is the given symbol a primitive operation? */
       def isPrimitive(fun: Symbol): Boolean = scalaPrimitives.isPrimitive(fun)
 
-      /** Generate coercion denoted by "code" */
-      def genCoercion(tree: Tree, code: Int) = {
-        lineNumber(tree)
+      /** Generate coercion denoted by "code"
+       *
+       *  @can-multi-thread
+       *
+       **/
+      def genCoercion(code: Int) = {
         import scalaPrimitives._
         (code: @switch) match {
           case B2B | S2S | C2C | I2I | L2L | F2F | D2D => ()
@@ -2109,7 +2112,11 @@ abstract class GenBCode extends BCodeTypes {
           List(tree)
       }
 
-      /** Some useful equality helpers. */
+      /** Some useful equality helpers.
+       *
+       *  @can-multi-thread
+       *
+       **/
       def isNull(t: Tree) = {
         t match {
           case Literal(Constant(null)) => true
