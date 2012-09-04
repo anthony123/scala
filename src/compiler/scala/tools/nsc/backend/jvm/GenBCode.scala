@@ -16,7 +16,10 @@ import scala.tools.asm
 /**
  *  Prepare in-memory representations of classfiles using the ASM Tree API, and serialize them to disk.
  *
- *  Three pipelines are at work, each taking work items from one of three different queues:
+ *  Three pipelines are at work, each taking work items from a queue dedicated to that pipeline:
+ *
+ *  (There's another pipeline so to speak, the one that populates queue-1 by traversing a CompilationUnit until ClassDefs are found,
+ *   but the "interesting" pipelines are the ones described below)
  *
  *    (1) In the first queue, an item consists of a ClassDef along with its arrival position.
  *        This position is needed at the time classfiles are serialized to disk,
@@ -42,23 +45,31 @@ import scala.tools.asm
  *        Rather than performing all the work involved in lowering a ClassDef,
  *        pipeline-1 leaves in general for later those operations that don't require typer.
  *        All the @can-multi-thread operations that pipeline-2 performs can also run during pipeline-1, in fact some of them do.
- *        In contrast, typer operations can't be performed by pipeline-2, which consists of MAX_THREADS worker threads running concurrently.
+ *        In contrast, typer operations can't be performed by pipeline-2.
+ *        pipeline-2  consists of MAX_THREADS worker threads running concurrently.
  *
  *        Pipeline 2
  *        ----------
  *
  *        The operations that a worker thread of pipeline-2 can perform are those that rely only on the following abstractions:
- *          - BType:   a typer-independent representation of a JVM-level type,
- *          - Tracked: a bundle of a BType B, its superclass (as a BType), and B's interfaces (as BTypes).
- *          - exemplars: a concurrent map to obtain the Tracked structure for a internal class name used as key.
+ *          - BType:     a typer-independent representation of a JVM-level type,
+ *          - Tracked:   a bundle of a BType B, its superclass (as a BType), and B's interfaces (as BTypes).
+ *          - exemplars: a concurrent map to obtain the Tracked structure using internal class names as keys.
  *          - the tree-based representation of classfiles provided by the ASM Tree API.
  *        For example:
- *          - it's possible to determine whether one BType conforms to another without resorting to typer.
- *          - `CClassWriter.getCommonSuperclass()` (as a result of invoking `MethodNode.visitMaxs()` is also thread-reentrant.
+ *          - it's possible to determine whether a BType conforms to another without resorting to typer.
+ *          - `CClassWriter.getCommonSuperclass()` is thread-reentrant (therefore, it accesses only thread-reentrant functionality).
+ *             This comes handy because in pipelin-2, `MethodNode.visitMaxs()` invokes `getCommonSuperclass()` on different method nodes,
+ *             and each of these activations accesses typer-independent structures (exemplars, Tracked) to compute its answer.
  *
- *        In the future, a pipeline-2 worker could also perform basic optimizations on the ASM tree before handing it over to queue-3,
- *        e.g. collapsing jump-chains, unreachable-code elimination, and removing unused locals.
- *        Many intra-method optimizations are amenable to this approach.
+ *        In the future, a pipeline-2 worker could also perform basic optimizations on the ASM tree before handing it over to queue-3, including:
+ *          - collapsing jump-chains,
+ *          - constant propagation,
+ *          - arith and logical ops reductions,
+ *          - pattern-based simplification aka peephole optimization,
+ *          - eliminating unreachable-code, and
+ *          - removing unused locals.
+ *        More complext intra-method optimizations could also be performed at this stage.
  *        See Ch. 8. "Method Analysis" in the ASM User Guide, http://download.forge.objectweb.org/asm/asm4-guide.pdf
  *
  *    (3) The third queue contains items ready for serialization.
@@ -74,17 +85,20 @@ import scala.tools.asm
  *
  *    Summing up, the key facts about this phase are:
  *
- *      (i) The three pipelines can run in parallel, thus allowing finishing earlier.
+ *      (i) The three pipelines run in parallel, thus allowing finishing earlier.
  *
- *     (ii) Only pipeline-2 uses task-parallelism itself (moreover, each of the N workers is limited to invoking ASM and BType operations).
+ *     (ii) Pipelines 1 and 3 are sequential.
+ *          In contrast, pipeline-2 uses task-parallelism (where each of the N workers is limited to invoking ASM and BType operations).
  *
- *    (iii) Pipelines 1 and 3 are sequential.
+ *          All three queues are concurrent:
  *
- *     (iv) Queue-1 connects a single producer (BCodePhase) to a single consumer (Worker-1),
+ *    (iii) Queue-1 connects a single producer (BCodePhase) to a single consumer (Worker-1),
  *          but given they run on different threads, queue-1 has to be concurrent.
  *
- *      (v) Queue-2 is concurrent because several concurrent workers of pipeline-2 take items from it.
- *          Simimlarly, queue-3 is concurrent (it's in fact a priority queue) because those same concurrent workers add items to it.
+ *     (iv) Queue-2 is concurrent because the several concurrent workers of pipeline-2 take items from it.
+ *
+ *      (v) Queue-3 is concurrent (it's in fact a priority queue) because those same concurrent workers add items to it.
+ *
  *
  *
  *  @author  Miguel Garcia, http://lamp.epfl.ch/~magarcia/ScalaCompilerCornerReloaded/
@@ -274,9 +288,7 @@ abstract class GenBCode extends BCodeTypes {
       // -----------------------
       // Pipeline from q2 to q3.
       // -----------------------
-      // val exec = _root_.java.util.concurrent.Executors.newFixedThreadPool(MAX_THREADS)
       val workers = for(i <- 1 to MAX_THREADS) yield { val w = new Worker2; val t = new _root_.java.lang.Thread(w); t.start(); t }
-      // exec.shutdown()
       // -------------------------------------------------------------------
       // Feed pipeline-1: place all ClassDefs on q1, recording their arrival position.
       // -------------------------------------------------------------------
@@ -1611,16 +1623,23 @@ abstract class GenBCode extends BCodeTypes {
                 genLoadArguments(args, ctor.info.paramTypes map toTypeKind)
                 val dims = arr.getDimensions
                 var elemKind = arr.getElementType
-                if (args.length > dims) {
+                val argsSize = args.length
+                if (argsSize > dims) {
                   cunit.error(tree.pos, "too many arguments for array constructor: found " + args.length +
                                         " but array has only " + dims + " dimension(s)")
                 }
-                if (args.length != dims) {
-                  for (i <- args.length until dims) elemKind = arrayOf(elemKind)
+                if (argsSize < dims) {
+                  /* The BType instantiation below denote the same type as
+                   *    for (i <- args.length until dims) elemKind = arrayOf(elemKind)
+                   * with the advantage of not requiring `arrayOf()`, a must-single-thread operation.
+                   */
+                  elemKind = new BType(BType.ARRAY, arr.off + argsSize, arr.len - argsSize)
                 }
-                args.length match {
-                  case 1          => bc newarray elemKind
-                  case dimensions => mnode.visitMultiANewArrayInsn(arrayN(elemKind, dimensions).getDescriptor, dimensions)
+                (argsSize : @switch) match {
+                  case 1 => bc newarray elemKind
+                  case _ =>
+                    val descr = ('[' * argsSize) + elemKind.getDescriptor // denotes the same as: arrayN(elemKind, argsSize).getDescriptor
+                    mnode.visitMultiANewArrayInsn(descr, argsSize)
                 }
 
               case rt if generatedType.hasObjectSort =>
@@ -1902,8 +1921,8 @@ abstract class GenBCode extends BCodeTypes {
 
         val aps = ((args zip params) filterNot isTrivial)
 
-        // first push *all* arguments. This makes sure any labelDef-var will use the previous value.
-        aps foreach { case (arg, param) => genLoad(arg, locals(param).tk) } // locals.contains(param) because genDefDef visited labelDefsAtOrUnder
+        // first push *all* arguments. This makes sure muliple uses of the same labelDef-var will all denote the (previous) value.
+        aps foreach { case (arg, param) => genLoad(arg, locals(param).tk) } // `locals` is known to contain `param` because `genDefDef()` visited `labelDefsAtOrUnder`
 
         // second assign one by one to the LabelDef's variables.
         aps.reverse foreach {
@@ -2327,10 +2346,7 @@ abstract class GenBCode extends BCodeTypes {
       }
 
       /** Does this tree have a try-catch block? */
-      def mayCleanStack(tree: Tree): Boolean = tree exists {
-        case Try(_, _, _) => true
-        case _            => false
-      }
+      def mayCleanStack(tree: Tree): Boolean = tree exists { t => t.isInstanceOf[Try] }
 
       /** @can-multi-thread **/
       def getMaxType(ts: List[Type]): BType = {

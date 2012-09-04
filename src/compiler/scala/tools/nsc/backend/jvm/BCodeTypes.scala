@@ -955,7 +955,11 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       }
 
     val superInterfaces0: List[Symbol] = csym.mixinClasses
-    val superInterfaces:  List[Symbol] = superInterfaces0 ++ csym.annotations.flatMap(ann => newParentForAttr(ann.symbol)) distinct;
+    val superInterfaces:  List[Symbol] = {
+      val sups = (superInterfaces0 ++ csym.annotations.flatMap(ann => newParentForAttr(ann.symbol)))
+
+      sups.distinct
+    };
 
     assert(!superInterfaces.contains(NoSymbol), "found NoSymbol among: " + superInterfaces.mkString)
     assert(superInterfaces.forall(s => s.isInterface || s.isTrait), "found non-interface among: " + superInterfaces.mkString)
