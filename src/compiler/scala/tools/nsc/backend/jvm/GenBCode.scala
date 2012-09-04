@@ -62,14 +62,14 @@ import scala.tools.asm
  *             This comes handy because in pipelin-2, `MethodNode.visitMaxs()` invokes `getCommonSuperclass()` on different method nodes,
  *             and each of these activations accesses typer-independent structures (exemplars, Tracked) to compute its answer.
  *
- *        In the future, a pipeline-2 worker could also perform basic optimizations on the ASM tree before handing it over to queue-3, including:
+ *        In the future, a pipeline-2 worker could also perform intra-method optimizations on the ASM tree
+ *        before handing it over to queue-3, including:
  *          - collapsing jump-chains,
  *          - constant propagation,
  *          - arith and logical ops reductions,
  *          - pattern-based simplification aka peephole optimization,
  *          - eliminating unreachable-code, and
  *          - removing unused locals.
- *        More complext intra-method optimizations could also be performed at this stage.
  *        See Ch. 8. "Method Analysis" in the ASM User Guide, http://download.forge.objectweb.org/asm/asm4-guide.pdf
  *
  *    (3) The third queue contains items ready for serialization.
@@ -423,18 +423,18 @@ abstract class GenBCode extends BCodeTypes {
       def makeLocal(sym: Symbol, tk: BType): Local = {
         assert(!locals.contains(sym), "attempt to create duplicate local var.")
         assert(nxtIdx != -1, "not a valid start index")
-        val loc = Local(tk, sym.javaSimpleName.toString, nxtIdx)
+        val loc = Local(tk, sym.javaSimpleName.toString, nxtIdx, sym.isSynthetic)
         locals += (sym -> loc)
         assert(tk.getSize > 0, "makeLocal called for a symbol whose type is Unit.")
         nxtIdx += tk.getSize
         loc
       }
       def store(locSym: Symbol) {
-        val Local(tk, _, idx) = locals(locSym)
+        val Local(tk, _, idx, _) = locals(locSym)
         bc.store(idx, tk)
       }
       def load(locSym: Symbol) {
-        val Local(tk, _, idx) = locals(locSym)
+        val Local(tk, _, idx, _) = locals(locSym)
         bc.load(idx, tk)
       }
 
@@ -836,8 +836,8 @@ abstract class GenBCode extends BCodeTypes {
       }
 
       private def emitLocalVarScope(sym: Symbol, start: asm.Label, end: asm.Label, force: Boolean = false) {
-        if(force || !sym.isSynthetic /* TODO HIDDEN */ ) {
-          val Local(tk, name, idx) = locals(sym)
+        val Local(tk, name, idx, isSynth) = locals(sym)
+        if(force || !isSynth) {
           mnode.visitLocalVariable(name, tk.getDescriptor, null, start, end, idx)
         }
       }
@@ -859,7 +859,7 @@ abstract class GenBCode extends BCodeTypes {
 
           case Assign(lhs, rhs) =>
             val s = lhs.symbol
-            val Local(tk, _, idx) = locals.getOrElse(s, makeLocal(s, toTypeKind(s.info)))
+            val Local(tk, _, idx, _) = locals.getOrElse(s, makeLocal(s, toTypeKind(s.info)))
             genLoad(rhs, tk)
             lineNumber(tree)
             bc.store(idx, tk)
@@ -1151,7 +1151,7 @@ abstract class GenBCode extends BCodeTypes {
             case BoundEH   (patSymbol,      caseBody) =>
               // test/files/run/contrib674.scala , a local-var already exists for patSymbol.
               // rather than creating on first-access, we do it right away to emit debug-info for the created local var.
-              val Local(patTK, _, patIdx) = locals.getOrElse(patSymbol, makeLocal(patSymbol, toTypeKind(patSymbol.info)))
+              val Local(patTK, _, patIdx, _) = locals.getOrElse(patSymbol, makeLocal(patSymbol, toTypeKind(patSymbol.info)))
               bc.store(patIdx, patTK)
               genLoad(caseBody, kind)
               nopIfNeeded(startHandler)
@@ -1179,7 +1179,7 @@ abstract class GenBCode extends BCodeTypes {
           nopIfNeeded(startTryBody)
           val finalHandler = currProgramPoint() // version of the finally-clause reached via unhandled exception.
           protect(startTryBody, finalHandler, finalHandler, null)
-          val Local(eTK, _, eIdx) = locals(makeLocal(ThrowableReference, "exc"))
+          val Local(eTK, _, eIdx, _) = locals(makeLocal(ThrowableReference, "exc"))
           bc.store(eIdx, eTK)
           emitFinalizer(finalizer, null, true)
           bc.load(eIdx, eTK)
@@ -1318,11 +1318,11 @@ abstract class GenBCode extends BCodeTypes {
             val sym = tree.symbol
             /* most of the time, !locals.contains(sym), unless the current activation of genLoad() is being called
                while duplicating a finalizer that contains this ValDef. */
-            val Local(tk, _, idx) = locals.getOrElseUpdate(sym, makeLocal(sym, toTypeKind(sym.info)))
+            val Local(tk, _, idx, isSynth) = locals.getOrElseUpdate(sym, makeLocal(sym, toTypeKind(sym.info)))
             if (rhs == EmptyTree) { genConstant(getZeroOf(tk)) }
             else { genLoad(rhs, tk) }
             bc.store(idx, tk)
-            if(!sym.isSynthetic) { // there are case <synthetic> ValDef's emitted by patmat
+            if(!isSynth) { // there are case <synthetic> ValDef's emitted by patmat
               varsInScope += (sym -> currProgramPoint())
             }
             generatedType = UNIT
@@ -2360,7 +2360,7 @@ abstract class GenBCode extends BCodeTypes {
       case class MonitorRelease(v: Symbol) extends Cleanup(v) { }
       case class Finalizer(f: Tree) extends Cleanup (f) { }
 
-      case class Local(tk: BType, name: String, idx: Int)
+      case class Local(tk: BType, name: String, idx: Int, isSynth: Boolean)
 
       trait EHClause
       case class NamelessEH(typeToDrop: BType,  caseBody: Tree) extends EHClause
