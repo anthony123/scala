@@ -1430,13 +1430,13 @@ abstract class GenBCode extends BCodeTypes {
       /**
        * @must-single-thread
        **/
-      final def fieldLoad( field: Symbol, hostClass: Symbol = null) { // TODO GenASM could use this method
+      final def fieldLoad( field: Symbol, hostClass: Symbol = null) {
         fieldOp(field, isLoad = true,  hostClass)
       }
       /**
        * @must-single-thread
        **/
-      final def fieldStore(field: Symbol, hostClass: Symbol = null) { // TODO GenASM could use this method
+      final def fieldStore(field: Symbol, hostClass: Symbol = null) {
         fieldOp(field, isLoad = false, hostClass)
       }
 
@@ -1512,7 +1512,7 @@ abstract class GenBCode extends BCodeTypes {
       }
 
       private def genLabelDef(lblDf: LabelDef, expectedType: BType) {
-        // duplication of `finally`-contained LabelDefs is handled when emitting a RET. No bookkeeping for that required here.
+        // duplication of LabelDefs contained in `finally`-clauses is handled when emitting RETURN. No bookkeeping for that required here.
         // no need to call index() over lblDf.params, on first access that magic happens (moreover, no LocalVariableTable entries needed for them).
         markProgramPoint(programPoint(lblDf.symbol))
         lineNumber(lblDf)
@@ -1784,22 +1784,23 @@ abstract class GenBCode extends BCodeTypes {
       } // end of GenBCode's genApply()
 
       private def genArrayValue(av: ArrayValue): BType = {
-        val ArrayValue(tpt @ TypeTree(), elems0) = av
+        val ArrayValue(tpt @ TypeTree(), elems) = av
 
         val elmKind       = toTypeKind(tpt.tpe)
         var generatedType = arrayOf(elmKind)
-        val elems         = elems0.toIndexedSeq
 
         lineNumber(av)
         bc iconst   elems.length
         bc newarray elmKind
 
         var i = 0
-        while (i < elems.length) {
+        var rest = elems
+        while (!rest.isEmpty) {
           bc dup     generatedType
           bc iconst  i
-          genLoad(elems(i), elmKind)
+          genLoad(rest.head, elmKind)
           bc astore  elmKind
+          rest = rest.tail
           i = i + 1
         }
 
