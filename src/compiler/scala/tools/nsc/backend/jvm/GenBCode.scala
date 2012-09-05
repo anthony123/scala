@@ -1649,7 +1649,7 @@ abstract class GenBCode extends BCodeTypes {
             // if (fun.symbol.isConstructor) Static(true) else SuperCall(mix);
             mnode.visitVarInsn(asm.Opcodes.ALOAD, 0)
             genLoadArguments(args, paramTKs(app))
-            genCallMethod(fun.symbol, invokeStyle)
+            emit(genCallMethod(fun.symbol, invokeStyle))
             generatedType = symInfoResultTK(fun.symbol) // originally `if (fun.symbol.isConstructor) ...` ie originall isClassConstructor was ignored (unlike what symInfoResultTK does)
 
           // 'new' constructor call: Note: since constructors are
@@ -1692,7 +1692,7 @@ abstract class GenBCode extends BCodeTypes {
                 mnode.visitTypeInsn(asm.Opcodes.NEW, rt.getInternalName)
                 bc dup generatedType
                 genLoadArguments(args, paramTKs(app))
-                genCallMethod(ctor, Static(true))
+                emit(genCallMethod(ctor, Static(true)))
 
               case _ =>
                 abort("Cannot instantiate " + tpt + " of kind: " + generatedType)
@@ -1814,7 +1814,7 @@ abstract class GenBCode extends BCodeTypes {
                 bc.invokevirtual(target, "clone", mdesc_arrayClone)
               }
               else {
-                genCallMethod(sym, invokeStyle, hostClass)
+                emit(genCallMethod(sym, invokeStyle, hostClass))
               }
 
               // TODO if (sym == ctx1.method.symbol) { ctx1.method.recursive = true }
@@ -2070,7 +2070,7 @@ abstract class GenBCode extends BCodeTypes {
           // Optimization for expressions of the form "" + x.  We can avoid the StringBuilder.
           case List(Literal(Constant("")), arg) =>
             genLoad(arg, ObjectReference)
-            genCallMethod(String_valueOf, Static(false))
+            emit(genCallMethod(String_valueOf, Static(false)))
 
           case concatenations =>
             bc.genStartConcat
@@ -2086,7 +2086,7 @@ abstract class GenBCode extends BCodeTypes {
         StringReference
       }
 
-      def genCallMethod(method: Symbol, style: InvokeStyle, hostClass0: Symbol = null) {
+      def genCallMethod(method: Symbol, style: InvokeStyle, hostClass0: Symbol = null): List[asm.tree.AbstractInsnNode] = {
 
         val siteSymbol = claszSymbol
         val hostSymbol = if(hostClass0 == null) method.owner else hostClass0;
@@ -2122,32 +2122,40 @@ abstract class GenBCode extends BCodeTypes {
               debuglog("%s %s %s.%s:%s".format(invoke, receiver.accessString, jowner, jname, jtype))
             }
 
-            def initModule() {
+            def initModule(): List[asm.tree.AbstractInsnNode] = {
               // we initialize the MODULE$ field immediately after the super ctor
               if (isStaticModule(siteSymbol) && !isModuleInitialized &&
                   jMethodName == INSTANCE_CONSTRUCTOR_NAME &&
                   jname == INSTANCE_CONSTRUCTOR_NAME) {
                 isModuleInitialized = true
-                mnode.visitVarInsn(asm.Opcodes.ALOAD, 0)
-                mnode.visitFieldInsn(
+
+                val initI0 = new asm.tree.VarInsnNode(asm.Opcodes.ALOAD, 0)
+
+                val initI1 = new asm.tree.FieldInsnNode(
                   asm.Opcodes.PUTSTATIC,
                   thisName,
                   strMODULE_INSTANCE_FIELD,
                   "L" + thisName + ";"
                 )
-              }
+
+                initI0 :: initI1 :: Nil
+              } else Nil
             }
 
+        var result: List[asm.tree.AbstractInsnNode] = Nil
+
         style match {
-          case Static(true)                         => dbg("invokespecial");  bc.invokespecial  (jowner, jname, jtype)
-          case Static(false)                        => dbg("invokestatic");   bc.invokestatic   (jowner, jname, jtype)
-          case Dynamic if isInterfaceCall(receiver) => dbg("invokinterface"); bc.invokeinterface(jowner, jname, jtype)
-          case Dynamic                              => dbg("invokevirtual");  bc.invokevirtual  (jowner, jname, jtype)
+          case Static(true)                         => dbg("invokespecial");  result ::= new asm.tree.MethodInsnNode(asm.Opcodes.INVOKESPECIAL,   jowner, jname, jtype)
+          case Static(false)                        => dbg("invokestatic");   result ::= new asm.tree.MethodInsnNode(asm.Opcodes.INVOKESTATIC,    jowner, jname, jtype)
+          case Dynamic if isInterfaceCall(receiver) => dbg("invokinterface"); result ::= new asm.tree.MethodInsnNode(asm.Opcodes.INVOKEINTERFACE, jowner, jname, jtype)
+          case Dynamic                              => dbg("invokevirtual");  result ::= new asm.tree.MethodInsnNode(asm.Opcodes.INVOKEVIRTUAL,   jowner, jname, jtype)
           case SuperCall(_)                         =>
             dbg("invokespecial")
-            bc.invokespecial(jowner, jname, jtype)
-            initModule()
+            result   = initModule()
+            result ::= new asm.tree.MethodInsnNode(asm.Opcodes.INVOKESPECIAL, jowner, jname, jtype)
         }
+
+        result
 
       } // end of genCallMethod()
 
@@ -2155,7 +2163,7 @@ abstract class GenBCode extends BCodeTypes {
       def genScalaHash(tree: Tree): BType = {
         genLoadModule(ScalaRunTimeModule) // TODO why load ScalaRunTimeModule if ## has InvokeStyle of Static(false) ?
         genLoad(tree, ObjectReference)
-        genCallMethod(hashMethodSym, Static(false))
+        emit(genCallMethod(hashMethodSym, Static(false)))
 
         INT
       }
@@ -2352,7 +2360,7 @@ abstract class GenBCode extends BCodeTypes {
             }
           genLoad(l, ObjectReference)
           genLoad(r, ObjectReference)
-          genCallMethod(equalsMethod, Static(false))
+          emit(genCallMethod(equalsMethod, Static(false)))
           genCZJUMP(success, failure, NE, BOOL)
         }
         else {
@@ -2383,7 +2391,7 @@ abstract class GenBCode extends BCodeTypes {
 
             markProgramPoint(lNonNull)
             load(eqEqTempLocal)
-            genCallMethod(Object_equals, Dynamic)
+            emit(genCallMethod(Object_equals, Dynamic))
             genCZJUMP(success, failure, NE, BOOL)
           }
         }
