@@ -2397,7 +2397,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
         case Some(pickle) if !nme.isModuleName(newTermName(jclassName)) =>
           val scalaAnnot = {
             val sigBytes = ScalaSigBytes(pickle.bytes.take(pickle.writeIndex))
-            AnnotationInfo(sigBytes.sigAnnot, Nil, List((nme.bytes, sigBytes)))
+            AnnotationInfo(sigBytes.sigAnnot, Nil, (nme.bytes, sigBytes) :: Nil)
           }
           pickledBytes += pickle.writeIndex
           currentRun.symData -= sym

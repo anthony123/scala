@@ -172,7 +172,7 @@ abstract class GenBCode extends BCodeTypes {
         while (true) {
           val item = q1.take
           if(item.isPoison) {
-            for(i <- 1 to MAX_THREADS) { q2 put poison2 } // Worker2.run() comments why MAX_THREADS poison pills are needed on queue-2.
+            for(i <- 1 to MAX_THREADS) { q2 put poison2 } // explanation in Worker2.run() as to why MAX_THREADS poison pills are needed on queue-2.
             return
           }
           else { visit(item) }
@@ -770,8 +770,12 @@ abstract class GenBCode extends BCodeTypes {
        **/
       private def appendToStaticCtor(dd: DefDef) {
 
-            def insertBefore(location: asm.tree.AbstractInsnNode, insns: List[asm.tree.AbstractInsnNode]) {
-              insns foreach { i => mnode.instructions.insertBefore(location, i) }
+            def insertBefore(
+                  location: asm.tree.AbstractInsnNode,
+                  i0: asm.tree.AbstractInsnNode,
+                  i1: asm.tree.AbstractInsnNode) {
+              mnode.instructions.insertBefore(location, i0)
+              mnode.instructions.insertBefore(location, i1)
             }
 
         // collect all return instructions
@@ -813,7 +817,7 @@ abstract class GenBCode extends BCodeTypes {
             val jtype  = asmMethodType(callee).getDescriptor
             val i1 = new asm.tree.MethodInsnNode(asm.Opcodes.INVOKESPECIAL, jowner, jname, jtype)
 
-            insertBefore(r, List(i0, i1))
+            insertBefore(r, i0, i1)
           }
 
           if(isParcelableClass) { // android creator code
@@ -828,7 +832,7 @@ abstract class GenBCode extends BCodeTypes {
             // PUTSTATIC `thisName`.CREATOR;
             val i1 = new asm.tree.FieldInsnNode(asm.Opcodes.PUTSTATIC, thisName, andrFieldName, andrFieldDescr)
 
-            insertBefore(r, List(i0, i1))
+            insertBefore(r, i0, i1)
           }
 
         }
@@ -2127,9 +2131,9 @@ abstract class GenBCode extends BCodeTypes {
               scalaPrimitives.getPrimitive(fun.symbol) == scalaPrimitives.CONCAT)
             liftStringConcat(larg) ::: rarg
           else
-            List(tree)
+            tree :: Nil
         case _ =>
-          List(tree)
+          tree :: Nil
       }
 
       /** Some useful equality helpers.
