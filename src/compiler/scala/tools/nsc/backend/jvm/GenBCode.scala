@@ -811,14 +811,6 @@ abstract class GenBCode extends BCodeTypes {
        **/
       private def appendToStaticCtor(dd: DefDef) {
 
-            def insertBefore(
-                  location: asm.tree.AbstractInsnNode,
-                  i0: asm.tree.AbstractInsnNode,
-                  i1: asm.tree.AbstractInsnNode) {
-              mnode.instructions.insertBefore(location, i0)
-              mnode.instructions.insertBefore(location, i1)
-            }
-
         // collect all return instructions
         var rets: List[asm.tree.AbstractInsnNode] = Nil
         val iter = mnode.instructions.iterator()
@@ -842,40 +834,46 @@ abstract class GenBCode extends BCodeTypes {
           )
         }
 
+        var insns: List[asm.tree.AbstractInsnNode] = Nil
+
+        if(isParcelableClass) { // android creator code
+
+          // INVOKESTATIC CREATOR(): android.os.Parcelable$Creator; -- TODO where does this Android method come from?
+          val callee = definitions.getMember(claszSymbol.companionModule, androidFieldName)
+          val jowner = internalName(callee.owner)
+          val jname  = callee.javaSimpleName.toString
+          val jtype  = asmMethodType(callee).getDescriptor
+          val i2 = new asm.tree.MethodInsnNode(asm.Opcodes.INVOKESTATIC, jowner, jname, jtype)
+
+          // PUTSTATIC `thisName`.CREATOR;
+          val i3 = new asm.tree.FieldInsnNode(asm.Opcodes.PUTSTATIC, thisName, andrFieldName, andrFieldDescr)
+
+          insns ::= i3
+          insns ::= i2
+
+        }
+
+        if (isStaticModule(claszSymbol)) { // call object's private ctor from static ctor
+
+          // NEW `moduleName`
+          val className = internalName(methSymbol.enclClass)
+          val i0 = new asm.tree.TypeInsnNode(asm.Opcodes.NEW, className)
+
+          // INVOKESPECIAL <init>
+          val callee = methSymbol.enclClass.primaryConstructor
+          val jname  = callee.javaSimpleName.toString
+          val jowner = internalName(callee.owner)
+          val jtype  = asmMethodType(callee).getDescriptor
+          val i1 = new asm.tree.MethodInsnNode(asm.Opcodes.INVOKESPECIAL, jowner, jname, jtype)
+
+          insns ::= i1
+          insns ::= i0
+
+        }
+
         // insert a few instructions for initialization before each return instruction
-        for(r <- rets) {
-
-          if (isStaticModule(claszSymbol)) { // call object's private ctor from static ctor
-
-            // NEW `moduleName`
-            val className = internalName(methSymbol.enclClass)
-            val i0 = new asm.tree.TypeInsnNode(asm.Opcodes.NEW, className)
-
-            // INVOKESPECIAL <init>
-            val callee = methSymbol.enclClass.primaryConstructor
-            val jname  = callee.javaSimpleName.toString
-            val jowner = internalName(callee.owner)
-            val jtype  = asmMethodType(callee).getDescriptor
-            val i1 = new asm.tree.MethodInsnNode(asm.Opcodes.INVOKESPECIAL, jowner, jname, jtype)
-
-            insertBefore(r, i0, i1)
-          }
-
-          if(isParcelableClass) { // android creator code
-
-            // INVOKESTATIC CREATOR(): android.os.Parcelable$Creator; -- TODO where does this Android method come from?
-            val callee = definitions.getMember(claszSymbol.companionModule, androidFieldName)
-            val jowner = internalName(callee.owner)
-            val jname  = callee.javaSimpleName.toString
-            val jtype  = asmMethodType(callee).getDescriptor
-            val i0 = new asm.tree.MethodInsnNode(asm.Opcodes.INVOKESTATIC, jowner, jname, jtype)
-
-            // PUTSTATIC `thisName`.CREATOR;
-            val i1 = new asm.tree.FieldInsnNode(asm.Opcodes.PUTSTATIC, thisName, andrFieldName, andrFieldDescr)
-
-            insertBefore(r, i0, i1)
-          }
-
+        for(r <- rets; i <- insns) {
+          mnode.instructions.insertBefore(r, i.clone(null))
         }
 
       }
