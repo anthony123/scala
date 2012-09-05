@@ -386,10 +386,28 @@ abstract class GenBCode extends BCodeTypes {
         cacheTpeTK.getOrElseUpdate(tree, toTypeKind(tree.tpe))
       }
 
+      private val cacheSymInfoTK = mutable.Map.empty[Symbol, BType]
+      def symInfoTK(sym: Symbol): BType = {
+        cacheSymInfoTK.getOrElseUpdate(sym, toTypeKind(sym.info))
+      }
+
+      private val cacheSymTpeTK = mutable.Map.empty[Symbol, BType]
+      def symTpeTK(sym: Symbol): BType = { // TODO some of its usages (all?) could be fulfilled by `symInfoTK()` instead.
+        cacheSymTpeTK.getOrElseUpdate(sym, toTypeKind(sym.tpe))
+      }
+
       private val cacheParamTKs = mutable.Map.empty[Apply, List[BType]]
       def paramTKs(app: Apply): List[BType] = {
         val Apply(fun, _)  = app
         cacheParamTKs.getOrElseUpdate(app, fun.symbol.info.paramTypes map toTypeKind)
+      }
+
+      private val cacheSymInfoResultTK = mutable.Map.empty[Symbol, BType]
+      def symInfoResultTK(sym: Symbol): BType = {
+        cacheSymInfoResultTK.getOrElseUpdate(sym,
+          if (sym.isClassConstructor || sym.isConstructor) UNIT // TODO What's the difference between isConstructor and isClassConstructor? Can they differ in value?
+          else toTypeKind(sym.info.resultType)
+        )
       }
 
       /* ---------------- working structures that should also end up in caches---------------- */
@@ -525,9 +543,7 @@ abstract class GenBCode extends BCodeTypes {
         earlyReturnVar      = null
         shouldEmitCleanup   = false
         // used in connection with cleanups
-        returnType =
-          if (dd.symbol.isConstructor) UNIT
-          else toTypeKind(dd.symbol.info.resultType)
+        returnType = symInfoResultTK(dd.symbol) // originally `if (fun.symbol.isConstructor) ...` ie originally isClassConstructor was ignored (unlike what symInfoResultTK does)
         lastEmittedLineNr = -1
       }
 
@@ -643,7 +659,7 @@ abstract class GenBCode extends BCodeTypes {
           val jfield = new asm.tree.FieldNode(
             flags,
             f.javaSimpleName.toString,
-            toTypeKind(f.tpe).getDescriptor,
+            symTpeTK(f).getDescriptor,
             javagensig,
             null // no initial value
           )
@@ -677,7 +693,7 @@ abstract class GenBCode extends BCodeTypes {
 
         // add method-local vars for params
         nxtIdx = if (msym.isStaticMember) 0 else 1;
-        for (p <- params) { makeLocal(p.symbol, toTypeKind(p.symbol.info)) }
+        for (p <- params) { makeLocal(p.symbol, symInfoTK(p.symbol)) }
 
         val Pair(flags, jmethod0) = initJMethod(
           cnode,
@@ -702,7 +718,7 @@ abstract class GenBCode extends BCodeTypes {
          */
         for(ld <- labelDefsAtOrUnder(dd.rhs); p <- ld.params; if !locals.contains(p.symbol)) {
           // the tail-calls xform results in symbols shared btw method-params and labelDef-params, thus the guard above.
-          makeLocal(p.symbol, toTypeKind(p.symbol.info))
+          makeLocal(p.symbol, symInfoTK(p.symbol))
         }
 
               def emitBodyOfStaticAccessor() {
@@ -711,7 +727,7 @@ abstract class GenBCode extends BCodeTypes {
                 val hostClass   = msym.owner.companionClass
                 val fieldName   = msym.accessed.javaSimpleName.toString
                 val staticfield = hostClass.info.findMember(msym.accessed.name, NoFlags, NoFlags, false)
-                val fieldDescr  = toTypeKind(staticfield.tpe).getDescriptor
+                val fieldDescr  = symTpeTK(staticfield).getDescriptor
 
                 if (msym.isGetter) {
                   // GETSTATIC `hostClass`.`accessed`
@@ -816,7 +832,7 @@ abstract class GenBCode extends BCodeTypes {
         if(isParcelableClass && rets.nonEmpty) {
           // add a static field ("CREATOR") to this class to cache android.os.Parcelable$Creator
           andrFieldName = androidFieldName.toString // TermName to String
-          andrFieldDescr = toTypeKind(AndroidCreatorClass.tpe).getDescriptor
+          andrFieldDescr = symTpeTK(AndroidCreatorClass).getDescriptor
           cnode.visitField(
             asm.Opcodes.ACC_STATIC | asm.Opcodes.ACC_FINAL,
             andrFieldName,
@@ -882,13 +898,13 @@ abstract class GenBCode extends BCodeTypes {
           case Assign(lhs @ Select(_, _), rhs) =>
             val isStatic = lhs.symbol.isStaticMember
             if (!isStatic) { genLoadQualifier(lhs) }
-            genLoad(rhs, toTypeKind(lhs.symbol.info))
+            genLoad(rhs, symInfoTK(lhs.symbol))
             lineNumber(tree)
             fieldStore(lhs.symbol)
 
           case Assign(lhs, rhs) =>
             val s = lhs.symbol
-            val Local(tk, _, idx, _) = locals.getOrElse(s, makeLocal(s, toTypeKind(s.info)))
+            val Local(tk, _, idx, _) = locals.getOrElse(s, makeLocal(s, symInfoTK(s)))
             genLoad(rhs, tk)
             lineNumber(tree)
             bc.store(idx, tk)
@@ -1180,7 +1196,7 @@ abstract class GenBCode extends BCodeTypes {
             case BoundEH   (patSymbol,      caseBody) =>
               // test/files/run/contrib674.scala , a local-var already exists for patSymbol.
               // rather than creating on first-access, we do it right away to emit debug-info for the created local var.
-              val Local(patTK, _, patIdx, _) = locals.getOrElse(patSymbol, makeLocal(patSymbol, toTypeKind(patSymbol.info)))
+              val Local(patTK, _, patIdx, _) = locals.getOrElse(patSymbol, makeLocal(patSymbol, symInfoTK(patSymbol)))
               bc.store(patIdx, patTK)
               genLoad(caseBody, kind)
               nopIfNeeded(startHandler)
@@ -1347,7 +1363,7 @@ abstract class GenBCode extends BCodeTypes {
             val sym = tree.symbol
             /* most of the time, !locals.contains(sym), unless the current activation of genLoad() is being called
                while duplicating a finalizer that contains this ValDef. */
-            val Local(tk, _, idx, isSynth) = locals.getOrElseUpdate(sym, makeLocal(sym, toTypeKind(sym.info)))
+            val Local(tk, _, idx, isSynth) = locals.getOrElseUpdate(sym, makeLocal(sym, symInfoTK(sym)))
             if (rhs == EmptyTree) { genConstant(getZeroOf(tk)) }
             else { genLoad(rhs, tk) }
             bc.store(idx, tk)
@@ -1398,7 +1414,7 @@ abstract class GenBCode extends BCodeTypes {
 
           case Select(qualifier, selector) =>
             val sym = tree.symbol
-            generatedType = toTypeKind(sym.info)
+            generatedType = symInfoTK(sym)
             val hostClass = findHostClass(qualifier.tpe, sym)
             log(s"Host class of $sym with qual $qualifier (${qualifier.tpe}) is $hostClass")
 
@@ -1412,7 +1428,7 @@ abstract class GenBCode extends BCodeTypes {
           case Ident(name) =>
             val sym = tree.symbol
             if (!sym.isPackage) {
-              val tk = toTypeKind(sym.info)
+              val tk = symInfoTK(sym)
               if (sym.isModule) { genLoadModule(tree) }
               else { load(sym) }
               generatedType = tk
@@ -1478,7 +1494,7 @@ abstract class GenBCode extends BCodeTypes {
           if(hostClass == null) internalName(field.owner)
           else                  internalName(hostClass)
         val fieldJName = field.javaSimpleName.toString
-        val fieldDescr = toTypeKind(field.tpe).getDescriptor
+        val fieldDescr = symTpeTK(field).getDescriptor
         val isStatic   = field.isStaticMember
         val opc =
           if(isLoad) { if (isStatic) asm.Opcodes.GETSTATIC else asm.Opcodes.GETFIELD }
@@ -1632,9 +1648,7 @@ abstract class GenBCode extends BCodeTypes {
             mnode.visitVarInsn(asm.Opcodes.ALOAD, 0)
             genLoadArguments(args, paramTKs(app))
             genCallMethod(fun.symbol, invokeStyle)
-            generatedType =
-              if (fun.symbol.isConstructor) UNIT
-              else toTypeKind(fun.symbol.info.resultType)
+            generatedType = symInfoResultTK(fun.symbol) // originally `if (fun.symbol.isConstructor) ...` ie originall isClassConstructor was ignored (unlike what symInfoResultTK does)
 
           // 'new' constructor call: Note: since constructors are
           // thought to return an instance of what they construct,
@@ -1695,11 +1709,11 @@ abstract class GenBCode extends BCodeTypes {
             }
             val MethodNameAndType(mname, mdesc) = asmBoxTo(nativeKind)
             bc.invokestatic(BoxesRunTime, mname, mdesc)
-            generatedType = boxResultType(fun.symbol) // was toTypeKind(fun.symbol.tpe.resultType)
+            generatedType = boxResultType(fun.symbol)
 
           case Apply(fun @ _, List(expr)) if (definitions.isUnbox(fun.symbol)) =>
             genLoad(expr, tpeTK(expr))
-            val boxType = unboxResultType(fun.symbol) // was toTypeKind(fun.symbol.owner.linkedClassOfClass.tpe)
+            val boxType = unboxResultType(fun.symbol)
             generatedType = boxType
             val MethodNameAndType(mname, mdesc) = asmUnboxTo(boxType)
             bc.invokestatic(BoxesRunTime, mname, mdesc)
@@ -1716,7 +1730,7 @@ abstract class GenBCode extends BCodeTypes {
             // see https://github.com/scala/scala/commit/5a8dfad583b825158cf0abdae5d73a4a7f8cd997
             // see https://github.com/scala/scala/commit/faa114e2fb6003031efa2cdd56a32a3c44aa71fb
             val sym = fun.symbol
-            generatedType   = toTypeKind(sym.accessed.info)
+            generatedType   = symInfoTK(sym.accessed)
             val hostOwner   = qual.tpe.typeSymbol.orElse(sym.owner)
             val hostClass   = hostOwner.companionClass
             val fieldName   = sym.accessed.javaSimpleName.toString
@@ -1732,7 +1746,7 @@ abstract class GenBCode extends BCodeTypes {
                 staticfield
               } else NoSymbol
             }
-            val fieldDescr  = toTypeKind(staticfield.tpe).getDescriptor
+            val fieldDescr  = symTpeTK(staticfield).getDescriptor
 
             if (sym.isGetter) {
               // GETSTATIC `hostClass`.`accessed`
@@ -1802,9 +1816,7 @@ abstract class GenBCode extends BCodeTypes {
               }
 
               // TODO if (sym == ctx1.method.symbol) { ctx1.method.recursive = true }
-              generatedType =
-                if (sym.isClassConstructor) UNIT
-                else toTypeKind(sym.info.resultType);
+              generatedType = symInfoResultTK(sym); // originally `if (sym.isClassConstructor) ...` ie originally isConstructor was ignored (unlike what symInfoResultTK does)
             }
 
         }
@@ -1990,7 +2002,7 @@ abstract class GenBCode extends BCodeTypes {
             asm.Opcodes.GETSTATIC,
             internalName(module) /* + "$" */ ,
             strMODULE_INSTANCE_FIELD,
-            toTypeKind(module.tpe).getDescriptor
+            symTpeTK(module).getDescriptor
           )
         }
       }
