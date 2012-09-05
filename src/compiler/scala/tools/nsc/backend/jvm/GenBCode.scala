@@ -671,8 +671,9 @@ abstract class GenBCode extends BCodeTypes {
 
       /* ---------------- helper utils for generating methods and code ---------------- */
 
-      @inline final def emit(opc: Int) { mnode.visitInsn(opc) }
-      @inline final def emit(i: asm.tree.AbstractInsnNode) { mnode.instructions.add(i) }
+      final def emit(opc: Int) { mnode.visitInsn(opc) }
+      final def emit(i: asm.tree.AbstractInsnNode) { mnode.instructions.add(i) }
+      final def emit(is: List[asm.tree.AbstractInsnNode]) { for(i <- is) { mnode.instructions.add(i) } }
 
       def genDefDef(dd: DefDef) {
         // the only method whose implementation is not emitted: getClass()
@@ -793,9 +794,23 @@ abstract class GenBCode extends BCodeTypes {
             }
 
             if(methSymbol.isStaticConstructor) {
-              appendToStaticCtor(dd)
+              // splice a few instructions before each RETURN instruction.
+              val beforeReturns = insnsToAppendToStaticCtor()
+              if(beforeReturns.nonEmpty) {
+                // collect all return instructions
+                var rets: List[asm.tree.AbstractInsnNode] = Nil
+                val iter = mnode.instructions.iterator()
+                while(iter.hasNext) {
+                  val i = iter.next()
+                  if(i.getOpcode() == asm.Opcodes.RETURN) { rets ::= i  }
+                }
+                assert(!rets.isEmpty, "can't splice a few instructions before each RETURN in a static constructor, because no RETURNs were found.")
+                // insert a few instructions for initialization before each return instruction
+                for(r <- rets; i <- beforeReturns) {
+                  mnode.instructions.insertBefore(r, i.clone(null))
+                }
+              }
             }
-
           }
 
           // Note we don't invoke visitMax, thus there are no FrameNode among mnode.instructions.
@@ -809,19 +824,11 @@ abstract class GenBCode extends BCodeTypes {
        *
        *  TODO document, explain interplay with `fabricateStaticInit()`
        **/
-      private def appendToStaticCtor(dd: DefDef) {
-
-        // collect all return instructions
-        var rets: List[asm.tree.AbstractInsnNode] = Nil
-        val iter = mnode.instructions.iterator()
-        while(iter.hasNext) {
-          val i = iter.next()
-          if(i.getOpcode() == asm.Opcodes.RETURN) { rets ::= i  }
-        }
+      private def insnsToAppendToStaticCtor(): List[asm.tree.AbstractInsnNode] = {
 
         var andrFieldName:  String = null
         var andrFieldDescr: String = null
-        if(isParcelableClass && rets.nonEmpty) {
+        if(isParcelableClass) {
           // add a static field ("CREATOR") to this class to cache android.os.Parcelable$Creator
           andrFieldName = androidFieldName.toString // TermName to String
           andrFieldDescr = symTpeTK(AndroidCreatorClass).getDescriptor
@@ -871,10 +878,7 @@ abstract class GenBCode extends BCodeTypes {
 
         }
 
-        // insert a few instructions for initialization before each return instruction
-        for(r <- rets; i <- insns) {
-          mnode.instructions.insertBefore(r, i.clone(null))
-        }
+        insns
 
       }
 
