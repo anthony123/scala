@@ -386,6 +386,12 @@ abstract class GenBCode extends BCodeTypes {
         cacheTpeTK.getOrElseUpdate(tree, toTypeKind(tree.tpe))
       }
 
+      private val cacheParamTKs = mutable.Map.empty[Apply, List[BType]]
+      def paramTKs(app: Apply): List[BType] = {
+        val Apply(fun, _)  = app
+        cacheParamTKs.getOrElseUpdate(app, fun.symbol.info.paramTypes map toTypeKind)
+      }
+
       /* ---------------- working structures that should also end up in caches---------------- */
 
       // current class
@@ -1573,17 +1579,17 @@ abstract class GenBCode extends BCodeTypes {
 
       } // end of genReturn()
 
-      private def genApply(tree: Apply, expectedType: BType): BType = {
+      private def genApply(app: Apply, expectedType: BType): BType = {
         var generatedType = expectedType
-        lineNumber(tree)
-        tree match {
+        lineNumber(app)
+        app match {
 
           case Apply(TypeApply(fun, targs), _) =>
             val sym = fun.symbol
             val cast = sym match {
               case Object_isInstanceOf  => false
               case Object_asInstanceOf  => true
-              case _                    => abort("Unexpected type application " + fun + "[sym: " + sym.fullName + "]" + " in: " + tree)
+              case _                    => abort("Unexpected type application " + fun + "[sym: " + sym.fullName + "]" + " in: " + app)
             }
 
             val Select(obj, _) = fun
@@ -1604,7 +1610,7 @@ abstract class GenBCode extends BCodeTypes {
               }
             }
             else if (r.isValueType && cast) {
-              assert(false, "Erasure should have added an unboxing operation to prevent this cast. Tree: " + tree)
+              assert(false, "Erasure should have added an unboxing operation to prevent this cast. Tree: " + app)
             }
             else if (r.isValueType) {
               bc isInstance classLiteral(r)
@@ -1624,7 +1630,7 @@ abstract class GenBCode extends BCodeTypes {
             val invokeStyle = SuperCall(mix)
             // if (fun.symbol.isConstructor) Static(true) else SuperCall(mix);
             mnode.visitVarInsn(asm.Opcodes.ALOAD, 0)
-            genLoadArguments(args, fun.symbol.info.paramTypes map toTypeKind)
+            genLoadArguments(args, paramTKs(app))
             genCallMethod(fun.symbol, invokeStyle)
             generatedType =
               if (fun.symbol.isConstructor) UNIT
@@ -1643,12 +1649,12 @@ abstract class GenBCode extends BCodeTypes {
 
             generatedType match {
               case arr if generatedType.isArray =>
-                genLoadArguments(args, ctor.info.paramTypes map toTypeKind)
+                genLoadArguments(args, paramTKs(app))
                 val dims = arr.getDimensions
                 var elemKind = arr.getElementType
                 val argsSize = args.length
                 if (argsSize > dims) {
-                  cunit.error(tree.pos, "too many arguments for array constructor: found " + args.length +
+                  cunit.error(app.pos, "too many arguments for array constructor: found " + args.length +
                                         " but array has only " + dims + " dimension(s)")
                 }
                 if (argsSize < dims) {
@@ -1669,7 +1675,7 @@ abstract class GenBCode extends BCodeTypes {
                 assert(exemplar(ctor.owner).c == rt, "Symbol " + ctor.owner.fullName + " is different from " + rt)
                 mnode.visitTypeInsn(asm.Opcodes.NEW, rt.getInternalName)
                 bc dup generatedType
-                genLoadArguments(args, ctor.info.paramTypes map toTypeKind)
+                genLoadArguments(args, paramTKs(app))
                 genCallMethod(ctor, Static(true))
 
               case _ =>
@@ -1698,7 +1704,7 @@ abstract class GenBCode extends BCodeTypes {
             val MethodNameAndType(mname, mdesc) = asmUnboxTo(boxType)
             bc.invokestatic(BoxesRunTime, mname, mdesc)
 
-          case app @ Apply(fun @ Select(qual, _), args)
+          case Apply(fun @ Select(qual, _), args)
           if !methSymbol.isStaticConstructor
           && isAccessorToStaticField(fun.symbol)
           && qual.tpe.typeSymbol.orElse(fun.symbol.owner).companionClass != NoSymbol =>
@@ -1720,7 +1726,7 @@ abstract class GenBCode extends BCodeTypes {
                 import Flags._
                 debuglog("recreating sym.accessed.name: " + sym.accessed.name)
                 val objectfield = hostOwner.info.findMember(sym.accessed.name, NoFlags, NoFlags, false)
-                val staticfield = hostClass.newVariable(newTermName(sym.accessed.name.toString), tree.pos, STATIC | SYNTHETIC | FINAL) setInfo objectfield.tpe
+                val staticfield = hostClass.newVariable(newTermName(sym.accessed.name.toString), app.pos, STATIC | SYNTHETIC | FINAL) setInfo objectfield.tpe
                 staticfield.addAnnotation(definitions.StaticClass)
                 hostClass.info.decls enter staticfield
                 staticfield
@@ -1738,7 +1744,7 @@ abstract class GenBCode extends BCodeTypes {
               )
             } else if (sym.isSetter) {
               // push setter's argument
-              genLoadArguments(args, sym.info.paramTypes map toTypeKind)
+              genLoadArguments(args, paramTKs(app))
               // GETSTATIC `hostClass`.`accessed`
               emit(
                 new asm.tree.FieldInsnNode(asm.Opcodes.PUTSTATIC,
@@ -1752,11 +1758,11 @@ abstract class GenBCode extends BCodeTypes {
               assert(false, "supposedly unreachable")
             }
 
-          case app @ Apply(fun, args) =>
+          case Apply(fun, args) =>
             val sym = fun.symbol
 
             if (sym.isLabel) {  // jump to a label
-              genLoadLabelArguments(args, labelDef(sym), tree.pos)
+              genLoadLabelArguments(args, labelDef(sym), app.pos)
               bc goTo programPoint(sym)
             } else if (isPrimitive(sym)) { // primitive method call
               generatedType = genPrimitiveOp(app, expectedType)
@@ -1770,7 +1776,7 @@ abstract class GenBCode extends BCodeTypes {
                 genLoadQualifier(fun)
               }
 
-              genLoadArguments(args, sym.info.paramTypes map toTypeKind)
+              genLoadArguments(args, paramTKs(app))
 
               // In "a couple cases", squirrel away a extra information (hostClass, targetTypeKind). TODO Document what "in a couple cases" refers to.
               var hostClass:      Symbol = null
