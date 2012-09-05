@@ -410,6 +410,30 @@ abstract class GenBCode extends BCodeTypes {
         )
       }
 
+      private val cacheLoadModule = mutable.Map.empty[Tree, asm.tree.AbstractInsnNode]
+      def insnLoadModule(key: Tree, module: Symbol): asm.tree.AbstractInsnNode = {
+        /* As with other Tree-keyed maps, it's possible for the same Tree being visited more than once during a traversal.
+         * How? A finally clause materializes as both an exception handler and a normal-exit block, thus it is visited twice.
+         * In case genLoadModule() is invoked twice as in the example above, there's no risk of getting different results:
+         * as long as we stay within the same method, control-flow in genLoadModule() will take the same path.
+         * That's why the following (invalid) assertion was failing: assert(!cacheLoadModule.contains(key))
+         * And that's why `clone()` is needed: to recap, an ASM instruction can be part of a single InsnList.
+         */
+        cacheLoadModule.getOrElseUpdate(key, genLoadModule(module)).clone(null)
+      }
+
+      private val cacheModuleTK = mutable.Map.empty[Symbol, BType]
+      def moduleTK(module: Symbol): BType = {
+        cacheModuleTK.getOrElseUpdate(module, asmClassType(module))
+      }
+
+      private val cacheIsStaticMember = mutable.Map.empty[Symbol, Boolean]
+      def isStaticMember(sym: Symbol): Boolean = {
+        cacheIsStaticMember.getOrElseUpdate(sym, sym.isStaticMember)
+      }
+
+      private val cacheMustUseAnyComparator = mutable.Map.empty[Tree, Boolean]
+
       /* ---------------- working structures that should also end up in caches---------------- */
 
       // current class
@@ -898,8 +922,7 @@ abstract class GenBCode extends BCodeTypes {
         lineNumber(tree)
         tree match {
           case Assign(lhs @ Select(_, _), rhs) =>
-            val isStatic = lhs.symbol.isStaticMember
-            if (!isStatic) { genLoadQualifier(lhs) }
+            if (!isStaticMember(lhs.symbol)) { genLoadQualifier(lhs) }
             genLoad(rhs, symInfoTK(lhs.symbol))
             lineNumber(tree)
             fieldStore(lhs.symbol)
@@ -916,6 +939,9 @@ abstract class GenBCode extends BCodeTypes {
         }
       }
 
+      /**
+       *  @fit-for-pass-2
+       */
       def genThrow(expr: Tree): BType = {
         require(expr.tpe <:< ThrowableClass.tpe, expr.tpe)
 
@@ -927,7 +953,12 @@ abstract class GenBCode extends BCodeTypes {
         RT_NOTHING // always returns the same, the invoker should know :)
       }
 
-      /** Generate code for primitive arithmetic operations. */
+      /**
+       *  Generate code for primitive arithmetic operations.
+       *
+       *  @fit-for-pass-2
+       *
+       */
       def genArithmeticOp(tree: Tree, code: Int): BType = {
         val Apply(fun @ Select(larg, _), args) = tree
         var resKind = tpeTK(larg)
@@ -1420,8 +1451,8 @@ abstract class GenBCode extends BCodeTypes {
             val hostClass = findHostClass(qualifier.tpe, sym)
             log(s"Host class of $sym with qual $qualifier (${qualifier.tpe}) is $hostClass")
 
-            if (sym.isModule)            { genLoadModule(tree) }
-            else if (sym.isStaticMember) { fieldLoad(sym, hostClass) }
+            if (sym.isModule)             { genLoadModule(tree) }
+            else if (isStaticMember(sym)) { fieldLoad(sym, hostClass) }
             else {
               genLoadQualifier(tree)
               fieldLoad(sym, hostClass)
@@ -1634,7 +1665,7 @@ abstract class GenBCode extends BCodeTypes {
               bc isInstance classLiteral(r)
             }
             else {
-              genCast(l, r, cast)
+              genCast(r, cast)
             }
             generatedType = if (cast) r else BOOL;
 
@@ -1784,7 +1815,7 @@ abstract class GenBCode extends BCodeTypes {
               generatedType = genPrimitiveOp(app, expectedType)
             } else {  // normal method call
               val invokeStyle =
-                if (sym.isStaticMember) Static(false)
+                if (isStaticMember(sym)) Static(false)
                 else if (sym.isPrivate || sym.isClassConstructor) Static(true)
                 else Dynamic;
 
@@ -1921,6 +1952,9 @@ abstract class GenBCode extends BCodeTypes {
         varsInScope = savedScope
       }
 
+      /**
+       *  @fit-for-pass-2
+       */
       def adapt(from: BType, to: BType): Unit = {
         if (!conforms(from, to) && !(from.isNullType && to.isNothingType)) {
           to match {
@@ -1978,10 +2012,16 @@ abstract class GenBCode extends BCodeTypes {
 
       }
 
+      /**
+       *  @fit-for-pass-2
+       */
       def genLoadArguments(args: List[Tree], btpes: List[BType]) {
         (args zip btpes) foreach { case (arg, btpe) => genLoad(arg, btpe) }
       }
 
+      /**
+       *  @just-prune-and-fit-for-pass-2
+       */
       def genLoadModule(tree: Tree): BType = {
         // Working around SI-5604.  Rather than failing the compile when we see a package here, check if there's a package object.
         val module = (
@@ -1992,15 +2032,18 @@ abstract class GenBCode extends BCodeTypes {
           }
         )
         lineNumber(tree)
-        genLoadModule(module)
-        asmClassType(module)
+        emit(insnLoadModule(tree, module))
+        moduleTK(module)
       }
 
-      def genLoadModule(module: Symbol) {
+      /**
+       *  @only-for-pass-1
+       */
+      def genLoadModule(module: Symbol): asm.tree.AbstractInsnNode = {
         if (claszSymbol == module.moduleClass && jMethodName != nme.readResolve.toString) {
-          mnode.visitVarInsn(asm.Opcodes.ALOAD, 0)
+          new asm.tree.VarInsnNode(asm.Opcodes.ALOAD, 0)
         } else {
-          mnode.visitFieldInsn(
+          new asm.tree.FieldInsnNode(
             asm.Opcodes.GETSTATIC,
             internalName(module) /* + "$" */ ,
             strMODULE_INSTANCE_FIELD,
@@ -2009,6 +2052,9 @@ abstract class GenBCode extends BCodeTypes {
         }
       }
 
+      /**
+       *  @fit-for-pass-2
+       */
       def genConversion(from: BType, to: BType, cast: Boolean) = {
         if (cast) { bc.emitT2T(from, to) }
         else {
@@ -2017,7 +2063,10 @@ abstract class GenBCode extends BCodeTypes {
         }
       }
 
-      def genCast(from: BType, to: BType, cast: Boolean) {
+      /**
+       *  @fit-for-pass-2
+       */
+      def genCast(to: BType, cast: Boolean) {
         if(cast) { bc checkCast  to }
         else     { bc isInstance to }
       }
@@ -2039,9 +2088,10 @@ abstract class GenBCode extends BCodeTypes {
       /** Is the given symbol a primitive operation? */
       def isPrimitive(fun: Symbol): Boolean = scalaPrimitives.isPrimitive(fun)
 
-      /** Generate coercion denoted by "code"
+      /**
+       *  Generate coercion denoted by "code"
        *
-       *  @can-multi-thread
+       *  @fit-for-pass-2
        *
        **/
       def genCoercion(code: Int) = {
@@ -2185,7 +2235,7 @@ abstract class GenBCode extends BCodeTypes {
 
       /** Some useful equality helpers.
        *
-       *  @can-multi-thread
+       *  @fit-for-pass-2
        *
        **/
       def isNull(t: Tree) = {
@@ -2195,10 +2245,19 @@ abstract class GenBCode extends BCodeTypes {
         }
       }
 
-      /* If l or r is constant null, returns the other ; otherwise null */
+      /**
+       *  If l or r is constant null, returns the other ; otherwise null
+       *
+       *  @fit-for-pass-2
+       *
+       */
       def ifOneIsNull(l: Tree, r: Tree) = if (isNull(l)) r else if (isNull(r)) l else null
 
-      /** Emit code to compare the two top-most stack values using the 'op' operator. */
+      /**
+       *  Emit code to compare the two top-most stack values using the 'op' operator.
+       *
+       *  @fit-for-pass-2
+       */
       private def genCJUMP(success: asm.Label, failure: asm.Label, op: TestOp, tk: BType) {
         if(tk.isIntSizedType) { // BOOL, BYTE, CHAR, SHORT, or INT
           bc.emitIF_ICMP(op, success)
@@ -2219,7 +2278,11 @@ abstract class GenBCode extends BCodeTypes {
         bc goTo failure
       }
 
-      /** Emits code to compare (and consume) stack-top and zero using the 'op' operator */
+      /**
+       *  Emits code to compare (and consume) stack-top and zero using the 'op' operator.
+       *
+       *  @fit-for-pass-2
+       */
       private def genCZJUMP(success: asm.Label, failure: asm.Label, op: TestOp, tk: BType) {
         if(tk.isIntSizedType) { // BOOL, BYTE, CHAR, SHORT, or INT
           bc.emitIF(op, success)
@@ -2308,8 +2371,8 @@ abstract class GenBCode extends BCodeTypes {
                 // TODO !!!!!!!!!! isReferenceType, in the sense of TypeKind? (ie non-array, non-boxed, non-nothing, may be null)
                 if (scalaPrimitives.isUniversalEqualityOp(code) && tpeTK(lhs).hasObjectSort) {
                   // `lhs` has reference type
-                  if (code == EQ) genEqEqPrimitive(lhs, rhs, success, failure)
-                  else            genEqEqPrimitive(lhs, rhs, failure, success)
+                  if (code == EQ) genEqEqPrimitive(tree, lhs, rhs, success, failure)
+                  else            genEqEqPrimitive(tree, lhs, rhs, failure, success)
                 }
                 else if (scalaPrimitives.isComparisonOp(code))
                   genComparisonOp(lhs, rhs, code)
@@ -2329,7 +2392,7 @@ abstract class GenBCode extends BCodeTypes {
        * @param l       left-hand-side  of the '=='
        * @param r       right-hand-side of the '=='
        */
-      def genEqEqPrimitive(l: Tree, r: Tree, success: asm.Label, failure: asm.Label) {
+      def genEqEqPrimitive(key: Tree, l: Tree, r: Tree, success: asm.Label, failure: asm.Label) {
 
         val areSameFinals = l.tpe.isFinalType && r.tpe.isFinalType && (l.tpe =:= r.tpe)
 
@@ -2342,6 +2405,8 @@ abstract class GenBCode extends BCodeTypes {
           !areSameFinals && platform.isMaybeBoxed(l.tpe.typeSymbol) && platform.isMaybeBoxed(r.tpe.typeSymbol)
         }
 
+        assert(!cacheMustUseAnyComparator.contains(key), "duplicate keys on cacheMustUseAnyComparator")
+        cacheMustUseAnyComparator.put(key, mustUseAnyComparator)
         if (mustUseAnyComparator) {
           val equalsMethod = {
               def default = platform.externalEquals
@@ -2397,7 +2462,12 @@ abstract class GenBCode extends BCodeTypes {
         }
       }
 
-      /** Does this tree have a try-catch block? */
+      /**
+       *  Does this tree have a try-catch block?
+       *
+       *  @fit-for-pass-2
+       *
+       */
       def mayCleanStack(tree: Tree): Boolean = tree exists { t => t.isInstanceOf[Try] }
 
       /** @must-single-thread **/
