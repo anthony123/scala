@@ -420,6 +420,11 @@ abstract class GenBCode extends BCodeTypes {
         cacheIsStaticMember.getOrElseUpdate(sym, sym.isStaticMember)
       }
 
+      private val cacheIsLabel = mutable.Map.empty[Symbol, Boolean]
+      def isLabel(sym: Symbol): Boolean = {
+        cacheIsLabel.getOrElseUpdate(sym, sym.isLabel)
+      }
+
       private val cacheLoadModule = mutable.Map.empty[Tree, asm.tree.AbstractInsnNode]
       def insnLoadModule(key: Tree, module: Symbol): asm.tree.AbstractInsnNode = {
         /* Any Tree-keyed map is prone to an entry being replaced,
@@ -1878,13 +1883,13 @@ abstract class GenBCode extends BCodeTypes {
           case Apply(fun, args) =>
             val sym = fun.symbol
 
-            if (sym.isLabel) {  // jump to a label
+            if (isLabel(sym)) {  // jump to a label TODO time-travel
               genLoadLabelArguments(args, labelDef(sym), app.pos)
               bc goTo programPoint(sym)
             } else if (isPrimitive(sym)) { // primitive method call
               generatedType = genPrimitiveOp(app, expectedType)
             } else {  // normal method call
-              val invokeStyle =
+              val invokeStyle = // TODO time-travel
                 if (isStaticMember(sym)) Static(false)
                 else if (sym.isPrivate || sym.isClassConstructor) Static(true)
                 else Dynamic;
@@ -1900,7 +1905,7 @@ abstract class GenBCode extends BCodeTypes {
               var targetTypeKind: BType  = null
               fun match {
                 case Select(qual, _) =>
-                  val qualSym = findHostClass(qual.tpe, sym)
+                  val qualSym = findHostClass(qual.tpe, sym) // TODO time-travel
                   if (qualSym == ArrayClass) { targetTypeKind = tpeTK(qual) }
                   else { hostClass = qualSym }
 
@@ -2158,7 +2163,11 @@ abstract class GenBCode extends BCodeTypes {
       }
 
 
-      /** Is the given symbol a primitive operation? */
+      /**
+       *  Is the given symbol a primitive operation?
+       *
+       *  @fit-for-pass-2
+       */
       def isPrimitive(fun: Symbol): Boolean = scalaPrimitives.isPrimitive(fun)
 
       /**
