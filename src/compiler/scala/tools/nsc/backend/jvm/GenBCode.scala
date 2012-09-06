@@ -410,18 +410,6 @@ abstract class GenBCode extends BCodeTypes {
         )
       }
 
-      private val cacheLoadModule = mutable.Map.empty[Tree, asm.tree.AbstractInsnNode]
-      def insnLoadModule(key: Tree, module: Symbol): asm.tree.AbstractInsnNode = {
-        /* As with other Tree-keyed maps, it's possible for the same Tree being visited more than once during a traversal.
-         * How? A finally clause materializes as both an exception handler and a normal-exit block, thus it is visited twice.
-         * In case genLoadModule() is invoked twice as in the example above, there's no risk of getting different results:
-         * as long as we stay within the same method, control-flow in genLoadModule() will take the same path.
-         * That's why the following (invalid) assertion was failing: assert(!cacheLoadModule.contains(key))
-         * And that's why `clone()` is needed: to recap, an ASM instruction can be part of a single ASM InsnList.
-         */
-        cacheLoadModule.getOrElseUpdate(key, genLoadModule(module)).clone(null)
-      }
-
       private val cacheModuleTK = mutable.Map.empty[Symbol, BType]
       def moduleTK(module: Symbol): BType = {
         cacheModuleTK.getOrElseUpdate(module, asmClassType(module))
@@ -432,7 +420,27 @@ abstract class GenBCode extends BCodeTypes {
         cacheIsStaticMember.getOrElseUpdate(sym, sym.isStaticMember)
       }
 
-      private val cacheMustUseAnyComparator = mutable.Map.empty[Tree, Boolean]
+      private val cacheLoadModule = mutable.Map.empty[Tree, asm.tree.AbstractInsnNode]
+      def insnLoadModule(key: Tree, module: Symbol): asm.tree.AbstractInsnNode = {
+        /* Any Tree-keyed map is prone to an entry being replaced,
+         * because it's possible for the same Tree to be visited more than once during a traversal.
+         * How? A finally clause materializes as both an exception handler and a normal-exit block, thus it is visited twice.
+         *
+         * In case genLoadModule() is invoked twice as in the example above, there's no risk of getting different results:
+         * as long as we stay within the same method, control-flow in genLoadModule() will take the same path.
+         * That's why the following (invalid) assertion was failing: assert(!cacheLoadModule.contains(key))
+         * And that's why `clone()` is needed: to recap, an ASM instruction can be part of a single ASM InsnList.
+         *
+         * In other cases, the analysis whether a gen...() method will always result in the same instructions for a given Tree is not so easy.
+         * In those cases, queues are used:
+         *   - during pipeline-1, pieces of information (instructions, outcomes, etc.) are saved
+         *   - for later use during pipeline-2. There's no need to lookup the "piece of information" by key.
+         *     Instead, dequeueing delivers the right one because traversal order of a ClassDef is the same during both pipelines.
+         */
+        cacheLoadModule.getOrElseUpdate(key, genLoadModule(module)).clone(null)
+      }
+
+      private val cacheMustUseAnyComparator = new java.util.LinkedList[Boolean]
 
       /** Locals created without a symbol */
       private var cachedLocals = new java.util.LinkedList[Symbol]
@@ -449,6 +457,16 @@ abstract class GenBCode extends BCodeTypes {
         assert(loc.tk == tk && loc.name == name, "makeCachedLocal() and takeCachedLocal() got out of synch.")
 
         locSym
+      }
+
+      private var cachedCallsites = new java.util.LinkedList[List[asm.tree.AbstractInsnNode]]
+      private def genAndCacheCallMethod(method: Symbol, style: InvokeStyle, hostClass0: Symbol = null) = {
+        val insns = genCallMethod(method, style, hostClass0)
+        cachedCallsites.offer(insns)
+        emit(insns)
+      }
+      private def emitCachedCallMethod( /* not needed: method: Symbol, style: InvokeStyle, hostClass0: Symbol = null */ ) = {
+        emit(cachedCallsites.remove())
       }
 
       /* ---------------- working structures that should also end up in caches---------------- */
@@ -1707,7 +1725,7 @@ abstract class GenBCode extends BCodeTypes {
             // if (fun.symbol.isConstructor) Static(true) else SuperCall(mix);
             mnode.visitVarInsn(asm.Opcodes.ALOAD, 0)
             genLoadArguments(args, paramTKs(app))
-            emit(genCallMethod(fun.symbol, invokeStyle))
+            genAndCacheCallMethod(fun.symbol, invokeStyle)
             generatedType = symInfoResultTK(fun.symbol) // originally `if (fun.symbol.isConstructor) ...` ie originall isClassConstructor was ignored (unlike what symInfoResultTK does)
 
           // 'new' constructor call: Note: since constructors are
@@ -1750,7 +1768,7 @@ abstract class GenBCode extends BCodeTypes {
                 mnode.visitTypeInsn(asm.Opcodes.NEW, rt.getInternalName)
                 bc dup generatedType
                 genLoadArguments(args, paramTKs(app))
-                emit(genCallMethod(ctor, Static(true)))
+                genAndCacheCallMethod(ctor, Static(true))
 
               case _ =>
                 abort("Cannot instantiate " + tpt + " of kind: " + generatedType)
@@ -1872,7 +1890,7 @@ abstract class GenBCode extends BCodeTypes {
                 bc.invokevirtual(target, "clone", mdesc_arrayClone)
               }
               else {
-                emit(genCallMethod(sym, invokeStyle, hostClass))
+                genAndCacheCallMethod(sym, invokeStyle, hostClass)
               }
 
               // TODO if (sym == ctx1.method.symbol) { ctx1.method.recursive = true }
@@ -2147,7 +2165,7 @@ abstract class GenBCode extends BCodeTypes {
           // Optimization for expressions of the form "" + x.  We can avoid the StringBuilder.
           case List(Literal(Constant("")), arg) =>
             genLoad(arg, ObjectReference)
-            emit(genCallMethod(String_valueOf, Static(false)))
+            genAndCacheCallMethod(String_valueOf, Static(false))
 
           case concatenations =>
             bc.genStartConcat
@@ -2240,7 +2258,7 @@ abstract class GenBCode extends BCodeTypes {
       def genScalaHash(tree: Tree): BType = {
         genLoadModule(ScalaRunTimeModule) // TODO why load ScalaRunTimeModule if ## has InvokeStyle of Static(false) ?
         genLoad(tree, ObjectReference)
-        emit(genCallMethod(hashMethodSym, Static(false)))
+        genAndCacheCallMethod(hashMethodSym, Static(false))
 
         INT
       }
@@ -2432,8 +2450,7 @@ abstract class GenBCode extends BCodeTypes {
           !areSameFinals && platform.isMaybeBoxed(l.tpe.typeSymbol) && platform.isMaybeBoxed(r.tpe.typeSymbol)
         }
 
-        assert(!cacheMustUseAnyComparator.contains(key), "duplicate keys on cacheMustUseAnyComparator")
-        cacheMustUseAnyComparator.put(key, mustUseAnyComparator)
+        cacheMustUseAnyComparator.offer(mustUseAnyComparator)
         if (mustUseAnyComparator) {
           val equalsMethod = {
               def default = platform.externalEquals
@@ -2452,7 +2469,7 @@ abstract class GenBCode extends BCodeTypes {
             }
           genLoad(l, ObjectReference)
           genLoad(r, ObjectReference)
-          emit(genCallMethod(equalsMethod, Static(false)))
+          genAndCacheCallMethod(equalsMethod, Static(false))
           genCZJUMP(success, failure, NE, BOOL)
         }
         else {
@@ -2483,7 +2500,7 @@ abstract class GenBCode extends BCodeTypes {
 
             markProgramPoint(lNonNull)
             load(eqEqTempLocal)
-            emit(genCallMethod(Object_equals, Dynamic))
+            genAndCacheCallMethod(Object_equals, Dynamic)
             genCZJUMP(success, failure, NE, BOOL)
           }
         }
