@@ -371,6 +371,13 @@ abstract class GenBCode extends BCodeTypes {
 
       /* ---------------- caches---------------- */
 
+      private val cacheTimeTravel = new java.util.LinkedList[Object]
+      def memoizing(t: Boolean): Boolean = { cacheTimeTravel.offer(t: java.lang.Boolean); t }
+      def memoizing(t: Int):     Int     = { cacheTimeTravel.offer(t: java.lang.Integer); t }
+      def timeTravel[T <: AnyRef](t: T): T = { cacheTimeTravel.offer(t); t }
+
+      // actually timeTravel is a more general mechanism than the dedicated caches below but their presence avoids re-computing stuff.
+
       private val cacheInternalName = mutable.Map.empty[Symbol, String]
       override def internalName(sym: Symbol): String = {
         cacheInternalName.getOrElseUpdate(sym, super[BCInitGen].internalName(sym))
@@ -445,19 +452,17 @@ abstract class GenBCode extends BCodeTypes {
         cacheLoadModule.getOrElseUpdate(key, genLoadModule(module)).clone(null)
       }
 
-      private val cacheMustUseAnyComparator = new java.util.LinkedList[Boolean]
-
       /** Locals created without a symbol */
-      private var cachedLocals = new java.util.LinkedList[Symbol]
+      private var cacheMkLocals = new java.util.LinkedList[Symbol]
       def makeCachedLocal(tk: BType, name: String): Symbol = {
         val locSym = makeLocal(tk, name)
-        assert(!cachedLocals.contains(locSym), "Attempt to cache twice the same local-var symbol: " + locSym)
-        cachedLocals.offer(locSym)
+        assert(!cacheMkLocals.contains(locSym), "Attempt to cache twice the same local-var symbol: " + locSym)
+        cacheMkLocals.offer(locSym)
 
         locSym
       }
       def takeCachedLocal(tk: BType, name: String): Symbol = {
-        val locSym = cachedLocals.remove
+        val locSym = cacheMkLocals.remove
         val loc = locals(locSym)
         assert(loc.tk == tk && loc.name == name, "makeCachedLocal() and takeCachedLocal() got out of synch.")
 
@@ -475,8 +480,6 @@ abstract class GenBCode extends BCodeTypes {
       }
 
       private var cachedPrimitiveCodes = new java.util.LinkedList[Int]
-
-      private var cacheLiftedConcatStrings = new java.util.LinkedList[List[Tree]] // TODO once traversal by Worker2 is done, assert(queue.isEmpty)
 
       /* ---------------- working structures that should also end up in caches---------------- */
 
@@ -684,7 +687,7 @@ abstract class GenBCode extends BCodeTypes {
       } // end of method genPlainClass()
 
       /**
-       * @must-single-thread
+       * @only-for-pass-1
        */
       private def fabricateStaticInit() {
 
@@ -710,6 +713,9 @@ abstract class GenBCode extends BCodeTypes {
         clinit.visitEnd()
       }
 
+      /**
+       *  @only-for-pass-1
+       */
       def addClassFields(cls: Symbol) {
         /** Non-method term members are fields, except for module members. Module
          *  members can only happen on .NET (no flatten) for inner traits. There,
@@ -744,6 +750,9 @@ abstract class GenBCode extends BCodeTypes {
       def emit(i: asm.tree.AbstractInsnNode) { mnode.instructions.add(i) }
       def emit(is: List[asm.tree.AbstractInsnNode]) { for(i <- is) { mnode.instructions.add(i) } }
 
+      /**
+       *  @fit-for-pass-2
+       */
       def emitZeroOf(tk: BType) {
         tk match {
           case BOOL => bc.boolconst(false)
@@ -756,6 +765,9 @@ abstract class GenBCode extends BCodeTypes {
         }
       }
 
+      /**
+       *  @only-for-pass-1
+       */
       def genDefDef(dd: DefDef) {
         // the only method whose implementation is not emitted: getClass()
         if(definitions.isGetClass(dd.symbol)) { return }
@@ -901,7 +913,7 @@ abstract class GenBCode extends BCodeTypes {
       } // end of method genDefDef()
 
       /**
-       *  @must-single-thread
+       *  @only-for-pass-1
        *
        *  TODO document, explain interplay with `fabricateStaticInit()`
        **/
@@ -964,6 +976,7 @@ abstract class GenBCode extends BCodeTypes {
       }
 
       /**
+       *  @skip-during-pass-1
        *  @fit-for-pass-2
        */
       private def emitLocalVarScope(sym: Symbol, start: asm.Label, end: asm.Label, force: Boolean = false) {
@@ -1075,7 +1088,11 @@ abstract class GenBCode extends BCodeTypes {
         resKind
       }
 
-      /** Generate primitive array operations. */
+      /**
+       *  Generate primitive array operations.
+       *
+       *  @fit-for-pass-2
+       */
       def genArrayOp(tree: Tree, code: Int, expectedType: BType): BType = {
         val Apply(Select(arrayObj, _), args) = tree
         val k    = tpeTK(arrayObj)
@@ -1189,6 +1206,9 @@ abstract class GenBCode extends BCodeTypes {
         expectedType
       }
 
+      /**
+       *  @fit-for-pass-2
+       */
       def genLoadIf(tree: If, expectedType: BType): BType = {
         val If(condp, thenp, elsep) = tree
 
@@ -1414,11 +1434,13 @@ abstract class GenBCode extends BCodeTypes {
         }
       }
 
+      /**
+       *  @fit-for-pass-2
+       */
       def genPrimitiveOp(tree: Apply, expectedType: BType): BType = {
         val sym = tree.symbol
         val Apply(fun @ Select(receiver, _), _) = tree
-        val code = scalaPrimitives.getPrimitive(sym, receiver.tpe)
-        cachedPrimitiveCodes.offer(code)
+        val code = memoizing { scalaPrimitives.getPrimitive(sym, receiver.tpe) }
 
         import scalaPrimitives.{isArithmeticOp, isArrayOp, isLogicalOp, isComparisonOp}
 
@@ -1664,6 +1686,9 @@ abstract class GenBCode extends BCodeTypes {
         }
       }
 
+      /**
+       *  @fit-for-pass-2
+       */
       private def genLabelDef(lblDf: LabelDef, expectedType: BType) {
         // duplication of LabelDefs contained in `finally`-clauses is handled when emitting RETURN. No bookkeeping for that required here.
         // no need to call index() over lblDf.params, on first access that magic happens (moreover, no LocalVariableTable entries needed for them).
@@ -1672,6 +1697,9 @@ abstract class GenBCode extends BCodeTypes {
         genLoad(lblDf.rhs, expectedType)
       }
 
+      /**
+       *  @fit-for-pass-2
+       */
       private def genReturn(r: Return) {
         val Return(expr) = r
         val returnedKind = tpeTK(expr)
@@ -1826,10 +1854,12 @@ abstract class GenBCode extends BCodeTypes {
             val MethodNameAndType(mname, mdesc) = asmUnboxTo(boxType)
             bc.invokestatic(BoxesRunTime, mname, mdesc)
 
-          case Apply(fun @ Select(qual, _), args) // TODO time-travel
-          if !methSymbol.isStaticConstructor
-          && isAccessorToStaticField(fun.symbol)
-          && qual.tpe.typeSymbol.orElse(fun.symbol.owner).companionClass != NoSymbol =>
+          case Apply(fun @ Select(qual, _), args)
+          if memoizing(
+            !methSymbol.isStaticConstructor
+            && isAccessorToStaticField(fun.symbol)
+            && qual.tpe.typeSymbol.orElse(fun.symbol.owner).companionClass != NoSymbol
+          ) =>
             // bypass the accessor to the companion object and load the static field directly
             // this bypass is not done:
             // - if the static intializer for the static field itself
@@ -1840,7 +1870,7 @@ abstract class GenBCode extends BCodeTypes {
             val sym = fun.symbol
             generatedType   = symInfoTK(sym.accessed)
 
-            val fieldInsn: asm.tree.FieldInsnNode = { // TODO time-travel
+            val fieldInsn: asm.tree.FieldInsnNode = timeTravel {
               val hostOwner   = qual.tpe.typeSymbol.orElse(sym.owner)
               val hostClass   = hostOwner.companionClass
               val fieldName   = sym.accessed.javaSimpleName.toString
@@ -1876,16 +1906,17 @@ abstract class GenBCode extends BCodeTypes {
           case Apply(fun, args) =>
             val sym = fun.symbol
 
-            if (isLabel(sym)) {  // jump to a label TODO time-travel
+            if (isLabel(sym)) {  // jump to a label
               genLoadLabelArguments(args, labelDef(sym), app.pos)
               bc goTo programPoint(sym)
             } else if (isPrimitive(sym)) { // primitive method call
               generatedType = genPrimitiveOp(app, expectedType)
             } else {  // normal method call
-              val invokeStyle = // TODO time-travel
+              val invokeStyle = timeTravel {
                 if (sym.isStaticMember) Static(false)
                 else if (sym.isPrivate || sym.isClassConstructor) Static(true)
-                else Dynamic;
+                else Dynamic
+              }
 
               if (invokeStyle.hasInstance) {
                 genLoadQualifier(fun)
@@ -1898,7 +1929,7 @@ abstract class GenBCode extends BCodeTypes {
               var targetTypeKind: BType  = null
               fun match {
                 case Select(qual, _) =>
-                  val qualSym = findHostClass(qual.tpe, sym) // TODO time-travel
+                  val qualSym = timeTravel { findHostClass(qual.tpe, sym) }
                   if (qualSym == ArrayClass) { targetTypeKind = tpeTK(qual) }
                   else { hostClass = qualSym }
 
@@ -1929,7 +1960,7 @@ abstract class GenBCode extends BCodeTypes {
         val ArrayValue(tpt @ TypeTree(), elems) = av
 
         val elmKind       = tpeTK(tpt)
-        var generatedType = arrayOf(elmKind) // TODO time-travel
+        var generatedType = timeTravel { arrayOf(elmKind) }
 
         lineNumber(av)
         bc iconst   elems.length
@@ -2059,7 +2090,7 @@ abstract class GenBCode extends BCodeTypes {
       def genLoadLabelArguments(args: List[Tree], lblDef: LabelDef, gotoPos: Position) {
         assert(args forall { a => !a.hasSymbol || a.hasSymbolWhich( s => !s.isLabel) }, "SI-6089 at: " + gotoPos) // SI-6089
 
-        val aps = { // TODO time-travel
+        val aps = timeTravel {
           val params: List[Symbol] = lblDef.params.map(_.symbol)
           assert(args.length == params.length, "Wrong number of arguments in call to label at: " + gotoPos)
 
@@ -2079,7 +2110,7 @@ abstract class GenBCode extends BCodeTypes {
         aps.reverse foreach {
           case (_, param) =>
             // TODO FIXME a "this" param results from tail-call xform. If so, the `else` branch seems perfectly fine. And the `then` branch must be wrong.
-            if (param.name == nme.THIS) // TODO time-travel
+            if ( memoizing { param.name == nme.THIS } )
               mnode.visitVarInsn(asm.Opcodes.ASTORE, 0)
             else
               store(param)
@@ -2180,10 +2211,12 @@ abstract class GenBCode extends BCodeTypes {
         }
       )
 
+      /**
+       *  @fit-for-pass-2
+       */
       def genStringConcat(tree: Tree): BType = {
         lineNumber(tree)
-        val liftedStrs = liftStringConcat(tree) // TODO time-travel
-        cacheLiftedConcatStrings.offer(liftedStrs)
+        val liftedStrs = timeTravel { liftStringConcat(tree) }
 
         liftedStrs match {
 
@@ -2397,6 +2430,8 @@ abstract class GenBCode extends BCodeTypes {
       /**
        * Generate code for conditional expressions.
        * The jump targets success/failure of the test are `then-target` and `else-target` resp.
+       *
+       *  @fit-for-pass-2
        */
       private def genCond(tree: Tree, success: asm.Label, failure: asm.Label) {
 
@@ -2482,11 +2517,10 @@ abstract class GenBCode extends BCodeTypes {
           * comparison might have a run-time type subtype of java.lang.Number or java.lang.Character.
           * When it is statically known that both sides are equal and subtypes of Number of Character,
           * not using the rich equality is possible (their own equals method will do ok.)*/
-        val mustUseAnyComparator: Boolean = {
+        val mustUseAnyComparator: Boolean = memoizing {
           !areSameFinals && platform.isMaybeBoxed(l.tpe.typeSymbol) && platform.isMaybeBoxed(r.tpe.typeSymbol)
         }
 
-        cacheMustUseAnyComparator.offer(mustUseAnyComparator) // TODO time-travel
         if (mustUseAnyComparator) {
           val equalsMethod = {
               def default = platform.externalEquals
