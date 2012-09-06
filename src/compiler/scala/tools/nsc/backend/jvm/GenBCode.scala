@@ -1837,44 +1837,35 @@ abstract class GenBCode extends BCodeTypes {
             // see https://github.com/scala/scala/commit/faa114e2fb6003031efa2cdd56a32a3c44aa71fb
             val sym = fun.symbol
             generatedType   = symInfoTK(sym.accessed)
-            val hostOwner   = qual.tpe.typeSymbol.orElse(sym.owner)
-            val hostClass   = hostOwner.companionClass
-            val fieldName   = sym.accessed.javaSimpleName.toString
-            val staticfield = hostClass.info.findMember(sym.accessed.name, NoFlags, NoFlags, false) orElse {
-              if (!currentRun.compiles(hostOwner)) {
-                // hostOwner was separately compiled -- the static field symbol needs to be recreated in hostClass
-                import Flags._
-                debuglog("recreating sym.accessed.name: " + sym.accessed.name)
-                val objectfield = hostOwner.info.findMember(sym.accessed.name, NoFlags, NoFlags, false)
-                val staticfield = hostClass.newVariable(newTermName(sym.accessed.name.toString), app.pos, STATIC | SYNTHETIC | FINAL) setInfo objectfield.tpe
-                staticfield.addAnnotation(definitions.StaticClass)
-                hostClass.info.decls enter staticfield
-                staticfield
-              } else NoSymbol
+
+            val fieldInsn: asm.tree.FieldInsnNode = { // TODO time-travel
+              val hostOwner   = qual.tpe.typeSymbol.orElse(sym.owner)
+              val hostClass   = hostOwner.companionClass
+              val fieldName   = sym.accessed.javaSimpleName.toString
+              val staticfield = hostClass.info.findMember(sym.accessed.name, NoFlags, NoFlags, false) orElse {
+                if (!currentRun.compiles(hostOwner)) {
+                  // hostOwner was separately compiled -- the static field symbol needs to be recreated in hostClass
+                  import Flags._
+                  debuglog("recreating sym.accessed.name: " + sym.accessed.name)
+                  val objectfield = hostOwner.info.findMember(sym.accessed.name, NoFlags, NoFlags, false)
+                  val staticfield = hostClass.newVariable(newTermName(sym.accessed.name.toString), app.pos, STATIC | SYNTHETIC | FINAL) setInfo objectfield.tpe
+                  staticfield.addAnnotation(definitions.StaticClass)
+                  hostClass.info.decls enter staticfield
+                  staticfield
+                } else NoSymbol
+              }
+              val fieldDescr  = symTpeTK(staticfield).getDescriptor
+              val opc = if (sym.isGetter) asm.Opcodes.GETSTATIC else asm.Opcodes.PUTSTATIC;
+
+              new asm.tree.FieldInsnNode(opc, internalName(hostClass), fieldName, fieldDescr)
             }
-            val fieldDescr  = symTpeTK(staticfield).getDescriptor
+
 
             if (sym.isGetter) {
-              // GETSTATIC `hostClass`.`accessed`
-              emit(
-                // TODO time-travel
-                new asm.tree.FieldInsnNode(asm.Opcodes.GETSTATIC,
-                                           internalName(hostClass),
-                                           fieldName,
-                                           fieldDescr)
-              )
+              emit(fieldInsn) // GETSTATIC `hostClass`.`accessed`
             } else if (sym.isSetter) {
-              // push setter's argument
-              genLoadArguments(args, paramTKs(app))
-              // GETSTATIC `hostClass`.`accessed`
-              emit(
-                // TODO time-travel
-                new asm.tree.FieldInsnNode(asm.Opcodes.PUTSTATIC,
-                                           internalName(hostClass),
-                                           fieldName,
-                                           fieldDescr)
-              )
-              // push false
+              genLoadArguments(args, paramTKs(app)) // push setter's argument
+              emit(fieldInsn) // GETSTATIC `hostClass`.`accessed`
               bc.boolconst(false) // TODO what purpose does this serve ...
             } else {
               assert(false, "supposedly unreachable")
@@ -1890,7 +1881,7 @@ abstract class GenBCode extends BCodeTypes {
               generatedType = genPrimitiveOp(app, expectedType)
             } else {  // normal method call
               val invokeStyle = // TODO time-travel
-                if (isStaticMember(sym)) Static(false)
+                if (sym.isStaticMember) Static(false)
                 else if (sym.isPrivate || sym.isClassConstructor) Static(true)
                 else Dynamic;
 
@@ -1936,7 +1927,7 @@ abstract class GenBCode extends BCodeTypes {
         val ArrayValue(tpt @ TypeTree(), elems) = av
 
         val elmKind       = tpeTK(tpt)
-        var generatedType = arrayOf(elmKind)
+        var generatedType = arrayOf(elmKind) // TODO time-travel
 
         lineNumber(av)
         bc iconst   elems.length
@@ -2014,6 +2005,7 @@ abstract class GenBCode extends BCodeTypes {
         generatedType
       }
 
+      /* in pass-1, no need to update varsInScope */
       def genBlock(tree: Block, expectedType: BType) {
         val Block(stats, expr) = tree
         val savedScope = varsInScope
