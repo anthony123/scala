@@ -469,6 +469,10 @@ abstract class GenBCode extends BCodeTypes {
         emit(cachedCallsites.remove())
       }
 
+      private var cachedPrimitiveCodes = new java.util.LinkedList[Int]
+
+      private var cacheLiftedConcatStrings = new java.util.LinkedList[List[Tree]] // TODO once traversal by Worker2 is done, assert(queue.isEmpty)
+
       /* ---------------- working structures that should also end up in caches---------------- */
 
       // current class
@@ -484,12 +488,13 @@ abstract class GenBCode extends BCodeTypes {
       private var earlyReturnVar: Symbol     = null
       private var shouldEmitCleanup          = false
       // used in connection with cleanups
-      private var returnType: BType       = null
+      private var returnType: BType          = null
       // line numbers
       private var lastEmittedLineNr          = -1
 
       // bookkeeping for program points within a method associated to LabelDefs (other program points aren't tracked here).
       private var locLabel: immutable.Map[ /* LabelDef */ Symbol, asm.Label ] = null
+      // no need to invoke during pipeline-1
       def programPoint(labelSym: Symbol): asm.Label = {
         assert(labelSym.isLabel, "trying to map a non-label symbol to an asm.Label, at: " + labelSym.pos)
         locLabel.getOrElse(labelSym, {
@@ -1088,6 +1093,9 @@ abstract class GenBCode extends BCodeTypes {
         generatedType
       }
 
+      /**
+       *  @fit-for-pass-2
+       */
       def genSynchronized(tree: Apply, expectedType: BType): BType = {
         val Apply(fun, args) = tree
         val monitor = makeCachedLocal(ObjectReference, "monitor")
@@ -1367,7 +1375,11 @@ abstract class GenBCode extends BCodeTypes {
         mnode.visitTryCatchBlock(start, end, handler, excInternalName)
       }
 
-      /** `tmp` (if non-null) is the symbol of the local-var used to preserve the result of the try-body, see `guardResult` */
+      /**
+       *  `tmp` (if non-null) is the symbol of the local-var used to preserve the result of the try-body, see `guardResult`
+       *
+       *  @fit-for-pass-2
+       */
       private def emitFinalizer(finalizer: Tree, tmp: Symbol, isDuplicate: Boolean) {
         var saved: immutable.Map[ /* LabelDef */ Symbol, asm.Label ] = null
         if(isDuplicate) {
@@ -1389,6 +1401,7 @@ abstract class GenBCode extends BCodeTypes {
         val sym = tree.symbol
         val Apply(fun @ Select(receiver, _), _) = tree
         val code = scalaPrimitives.getPrimitive(sym, receiver.tpe)
+        cachedPrimitiveCodes.offer(code)
 
         import scalaPrimitives.{isArithmeticOp, isArrayOp, isLogicalOp, isComparisonOp}
 
@@ -1442,7 +1455,17 @@ abstract class GenBCode extends BCodeTypes {
             /* most of the time, !locals.contains(sym), unless the current activation of genLoad() is being called
                while duplicating a finalizer that contains this ValDef. */
             val Local(tk, _, idx, isSynth) = locals.getOrElseUpdate(sym, makeLocal(sym, symInfoTK(sym)))
-            if (rhs == EmptyTree) { genConstant(getZeroOf(tk)) }
+            if (rhs == EmptyTree) {
+              tk match {
+                case BOOL => bc.boolconst(false)
+                case BYTE | SHORT | CHAR | INT => bc.iconst(0)
+                case LONG   => bc.lconst(0)
+                case FLOAT  => bc.fconst(0)
+                case DOUBLE => bc.dconst(0)
+                case UNIT   => ()
+                case _      => emit(asm.Opcodes.ACONST_NULL)
+              }
+            }
             else { genLoad(rhs, tk) }
             bc.store(idx, tk)
             if(!isSynth) { // there are case <synthetic> ValDef's emitted by patmat
@@ -1796,7 +1819,7 @@ abstract class GenBCode extends BCodeTypes {
             val MethodNameAndType(mname, mdesc) = asmUnboxTo(boxType)
             bc.invokestatic(BoxesRunTime, mname, mdesc)
 
-          case Apply(fun @ Select(qual, _), args)
+          case Apply(fun @ Select(qual, _), args) // TODO time-travel
           if !methSymbol.isStaticConstructor
           && isAccessorToStaticField(fun.symbol)
           && qual.tpe.typeSymbol.orElse(fun.symbol.owner).companionClass != NoSymbol =>
@@ -1829,6 +1852,7 @@ abstract class GenBCode extends BCodeTypes {
             if (sym.isGetter) {
               // GETSTATIC `hostClass`.`accessed`
               emit(
+                // TODO time-travel
                 new asm.tree.FieldInsnNode(asm.Opcodes.GETSTATIC,
                                            internalName(hostClass),
                                            fieldName,
@@ -1839,6 +1863,7 @@ abstract class GenBCode extends BCodeTypes {
               genLoadArguments(args, paramTKs(app))
               // GETSTATIC `hostClass`.`accessed`
               emit(
+                // TODO time-travel
                 new asm.tree.FieldInsnNode(asm.Opcodes.PUTSTATIC,
                                            internalName(hostClass),
                                            fieldName,
@@ -1998,6 +2023,7 @@ abstract class GenBCode extends BCodeTypes {
       }
 
       /**
+       *  @skip-during-pass-1
        *  @fit-for-pass-2
        */
       def adapt(from: BType, to: BType): Unit = {
@@ -2098,6 +2124,7 @@ abstract class GenBCode extends BCodeTypes {
       }
 
       /**
+       *  @skip-during-pass-1
        *  @fit-for-pass-2
        */
       def genConversion(from: BType, to: BType, cast: Boolean) = {
@@ -2109,6 +2136,7 @@ abstract class GenBCode extends BCodeTypes {
       }
 
       /**
+       *  @skip-during-pass-1
        *  @fit-for-pass-2
        */
       def genCast(to: BType, cast: Boolean) {
@@ -2160,7 +2188,10 @@ abstract class GenBCode extends BCodeTypes {
 
       def genStringConcat(tree: Tree): BType = {
         lineNumber(tree)
-        liftStringConcat(tree) match {
+        val liftedStrs = liftStringConcat(tree)
+        cacheLiftedConcatStrings.offer(liftedStrs)
+
+        liftedStrs match {
 
           // Optimization for expressions of the form "" + x.  We can avoid the StringBuilder.
           case List(Literal(Constant("")), arg) =>
@@ -2181,6 +2212,9 @@ abstract class GenBCode extends BCodeTypes {
         StringReference
       }
 
+      /**
+       *  @only-for-pass-1
+       */
       def genCallMethod(method: Symbol, style: InvokeStyle, hostClass0: Symbol = null): List[asm.tree.AbstractInsnNode] = {
 
         val siteSymbol = claszSymbol
@@ -2254,7 +2288,11 @@ abstract class GenBCode extends BCodeTypes {
 
       } // end of genCallMethod()
 
-      /** Generate the scala ## method. */
+      /**
+       *  Generate the scala ## method.
+       *
+       *  @fit-for-pass-2
+       */
       def genScalaHash(tree: Tree): BType = {
         genLoadModule(ScalaRunTimeModule) // TODO why load ScalaRunTimeModule if ## has InvokeStyle of Static(false) ?
         genLoad(tree, ObjectReference)
