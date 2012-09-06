@@ -365,7 +365,7 @@ abstract class GenBCode extends BCodeTypes {
       gen(cunit.body)
     }
 
-    class PlainClassBuilder(cunit: CompilationUnit)
+    final class PlainClassBuilder(cunit: CompilationUnit)
       extends BCInitGen
       with    BCJGenSigGen {
 
@@ -740,9 +740,21 @@ abstract class GenBCode extends BCodeTypes {
 
       /* ---------------- helper utils for generating methods and code ---------------- */
 
-      final def emit(opc: Int) { mnode.visitInsn(opc) }
-      final def emit(i: asm.tree.AbstractInsnNode) { mnode.instructions.add(i) }
-      final def emit(is: List[asm.tree.AbstractInsnNode]) { for(i <- is) { mnode.instructions.add(i) } }
+      def emit(opc: Int) { mnode.visitInsn(opc) }
+      def emit(i: asm.tree.AbstractInsnNode) { mnode.instructions.add(i) }
+      def emit(is: List[asm.tree.AbstractInsnNode]) { for(i <- is) { mnode.instructions.add(i) } }
+
+      def emitZeroOf(tk: BType) {
+        tk match {
+          case BOOL => bc.boolconst(false)
+          case BYTE | SHORT | CHAR | INT => bc.iconst(0)
+          case LONG   => bc.lconst(0)
+          case FLOAT  => bc.fconst(0)
+          case DOUBLE => bc.dconst(0)
+          case UNIT   => ()
+          case _      => emit(asm.Opcodes.ACONST_NULL)
+        }
+      }
 
       def genDefDef(dd: DefDef) {
         // the only method whose implementation is not emitted: getClass()
@@ -1460,17 +1472,7 @@ abstract class GenBCode extends BCodeTypes {
             /* most of the time, !locals.contains(sym), unless the current activation of genLoad() is being called
                while duplicating a finalizer that contains this ValDef. */
             val Local(tk, _, idx, isSynth) = locals.getOrElseUpdate(sym, makeLocal(sym, symInfoTK(sym)))
-            if (rhs == EmptyTree) {
-              tk match {
-                case BOOL => bc.boolconst(false)
-                case BYTE | SHORT | CHAR | INT => bc.iconst(0)
-                case LONG   => bc.lconst(0)
-                case FLOAT  => bc.fconst(0)
-                case DOUBLE => bc.dconst(0)
-                case UNIT   => ()
-                case _      => emit(asm.Opcodes.ACONST_NULL)
-              }
-            }
+            if (rhs == EmptyTree) { emitZeroOf(tk) }
             else { genLoad(rhs, tk) }
             bc.store(idx, tk)
             if(!isSynth) { // there are case <synthetic> ValDef's emitted by patmat
@@ -1564,7 +1566,7 @@ abstract class GenBCode extends BCodeTypes {
           case mtch : Match =>
             generatedType = genMatch(mtch)
 
-          case EmptyTree => if (expectedType != UNIT) { genConstant(getZeroOf(expectedType)) }
+          case EmptyTree => if (expectedType != UNIT) { emitZeroOf(expectedType) }
 
           case _ => abort("Unexpected tree in genLoad: " + tree + "/" + tree.getClass + " at: " + tree.pos)
         }
@@ -2056,16 +2058,19 @@ abstract class GenBCode extends BCodeTypes {
       /** Generate code that loads args into label parameters. */
       def genLoadLabelArguments(args: List[Tree], lblDef: LabelDef, gotoPos: Position) {
         assert(args forall { a => !a.hasSymbol || a.hasSymbolWhich( s => !s.isLabel) }, "SI-6089 at: " + gotoPos) // SI-6089
-        val params: List[Symbol] = lblDef.params.map(_.symbol)
-        assert(args.length == params.length, "Wrong number of arguments in call to label at: " + gotoPos)
 
-            def isTrivial(kv: (Tree, Symbol)) = kv match {
-              case (This(_), p) if p.name == nme.THIS     => true
-              case (arg @ Ident(_), p) if arg.symbol == p => true
-              case _                                      => false
-            }
+        val aps = { // TODO time-travel
+          val params: List[Symbol] = lblDef.params.map(_.symbol)
+          assert(args.length == params.length, "Wrong number of arguments in call to label at: " + gotoPos)
 
-        val aps = ((args zip params) filterNot isTrivial)
+              def isTrivial(kv: (Tree, Symbol)) = kv match {
+                case (This(_), p) if p.name == nme.THIS     => true
+                case (arg @ Ident(_), p) if arg.symbol == p => true
+                case _                                      => false
+              }
+
+          ((args zip params) filterNot isTrivial)
+        }
 
         // first push *all* arguments. This makes sure muliple uses of the same labelDef-var will all denote the (previous) value.
         aps foreach { case (arg, param) => genLoad(arg, locals(param).tk) } // `locals` is known to contain `param` because `genDefDef()` visited `labelDefsAtOrUnder`
@@ -2074,8 +2079,10 @@ abstract class GenBCode extends BCodeTypes {
         aps.reverse foreach {
           case (_, param) =>
             // TODO FIXME a "this" param results from tail-call xform. If so, the `else` branch seems perfectly fine. And the `then` branch must be wrong.
-            if (param.name == nme.THIS) mnode.visitVarInsn(asm.Opcodes.ASTORE, 0)
-            else store(param)
+            if (param.name == nme.THIS) // TODO time-travel
+              mnode.visitVarInsn(asm.Opcodes.ASTORE, 0)
+            else
+              store(param)
         }
 
       }
@@ -2141,20 +2148,6 @@ abstract class GenBCode extends BCodeTypes {
         else     { bc isInstance to }
       }
 
-      def getZeroOf(k: BType): Constant = k match {
-        case UNIT    => Constant(())
-        case BOOL    => Constant(false)
-        case BYTE    => Constant(0: Byte)
-        case SHORT   => Constant(0: Short)
-        case CHAR    => Constant(0: Char)
-        case INT     => Constant(0: Int)
-        case LONG    => Constant(0: Long)
-        case FLOAT   => Constant(0.0f)
-        case DOUBLE  => Constant(0.0d)
-        case _       => Constant(null: Any)
-      }
-
-
       /**
        *  Is the given symbol a primitive operation?
        *
@@ -2189,7 +2182,7 @@ abstract class GenBCode extends BCodeTypes {
 
       def genStringConcat(tree: Tree): BType = {
         lineNumber(tree)
-        val liftedStrs = liftStringConcat(tree)
+        val liftedStrs = liftStringConcat(tree) // TODO time-travel
         cacheLiftedConcatStrings.offer(liftedStrs)
 
         liftedStrs match {
@@ -2305,6 +2298,8 @@ abstract class GenBCode extends BCodeTypes {
       /**
        * Returns a list of trees that each should be concatenated, from left to right.
        * It turns a chained call like "a".+("b").+("c") into a list of arguments.
+       *
+       * @only-for-pass-1
        */
       def liftStringConcat(tree: Tree): List[Tree] = tree match {
         case Apply(fun @ Select(larg, method), rarg) =>
@@ -2340,6 +2335,7 @@ abstract class GenBCode extends BCodeTypes {
       /**
        *  Emit code to compare the two top-most stack values using the 'op' operator.
        *
+       *  @skip-during-pass-1
        *  @fit-for-pass-2
        */
       private def genCJUMP(success: asm.Label, failure: asm.Label, op: TestOp, tk: BType) {
@@ -2365,6 +2361,7 @@ abstract class GenBCode extends BCodeTypes {
       /**
        *  Emits code to compare (and consume) stack-top and zero using the 'op' operator.
        *
+       *  @skip-during-pass-1
        *  @fit-for-pass-2
        */
       private def genCZJUMP(success: asm.Label, failure: asm.Label, op: TestOp, tk: BType) {
@@ -2430,7 +2427,7 @@ abstract class GenBCode extends BCodeTypes {
         tree match {
 
           case Apply(fun, args) if isPrimitive(fun.symbol) =>
-            import scalaPrimitives.{ ZNOT, ZAND, ZOR, EQ, getPrimitive }
+            import scalaPrimitives.{ ZNOT, ZAND, ZOR, EQ }
 
             // lhs and rhs of test
             lazy val Select(lhs, _) = fun
@@ -2447,7 +2444,7 @@ abstract class GenBCode extends BCodeTypes {
                   genCond(rhs, success, failure)
                 }
 
-            getPrimitive(fun.symbol) match {
+            scalaPrimitives.getPrimitive(fun.symbol) match { // getPrimitive(Symbol) is ok during pass-2
               case ZNOT   => genCond(lhs, failure, success)
               case ZAND   => genZandOrZor(and = true)
               case ZOR    => genZandOrZor(and = false)
@@ -2489,7 +2486,7 @@ abstract class GenBCode extends BCodeTypes {
           !areSameFinals && platform.isMaybeBoxed(l.tpe.typeSymbol) && platform.isMaybeBoxed(r.tpe.typeSymbol)
         }
 
-        cacheMustUseAnyComparator.offer(mustUseAnyComparator)
+        cacheMustUseAnyComparator.offer(mustUseAnyComparator) // TODO time-travel
         if (mustUseAnyComparator) {
           val equalsMethod = {
               def default = platform.externalEquals
