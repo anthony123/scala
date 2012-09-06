@@ -85,7 +85,7 @@ import scala.tools.asm
  *
  *    Summing up, the key facts about this phase are:
  *
- *      (i) The three pipelines run in parallel, thus allowing finishing earlier.
+ *      (i) Three pipelines run in parallel, thus allowing finishing earlier.
  *
  *     (ii) Pipelines 1 and 3 are sequential.
  *          In contrast, pipeline-2 uses task-parallelism (where each of the N workers is limited to invoking ASM and BType operations).
@@ -95,7 +95,7 @@ import scala.tools.asm
  *    (iii) Queue-1 connects a single producer (BCodePhase) to a single consumer (Worker-1),
  *          but given they run on different threads, queue-1 has to be concurrent.
  *
- *     (iv) Queue-2 is concurrent because the several concurrent workers of pipeline-2 take items from it.
+ *     (iv) Queue-2 is concurrent because concurrent workers of pipeline-2 take items from it.
  *
  *      (v) Queue-3 is concurrent (it's in fact a priority queue) because those same concurrent workers add items to it.
  *
@@ -417,7 +417,7 @@ abstract class GenBCode extends BCodeTypes {
          * In case genLoadModule() is invoked twice as in the example above, there's no risk of getting different results:
          * as long as we stay within the same method, control-flow in genLoadModule() will take the same path.
          * That's why the following (invalid) assertion was failing: assert(!cacheLoadModule.contains(key))
-         * And that's why `clone()` is needed: to recap, an ASM instruction can be part of a single InsnList.
+         * And that's why `clone()` is needed: to recap, an ASM instruction can be part of a single ASM InsnList.
          */
         cacheLoadModule.getOrElseUpdate(key, genLoadModule(module)).clone(null)
       }
@@ -433,6 +433,23 @@ abstract class GenBCode extends BCodeTypes {
       }
 
       private val cacheMustUseAnyComparator = mutable.Map.empty[Tree, Boolean]
+
+      /** Locals created without a symbol */
+      private var cachedLocals = new java.util.LinkedList[Symbol]
+      def makeCachedLocal(tk: BType, name: String): Symbol = {
+        val locSym = makeLocal(tk, name)
+        assert(!cachedLocals.contains(locSym), "Attempt to cache twice the same local-var symbol: " + locSym)
+        cachedLocals.offer(locSym)
+
+        locSym
+      }
+      def takeCachedLocal(tk: BType, name: String): Symbol = {
+        val locSym = cachedLocals.remove
+        val loc = locals(locSym)
+        assert(loc.tk == tk && loc.name == name, "makeCachedLocal() and takeCachedLocal() got out of synch.")
+
+        locSym
+      }
 
       /* ---------------- working structures that should also end up in caches---------------- */
 
@@ -713,8 +730,8 @@ abstract class GenBCode extends BCodeTypes {
         val isNative = msym.hasAnnotation(definitions.NativeAttr)
         val isAbstractMethod = msym.isDeferred || msym.owner.isInterface
 
-        val params      = if(vparamss.isEmpty) Nil else vparamss.head
-        methSymbol      = msym
+        val params = if(vparamss.isEmpty) Nil else vparamss.head
+        methSymbol = msym
 
         // add method-local vars for params
         nxtIdx = if (msym.isStaticMember) 0 else 1;
@@ -906,6 +923,9 @@ abstract class GenBCode extends BCodeTypes {
 
       }
 
+      /**
+       *  @fit-for-pass-2
+       */
       private def emitLocalVarScope(sym: Symbol, start: asm.Label, end: asm.Label, force: Boolean = false) {
         val Local(tk, name, idx, isSynth) = locals(sym)
         if(force || !isSynth) {
@@ -1052,13 +1072,13 @@ abstract class GenBCode extends BCodeTypes {
 
       def genSynchronized(tree: Apply, expectedType: BType): BType = {
         val Apply(fun, args) = tree
-        val monitor = makeLocal(ObjectReference, "monitor")
+        val monitor = makeCachedLocal(ObjectReference, "monitor")
         val monCleanup = new asm.Label
 
         // if the synchronized block returns a result, store it in a local variable.
         // Just leaving it on the stack is not valid in MSIL (stack is cleaned when leaving try-blocks).
         val hasResult = (expectedType != UNIT)
-        val monitorResult: Symbol = if(hasResult) makeLocal(tpeTK(args.head), "monitorResult") else null;
+        val monitorResult: Symbol = if(hasResult) makeCachedLocal(tpeTK(args.head), "monitorResult") else null;
 
         /* ------ (1) pushing and entering the monitor, also keeping a reference to it in a local var. ------ */
         genLoadQualifier(fun)
@@ -1184,7 +1204,7 @@ abstract class GenBCode extends BCodeTypes {
         // used in the finally-clause reached via fall-through from try-catch, if any.
         val guardResult  = hasFinally && (kind != UNIT) && mayCleanStack(finalizer)
         // please notice `tmp` has type tree.tpe, while `earlyReturnVar` has the method return type. Because those two types can be different, dedicated vars are needed.
-        val tmp          = if(guardResult) makeLocal(tpeTK(tree), "tmp") else null;
+        val tmp          = if(guardResult) makeCachedLocal(tpeTK(tree), "tmp") else null;
         // upon early return from the try-body or one of its EHs (but not the EH-version of the finally-clause) AND hasFinally, a cleanup is needed.
         val finCleanup   = if(hasFinally) new asm.Label else null
 
@@ -1226,7 +1246,7 @@ abstract class GenBCode extends BCodeTypes {
               endHandler = currProgramPoint()
               excType = typeToDrop
 
-            case BoundEH   (patSymbol,      caseBody) =>
+            case BoundEH(patSymbol, caseBody) =>
               // test/files/run/contrib674.scala , a local-var already exists for patSymbol.
               // rather than creating on first-access, we do it right away to emit debug-info for the created local var.
               val Local(patTK, _, patIdx, _) = locals.getOrElse(patSymbol, makeLocal(patSymbol, symInfoTK(patSymbol)))
@@ -1257,7 +1277,7 @@ abstract class GenBCode extends BCodeTypes {
           nopIfNeeded(startTryBody)
           val finalHandler = currProgramPoint() // version of the finally-clause reached via unhandled exception.
           protect(startTryBody, finalHandler, finalHandler, null)
-          val Local(eTK, _, eIdx, _) = locals(makeLocal(ThrowableReference, "exc"))
+          val Local(eTK, _, eIdx, _) = locals(makeCachedLocal(ThrowableReference, "exc"))
           bc.store(eIdx, eTK)
           emitFinalizer(finalizer, null, true)
           bc.load(eIdx, eTK)
@@ -1265,8 +1285,8 @@ abstract class GenBCode extends BCodeTypes {
         }
 
         /* ------ (3.B) Cleanup-version of the finally-clause.
-         *              Reached upon early RETURN from (1) or from one of the EHs in (2)
-         *                     (and only from there, ie the only from program regions bracketed by registerCleanup/unregisterCleanup).
+         *              Reached upon early RETURN from (1) or upon early RETURN from one of the EHs in (2)
+         *                     (and only from there, ie only upon early RETURN from program regions bracketed by registerCleanup/unregisterCleanup).
          *              Protected only by whatever protects the whole try-catch-finally expression.
          * TODO explain what happens upon RETURN contained in (3.B)
          * ------
@@ -1297,7 +1317,11 @@ abstract class GenBCode extends BCodeTypes {
         kind
       } // end of genLoadTry()
 
-      /** if no more pending cleanups, all that remains to do is return. Otherwise jump to the next (outer) pending cleanup. */
+      /**
+       *  If no more pending cleanups, all that remains to do is return. Otherwise jump to the next (outer) pending cleanup.
+       *
+       *  @fit-for-pass-2
+       */
       private def pendingCleanups() {
         cleanups match {
           case Nil =>
@@ -1314,6 +1338,9 @@ abstract class GenBCode extends BCodeTypes {
         }
       }
 
+      /**
+       *  @fit-for-pass-2
+       */
       private def protect(start: asm.Label, end: asm.Label, handler: asm.Label, excType: BType) {
         val excInternalName: String =
           if (excType == null) null
@@ -1617,7 +1644,7 @@ abstract class GenBCode extends BCodeTypes {
               } else {
                 // regarding return value, the protocol is: in place of a `return-stmt`, a sequence of `adapt, store, jump` are inserted.
                 if(earlyReturnVar == null) {
-                  earlyReturnVar = makeLocal(returnType, "earlyReturnVar")
+                  earlyReturnVar = makeCachedLocal(returnType, "earlyReturnVar")
                 }
                 store(earlyReturnVar)
               }
@@ -1736,7 +1763,7 @@ abstract class GenBCode extends BCodeTypes {
               // we store this boxed value to a local, even if not really needed.
               // boxing optimization might use it, and dead code elimination will
               // take care of unnecessary stores
-              val loc1 = makeLocal(nativeKind, "boxed")
+              val loc1 = makeCachedLocal(nativeKind, "boxed")
               store(loc1)
               load(loc1)
             }
@@ -2439,7 +2466,7 @@ abstract class GenBCode extends BCodeTypes {
             genCZJUMP(success, failure, EQ, ObjectReference)
           } else {
             // l == r -> if (l eq null) r eq null else l.equals(r)
-            val eqEqTempLocal = makeLocal(AnyRefReference, nme.EQEQ_LOCAL_VAR)
+            val eqEqTempLocal = makeCachedLocal(AnyRefReference, nme.EQEQ_LOCAL_VAR)
             val lNull    = new asm.Label
             val lNonNull = new asm.Label
 
