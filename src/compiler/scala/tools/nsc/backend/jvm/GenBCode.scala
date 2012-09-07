@@ -432,6 +432,11 @@ abstract class GenBCode extends BCodeTypes {
         cacheIsLabel.getOrElseUpdate(sym, sym.isLabel)
       }
 
+      private val cacheIsModule = mutable.Map.empty[Symbol, Boolean]
+      def isModule(sym: Symbol): Boolean = {
+        cacheIsModule.getOrElseUpdate(sym, sym.isModule)
+      }
+
       private val cacheLoadModule = mutable.Map.empty[Tree, asm.tree.AbstractInsnNode]
       def insnLoadModule(key: Tree, module: Symbol): asm.tree.AbstractInsnNode = {
         /* Any Tree-keyed map is prone to an entry being replaced,
@@ -461,7 +466,7 @@ abstract class GenBCode extends BCodeTypes {
 
         locSym
       }
-      def takeCachedLocal(tk: BType, name: String): Symbol = {
+      def takeCachedMkLocal(tk: BType, name: String): Symbol = {
         val locSym = cacheMkLocals.remove
         val loc = locals(locSym)
         assert(loc.tk == tk && loc.name == name, "makeCachedLocal() and takeCachedLocal() got out of synch.")
@@ -1545,10 +1550,10 @@ abstract class GenBCode extends BCodeTypes {
           case Select(qualifier, selector) =>
             val sym = tree.symbol
             generatedType = symInfoTK(sym)
-            val hostClass = findHostClass(qualifier.tpe, sym)
+            val hostClass = timeTravel { findHostClass(qualifier.tpe, sym) }
             log(s"Host class of $sym with qual $qualifier (${qualifier.tpe}) is $hostClass")
 
-            if (sym.isModule)             { genLoadModule(tree) }
+            if (isModule(sym))             { genLoadModule(tree) } // TODO time-travel
             else if (isStaticMember(sym)) { fieldLoad(sym, hostClass) }
             else {
               genLoadQualifier(tree)
@@ -1559,7 +1564,7 @@ abstract class GenBCode extends BCodeTypes {
             val sym = tree.symbol
             if (!sym.isPackage) {
               val tk = symInfoTK(sym)
-              if (sym.isModule) { genLoadModule(tree) }
+              if (isModule(sym)) { genLoadModule(tree) }
               else { load(sym) }
               generatedType = tk
             }
@@ -1663,7 +1668,7 @@ abstract class GenBCode extends BCodeTypes {
           case NullTag    => emit(asm.Opcodes.ACONST_NULL)
 
           case ClazzTag   =>
-            val toPush: BType = {
+            val toPush: BType = timeTravel {
               val kind = toTypeKind(const.typeValue)
               if (kind.isValueType) classLiteral(kind)
               else kind;
@@ -1671,16 +1676,19 @@ abstract class GenBCode extends BCodeTypes {
             mnode.visitLdcInsn(toPush.toASMType)
 
           case EnumTag   =>
-            val sym       = const.symbolValue
-            val ownerName = internalName(sym.owner)
-            val fieldName = sym.javaSimpleName.toString
-            val fieldDesc = toTypeKind(sym.tpe.underlying).getDescriptor
-            mnode.visitFieldInsn(
-              asm.Opcodes.GETSTATIC,
-              ownerName,
-              fieldName,
-              fieldDesc
-            )
+            val fieldInsn = timeTravel {
+              val sym       = const.symbolValue
+              val ownerName = internalName(sym.owner)
+              val fieldName = sym.javaSimpleName.toString
+              val fieldDesc = toTypeKind(sym.tpe.underlying).getDescriptor
+              new asm.tree.FieldInsnNode(
+                asm.Opcodes.GETSTATIC,
+                ownerName,
+                fieldName,
+                fieldDesc
+              )
+            }
+            emit(fieldInsn)
 
           case _ => abort("Unknown constant value: " + const)
         }
@@ -1918,43 +1926,48 @@ abstract class GenBCode extends BCodeTypes {
             } else if (isPrimitive(sym)) { // primitive method call
               generatedType = genPrimitiveOp(app, expectedType)
             } else {  // normal method call
-              val invokeStyle = timeTravel {
-                if (sym.isStaticMember) Static(false)
-                else if (sym.isPrivate || sym.isClassConstructor) Static(true)
-                else Dynamic
-              }
 
-              if (invokeStyle.hasInstance) {
-                genLoadQualifier(fun)
-              }
+                  def genNormalMethodCall(): BType = {
+                    val invokeStyle = timeTravel {
+                      if (sym.isStaticMember) Static(false)
+                      else if (sym.isPrivate || sym.isClassConstructor) Static(true)
+                      else Dynamic
+                    }
 
-              genLoadArguments(args, paramTKs(app))
+                    if (invokeStyle.hasInstance) {
+                      genLoadQualifier(fun)
+                    }
 
-              // In "a couple cases", squirrel away a extra information (hostClass, targetTypeKind). TODO Document what "in a couple cases" refers to.
-              var hostClass:      Symbol = null
-              var targetTypeKind: BType  = null
-              fun match {
-                case Select(qual, _) =>
-                  val qualSym = timeTravel { findHostClass(qual.tpe, sym) }
-                  if (qualSym == ArrayClass) { targetTypeKind = tpeTK(qual) }
-                  else { hostClass = qualSym }
+                    genLoadArguments(args, paramTKs(app))
 
-                  log(
-                    if (qualSym == ArrayClass) "Stored target type kind " + targetTypeKind + " for " + sym.fullName
-                    else s"Set more precise host class for ${sym.fullName} hostClass: $qualSym"
-                  )
-                case _ =>
-              }
-              if((targetTypeKind != null) && (sym == definitions.Array_clone) && invokeStyle.isDynamic) {
-                val target: String = targetTypeKind.getInternalName
-                bc.invokevirtual(target, "clone", mdesc_arrayClone)
-              }
-              else {
-                genAndCacheCallMethod(sym, invokeStyle, hostClass)
-              }
+                    // In "a couple cases", squirrel away a extra information (hostClass, targetTypeKind). TODO Document what "in a couple cases" refers to.
+                    var hostClass:      Symbol = null
+                    var targetTypeKind: BType  = null
+                    fun match {
+                      case Select(qual, _) =>
+                        val qualSym = timeTravel { findHostClass(qual.tpe, sym) }
+                        if (qualSym == ArrayClass) { targetTypeKind = tpeTK(qual) }
+                        else { hostClass = qualSym }
 
-              // TODO if (sym == ctx1.method.symbol) { ctx1.method.recursive = true }
-              generatedType = symInfoResultTK(sym); // originally `if (sym.isClassConstructor) ...` ie originally isConstructor was ignored (unlike what symInfoResultTK does)
+                        log(
+                          if (qualSym == ArrayClass) "Stored target type kind " + targetTypeKind + " for " + sym.fullName
+                          else s"Set more precise host class for ${sym.fullName} hostClass: $qualSym"
+                        )
+                      case _ =>
+                    }
+                    if((targetTypeKind != null) && (sym == definitions.Array_clone) && invokeStyle.isDynamic) {
+                      val target: String = targetTypeKind.getInternalName
+                      bc.invokevirtual(target, "clone", mdesc_arrayClone)
+                    }
+                    else {
+                      genAndCacheCallMethod(sym, invokeStyle, hostClass)
+                    }
+
+                    // TODO if (sym == ctx1.method.symbol) { ctx1.method.recursive = true }
+                    symInfoResultTK(sym); // originally `if (sym.isClassConstructor) ...` ie originally isConstructor was ignored (unlike what symInfoResultTK does)
+                  }
+
+              generatedType = genNormalMethodCall()
             }
 
         }
