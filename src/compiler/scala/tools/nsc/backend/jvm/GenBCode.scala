@@ -442,6 +442,11 @@ abstract class GenBCode extends BCodeTypes {
         cacheIsPackage.getOrElseUpdate(sym, sym.isPackage)
       }
 
+      private val cacheIsGetter = mutable.Map.empty[Symbol, Boolean]
+      def isGetter(sym: Symbol): Boolean = {
+        cacheIsGetter.getOrElseUpdate(sym, sym.isGetter)
+      }
+
       private val cacheLoadModule = mutable.Map.empty[Tree, asm.tree.AbstractInsnNode]
       def insnLoadModule(key: Tree, module: Symbol): asm.tree.AbstractInsnNode = {
         /* Any Tree-keyed map is prone to an entry being replaced,
@@ -471,7 +476,7 @@ abstract class GenBCode extends BCodeTypes {
 
         locSym
       }
-      def takeCachedMkLocal(tk: BType, name: String): Symbol = {
+      def takeCachedLocal(tk: BType, name: String): Symbol = {
         val locSym = cacheMkLocals.remove
         val loc = locals(locSym)
         assert(loc.tk == tk && loc.name == name, "makeCachedLocal() and takeCachedLocal() got out of synch.")
@@ -642,6 +647,8 @@ abstract class GenBCode extends BCodeTypes {
 
       /** If the selector type has a member with the right name,
        *  it is the host class; otherwise the symbol's owner.
+       *
+       *  @only-for-pass-1
        */
       def findHostClass(selector: Type, sym: Symbol) = selector member sym.name match {
         case NoSymbol   => log(s"Rejecting $selector as host class for $sym") ; sym.owner
@@ -1493,7 +1500,11 @@ abstract class GenBCode extends BCodeTypes {
         )
       }
 
-      /** Generate code for trees that produce values on the stack */
+      /**
+       *  Generate code for trees that produce values on the stack
+       *
+       *  @fir-for-pass-2
+       */
       def genLoad(tree: Tree, expectedType: BType) {
         var generatedType = expectedType
 
@@ -1748,6 +1759,9 @@ abstract class GenBCode extends BCodeTypes {
 
       } // end of genReturn()
 
+      /**
+       *  @fit-for-pass-2
+       */
       private def genApply(app: Apply, expectedType: BType): BType = {
         var generatedType = expectedType
         lineNumber(app)
@@ -1755,6 +1769,9 @@ abstract class GenBCode extends BCodeTypes {
 
           case Apply(TypeApply(fun, targs), _) =>
 
+                /**
+                 *  @fit-for-pass-2
+                 */
                 def genTypeApply(): BType = {
                   val sym = fun.symbol
                   val cast = sym match {
@@ -1891,7 +1908,7 @@ abstract class GenBCode extends BCodeTypes {
             // see https://github.com/scala/scala/commit/5a8dfad583b825158cf0abdae5d73a4a7f8cd997
             // see https://github.com/scala/scala/commit/faa114e2fb6003031efa2cdd56a32a3c44aa71fb
             val sym = fun.symbol
-            generatedType   = symInfoTK(sym.accessed)
+            generatedType = symInfoTK(sym.accessed)
 
             val fieldInsn: asm.tree.FieldInsnNode = timeTravel {
               val hostOwner   = qual.tpe.typeSymbol.orElse(sym.owner)
@@ -1916,14 +1933,13 @@ abstract class GenBCode extends BCodeTypes {
             }
 
 
-            if (sym.isGetter) {
+            if (isGetter(sym)) {
               emit(fieldInsn) // GETSTATIC `hostClass`.`accessed`
-            } else if (sym.isSetter) {
+            } else {
+              assert(sym.isSetter, "Neither getter nor setter when emitting (GET/PUT)-STATIC bytecode instruction.")
               genLoadArguments(args, paramTKs(app)) // push setter's argument
               emit(fieldInsn) // GETSTATIC `hostClass`.`accessed`
               bc.boolconst(false) // TODO what purpose does this serve ...
-            } else {
-              assert(false, "supposedly unreachable")
             }
 
           case Apply(fun, args) =>
@@ -1936,6 +1952,9 @@ abstract class GenBCode extends BCodeTypes {
               generatedType = genPrimitiveOp(app, expectedType)
             } else {  // normal method call
 
+                  /**
+                   *  @fit-for-pass-2
+                   */
                   def genNormalMethodCall(): BType = {
                     val invokeStyle = timeTravel {
                       if (sym.isStaticMember) Static(false)
@@ -1954,7 +1973,7 @@ abstract class GenBCode extends BCodeTypes {
                     var targetTypeKind: BType  = null
                     fun match {
                       case Select(qual, _) =>
-                        val qualSym = timeTravel { findHostClass(qual.tpe, sym) }
+                        val qualSym = timeTravel   { findHostClass(qual.tpe, sym) }
                         if (qualSym == ArrayClass) { targetTypeKind = tpeTK(qual) }
                         else { hostClass = qualSym }
 
@@ -2128,7 +2147,11 @@ abstract class GenBCode extends BCodeTypes {
         }
       }
 
-      /** Generate code that loads args into label parameters. */
+      /**
+       *  Generate code that loads args into label parameters.
+       *
+       *  @fit-for-pass-2
+       */
       def genLoadLabelArguments(args: List[Tree], lblDef: LabelDef, gotoPos: Position) {
         assert(args forall { a => !a.hasSymbol || a.hasSymbolWhich( s => !s.isLabel) }, "SI-6089 at: " + gotoPos) // SI-6089
 
