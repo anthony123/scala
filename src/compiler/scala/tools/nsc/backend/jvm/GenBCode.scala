@@ -1630,22 +1630,22 @@ abstract class GenBCode extends BCodeTypes {
       // ---------------- field load and store ----------------
 
       /**
-       * @must-single-thread
+       *  @fit-for-pass-2
        **/
       def fieldLoad( field: Symbol, hostClass: Symbol = null) {
-        fieldOp(field, isLoad = true,  hostClass)
+        emit(fieldOp(field, isLoad = true,  hostClass))
       }
       /**
-       * @must-single-thread
+       *  @fit-for-pass-2
        **/
-      final def fieldStore(field: Symbol, hostClass: Symbol = null) {
-        fieldOp(field, isLoad = false, hostClass)
+      def fieldStore(field: Symbol, hostClass: Symbol = null) {
+        emit(fieldOp(field, isLoad = false, hostClass))
       }
 
       /**
-       * @must-single-thread
+       *  @fit-for-pass-2 (notice the `timeTravel()` invocation.
        **/
-      private def fieldOp(field: Symbol, isLoad: Boolean, hostClass: Symbol = null) {
+      private def fieldOp(field: Symbol, isLoad: Boolean, hostClass: Symbol = null): asm.tree.FieldInsnNode = timeTravel {
         // LOAD_FIELD.hostClass , CALL_METHOD.hostClass , and #4283
         val owner      =
           if(hostClass == null) internalName(field.owner)
@@ -1656,8 +1656,7 @@ abstract class GenBCode extends BCodeTypes {
         val opc =
           if(isLoad) { if (isStatic) asm.Opcodes.GETSTATIC else asm.Opcodes.GETFIELD }
           else       { if (isStatic) asm.Opcodes.PUTSTATIC else asm.Opcodes.PUTFIELD }
-        mnode.visitFieldInsn(opc, owner, fieldJName, fieldDescr)
-
+        new asm.tree.FieldInsnNode(opc, owner, fieldJName, fieldDescr)
       }
 
       // ---------------- emitting constant values ----------------
