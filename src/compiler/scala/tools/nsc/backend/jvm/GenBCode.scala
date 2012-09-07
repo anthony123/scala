@@ -1737,40 +1737,46 @@ abstract class GenBCode extends BCodeTypes {
         app match {
 
           case Apply(TypeApply(fun, targs), _) =>
-            val sym = fun.symbol
-            val cast = sym match {
-              case Object_isInstanceOf  => false
-              case Object_asInstanceOf  => true
-              case _                    => abort("Unexpected type application " + fun + "[sym: " + sym.fullName + "]" + " in: " + app)
-            }
 
-            val Select(obj, _) = fun
-            val l = tpeTK(obj)
-            val r = tpeTK(targs.head)
-            genLoadQualifier(fun)
+                def genTypeApply(): BType = {
+                  val sym = fun.symbol
+                  val cast = sym match {
+                    case Object_isInstanceOf  => false
+                    case Object_asInstanceOf  => true
+                    case _                    => abort("Unexpected type application " + fun + "[sym: " + sym.fullName + "]" + " in: " + app)
+                  }
 
-            if (l.isValueType && r.isValueType)
-              genConversion(l, r, cast)
-            else if (l.isValueType) {
-              bc drop l
-              if (cast) {
-                mnode.visitTypeInsn(asm.Opcodes.NEW, classCastExceptionType.getInternalName)
-                bc dup ObjectReference
-                emit(asm.Opcodes.ATHROW)
-              } else {
-                bc boolconst false
-              }
-            }
-            else if (r.isValueType && cast) {
-              assert(false, "Erasure should have added an unboxing operation to prevent this cast. Tree: " + app)
-            }
-            else if (r.isValueType) {
-              bc isInstance classLiteral(r)
-            }
-            else {
-              genCast(r, cast)
-            }
-            generatedType = if (cast) r else BOOL;
+                  val Select(obj, _) = fun
+                  val l = tpeTK(obj)
+                  val r = tpeTK(targs.head)
+                  genLoadQualifier(fun)
+
+                  if (l.isValueType && r.isValueType)
+                    genConversion(l, r, cast)
+                  else if (l.isValueType) {
+                    bc drop l
+                    if (cast) {
+                      mnode.visitTypeInsn(asm.Opcodes.NEW, classCastExceptionType.getInternalName)
+                      bc dup ObjectReference
+                      emit(asm.Opcodes.ATHROW)
+                    } else {
+                      bc boolconst false
+                    }
+                  }
+                  else if (r.isValueType && cast) {
+                    assert(false, "Erasure should have added an unboxing operation to prevent this cast. Tree: " + app)
+                  }
+                  else if (r.isValueType) {
+                    bc isInstance classLiteral(r)
+                  }
+                  else {
+                    genCast(r, cast)
+                  }
+
+                  if (cast) r else BOOL;
+                }
+
+            generatedType = genTypeApply()
 
           // 'super' call: Note: since constructors are supposed to
           // return an instance of what they construct, we have to take
