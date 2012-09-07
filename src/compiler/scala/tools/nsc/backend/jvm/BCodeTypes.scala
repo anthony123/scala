@@ -3089,9 +3089,6 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
     val MIN_SWITCH_DENSITY = 0.7
 
-    // val StringBuilderClassName = definitions.StringBuilderClass.javaBinaryName.toString
-    val BoxesRunTime = "scala/runtime/BoxesRunTime"
-    val mdesc_arrayClone  = "()Ljava/lang/Object;"
     val tdesc_long        = BType.LONG_TYPE.getDescriptor // ie. "J"
 
     /**

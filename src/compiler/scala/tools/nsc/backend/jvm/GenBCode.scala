@@ -365,6 +365,27 @@ abstract class GenBCode extends BCodeTypes {
       gen(cunit.body)
     }
 
+    abstract class Cleanup(val value: AnyRef) {
+      def contains(x: AnyRef) = value == x
+    }
+    case class MonitorRelease(v: Symbol) extends Cleanup(v) { }
+    case class Finalizer(f: Tree) extends Cleanup (f) { }
+
+    case class Local(tk: BType, name: String, idx: Int, isSynth: Boolean)
+
+    trait EHClause
+    case class NamelessEH(typeToDrop: BType,  caseBody: Tree) extends EHClause
+    case class BoundEH    (patSymbol: Symbol, caseBody: Tree) extends EHClause
+
+    case class MethodPack(
+      mnode:              asm.tree.MethodNode,
+      locals:             collection.Map[Symbol, Local],
+      labelDefsAtOrUnder: collection.Map[Tree, List[LabelDef]],
+      labelDef:           collection.Map[Symbol, LabelDef],
+      earlyReturnVar:     Symbol,
+      returnType:         BType
+    )
+
     final class PlainClassBuilder(cunit: CompilationUnit)
       extends BCInitGen
       with    BCJGenSigGen {
@@ -494,7 +515,7 @@ abstract class GenBCode extends BCodeTypes {
         emit(cachedCallsites.remove())
       }
 
-      private var cachedPrimitiveCodes = new java.util.LinkedList[Int]
+      val methodPacks = new java.util.LinkedList[MethodPack]
 
       /* ---------------- working structures that should also end up in caches---------------- */
 
@@ -541,7 +562,7 @@ abstract class GenBCode extends BCodeTypes {
       }
 
       // bookkeeping for method-local vars and params
-      private val locals = mutable.Map.empty[Symbol, Local] // (local-or-param-sym -> Local(TypeKind, name, idx))
+      private var locals: mutable.Map[Symbol, Local] = null // (local-or-param-sym -> Local(TypeKind, name, idx))
       private var nxtIdx = -1 // next available index for local-var
       /** Make a fresh local variable, ensuring a unique name.
        *  The invoker must make sure inner classes are tracked for the sym's tpe. */
@@ -615,7 +636,7 @@ abstract class GenBCode extends BCodeTypes {
 
       // on entering a method
       private def resetMethodBookkeeping(dd: DefDef) {
-        locals.clear()
+        locals = mutable.Map.empty[Symbol, Local]
         locLabel = immutable.Map.empty[ /* LabelDef */ Symbol, asm.Label ]
         // populate labelDefsAtOrUnder
         val ldf = new LabelDefsFinder
@@ -696,7 +717,7 @@ abstract class GenBCode extends BCodeTypes {
         if(optSerial.isDefined) { addSerialVUID(optSerial.get, cnode)}
 
         addClassFields(claszSymbol)
-        gen(cd.impl)
+        gen(cd.impl) // during pass-2, drain queue of DefDefs instead.
         addInnerClassesASM(claszSymbol, cnode)
 
         assert(cd.symbol == claszSymbol, "Someone messed up BCodePhase.claszSymbol during genPlainClass().")
@@ -768,7 +789,7 @@ abstract class GenBCode extends BCodeTypes {
       def emit(is: List[asm.tree.AbstractInsnNode]) { for(i <- is) { mnode.instructions.add(i) } }
 
       /**
-       *  @fit-for-pass-2
+       *  @runs-in-pass-2-only
        */
       def emitZeroOf(tk: BType) {
         tk match {
@@ -872,55 +893,69 @@ abstract class GenBCode extends BCodeTypes {
             emitBodyOfStaticAccessor()
           } else {
             // normal method body
-            val veryFirstProgramPoint = currProgramPoint()
-            genLoad(rhs, returnType)
 
-            rhs match {
-              case Block(_, Return(_)) => ()
-              case Return(_) => ()
-              case EmptyTree =>
-                globalError("Concrete method has no definition: " + dd + (
-                  if (settings.debug.value) "(found: " + msym.owner.info.decls.toList.mkString(", ") + ")"
-                  else "")
-                )
-              case _ =>
-                bc emitRETURN returnType
-            }
-            if(emitVars) {
-              // add entries to LocalVariableTable JVM attribute
-              val onePastLastProgramPoint = currProgramPoint()
-              val hasStaticBitSet = ((flags & asm.Opcodes.ACC_STATIC) != 0)
-              if (!hasStaticBitSet) {
-                mnode.visitLocalVariable(
-                  "this",
-                  "L" + thisName + ";",
-                  null,
-                  veryFirstProgramPoint,
-                  onePastLastProgramPoint,
-                  0
-                )
-              }
-              for (p <- params) { emitLocalVarScope(p.symbol, veryFirstProgramPoint, onePastLastProgramPoint, force = true) }
-            }
+                def emitNormalMethodBody() {
 
-            if(methSymbol.isStaticConstructor) {
-              // splice a few instructions before each RETURN instruction.
-              val beforeReturns = insnsToAppendToStaticCtor()
-              if(beforeReturns.nonEmpty) {
-                // collect all return instructions
-                var rets: List[asm.tree.AbstractInsnNode] = Nil
-                val iter = mnode.instructions.iterator()
-                while(iter.hasNext) {
-                  val i = iter.next()
-                  if(i.getOpcode() == asm.Opcodes.RETURN) { rets ::= i  }
+                  val veryFirstProgramPoint = currProgramPoint()
+                  genLoad(rhs, returnType)
+
+                  rhs match {
+                    case Block(_, Return(_)) => ()
+                    case Return(_) => ()
+                    case EmptyTree =>
+                      globalError("Concrete method has no definition: " + dd + (
+                        if (settings.debug.value) "(found: " + msym.owner.info.decls.toList.mkString(", ") + ")"
+                        else "")
+                      )
+                    case _ =>
+                      bc emitRETURN returnType
+                  }
+                  if(emitVars) { // only-for-pass-2
+                    // add entries to LocalVariableTable JVM attribute
+                    val onePastLastProgramPoint = currProgramPoint()
+                    val hasStaticBitSet = ((flags & asm.Opcodes.ACC_STATIC) != 0)
+                    if (!hasStaticBitSet) {
+                      mnode.visitLocalVariable(
+                        "this",
+                        "L" + thisName + ";",
+                        null,
+                        veryFirstProgramPoint,
+                        onePastLastProgramPoint,
+                        0
+                      )
+                    }
+                    for (p <- params) { emitLocalVarScope(p.symbol, veryFirstProgramPoint, onePastLastProgramPoint, force = true) }
+                  }
+
+                  if( memoizing(methSymbol.isStaticConstructor) ) {
+                    // splice a few instructions before each RETURN instruction.
+                    val beforeReturns = timeTravel { insnsToAppendToStaticCtor() }
+                    if(beforeReturns.nonEmpty) {
+                      // collect all return instructions
+                      var rets: List[asm.tree.AbstractInsnNode] = Nil
+                      val iter = mnode.instructions.iterator()
+                      while(iter.hasNext) {
+                        val i = iter.next()
+                        if(i.getOpcode() == asm.Opcodes.RETURN) { rets ::= i  }
+                      }
+                      assert(!rets.isEmpty, "can't splice a few instructions before each RETURN in a static constructor, because no RETURNs were found.")
+                      // insert a few instructions for initialization before each return instruction
+                      for(r <- rets; i <- beforeReturns) {
+                        mnode.instructions.insertBefore(r, i.clone(null))
+                      }
+                    }
+                  }
+
+                  methodPacks.offer(MethodPack(
+                    mnode, locals, labelDefsAtOrUnder, labelDef, earlyReturnVar, returnType
+                  ))
+                  mnode  = null
+                  locals = null
+
                 }
-                assert(!rets.isEmpty, "can't splice a few instructions before each RETURN in a static constructor, because no RETURNs were found.")
-                // insert a few instructions for initialization before each return instruction
-                for(r <- rets; i <- beforeReturns) {
-                  mnode.instructions.insertBefore(r, i.clone(null))
-                }
-              }
-            }
+
+
+            emitNormalMethodBody()
           }
 
           // Note we don't invoke visitMax, thus there are no FrameNode among mnode.instructions.
@@ -1555,7 +1590,7 @@ abstract class GenBCode extends BCodeTypes {
             assert(tree.symbol == claszSymbol || tree.symbol.isModuleClass,
                    "Trying to access the this of another class: " +
                    "tree.symbol = " + tree.symbol + ", class symbol = " + claszSymbol + " compilation unit:"+ cunit)
-            if (tree.symbol.isModuleClass && tree.symbol != claszSymbol) {
+            if ( memoizing { tree.symbol.isModuleClass && tree.symbol != claszSymbol } ) {
               generatedType = genLoadModule(tree)
             }
             else {
@@ -1645,18 +1680,21 @@ abstract class GenBCode extends BCodeTypes {
       /**
        *  @fit-for-pass-2 (notice the `timeTravel()` invocation.
        **/
-      private def fieldOp(field: Symbol, isLoad: Boolean, hostClass: Symbol = null): asm.tree.FieldInsnNode = timeTravel {
+      private def fieldOp(field: Symbol, isLoad: Boolean, hostClass: Symbol = null): asm.tree.FieldInsnNode = {
         // LOAD_FIELD.hostClass , CALL_METHOD.hostClass , and #4283
-        val owner      =
-          if(hostClass == null) internalName(field.owner)
-          else                  internalName(hostClass)
-        val fieldJName = field.javaSimpleName.toString
-        val fieldDescr = symTpeTK(field).getDescriptor
-        val isStatic   = field.isStaticMember
-        val opc =
-          if(isLoad) { if (isStatic) asm.Opcodes.GETSTATIC else asm.Opcodes.GETFIELD }
-          else       { if (isStatic) asm.Opcodes.PUTSTATIC else asm.Opcodes.PUTFIELD }
-        new asm.tree.FieldInsnNode(opc, owner, fieldJName, fieldDescr)
+        timeTravel {
+          val owner      =
+            if(hostClass == null) internalName(field.owner)
+            else                  internalName(hostClass)
+          val fieldJName = field.javaSimpleName.toString
+          val fieldDescr = symTpeTK(field).getDescriptor
+          val isStatic   = field.isStaticMember
+          val opc =
+            if(isLoad) { if (isStatic) asm.Opcodes.GETSTATIC else asm.Opcodes.GETFIELD }
+            else       { if (isStatic) asm.Opcodes.PUTSTATIC else asm.Opcodes.PUTFIELD }
+
+          new asm.tree.FieldInsnNode(opc, owner, fieldJName, fieldDescr)
+        }
       }
 
       // ---------------- emitting constant values ----------------
@@ -1762,6 +1800,7 @@ abstract class GenBCode extends BCodeTypes {
        *  @fit-for-pass-2
        */
       private def genApply(app: Apply, expectedType: BType): BType = {
+        val BoxesRunTime = "scala/runtime/BoxesRunTime"
         var generatedType = expectedType
         lineNumber(app)
         app match {
@@ -1984,6 +2023,7 @@ abstract class GenBCode extends BCodeTypes {
                     }
                     if((targetTypeKind != null) && (sym == definitions.Array_clone) && invokeStyle.isDynamic) {
                       val target: String = targetTypeKind.getInternalName
+                      val mdesc_arrayClone  = "()Ljava/lang/Object;"
                       bc.invokevirtual(target, "clone", mdesc_arrayClone)
                     }
                     else {
@@ -2267,7 +2307,11 @@ abstract class GenBCode extends BCodeTypes {
         }
       }
 
-      /** The Object => String overload. */
+      /**
+       *  The Object => String overload.
+       *
+       *  @only-for-pass-1
+       */
       private lazy val String_valueOf: Symbol = getMember(StringModule, nme.valueOf) filter (sym =>
         sym.info.paramTypes match {
           case List(pt) => pt.typeSymbol == ObjectClass
@@ -2385,7 +2429,7 @@ abstract class GenBCode extends BCodeTypes {
        *  @fit-for-pass-2
        */
       def genScalaHash(tree: Tree): BType = {
-        genLoadModule(ScalaRunTimeModule) // TODO why load ScalaRunTimeModule if ## has InvokeStyle of Static(false) ?
+        emit( timeTravel { genLoadModule(ScalaRunTimeModule) } ) // TODO why load ScalaRunTimeModule if ## has InvokeStyle of Static(false) ?
         genLoad(tree, ObjectReference)
         genAndCacheCallMethod(hashMethodSym, Static(false))
 
@@ -2571,10 +2615,10 @@ abstract class GenBCode extends BCodeTypes {
        *
        * @param l       left-hand-side  of the '=='
        * @param r       right-hand-side of the '=='
+       *
+       * @fit-for-pass-2
        */
       def genEqEqPrimitive(key: Tree, l: Tree, r: Tree, success: asm.Label, failure: asm.Label) {
-
-        val areSameFinals = l.tpe.isFinalType && r.tpe.isFinalType && (l.tpe =:= r.tpe)
 
         /** True if the equality comparison is between values that require the use of the rich equality
           * comparator (scala.runtime.Comparator.equals). This is the case when either side of the
@@ -2582,6 +2626,8 @@ abstract class GenBCode extends BCodeTypes {
           * When it is statically known that both sides are equal and subtypes of Number of Character,
           * not using the rich equality is possible (their own equals method will do ok.)*/
         val mustUseAnyComparator: Boolean = memoizing {
+          val areSameFinals = l.tpe.isFinalType && r.tpe.isFinalType && (l.tpe =:= r.tpe)
+
           !areSameFinals && platform.isMaybeBoxed(l.tpe.typeSymbol) && platform.isMaybeBoxed(r.tpe.typeSymbol)
         }
 
@@ -2647,23 +2693,6 @@ abstract class GenBCode extends BCodeTypes {
        *
        */
       def mayCleanStack(tree: Tree): Boolean = tree exists { t => t.isInstanceOf[Try] }
-
-      /** @must-single-thread **/
-      def getMaxType(ts: List[Type]): BType = {
-        ts map toTypeKind reduceLeft maxType
-      }
-
-      abstract class Cleanup(val value: AnyRef) {
-        def contains(x: AnyRef) = value == x
-      }
-      case class MonitorRelease(v: Symbol) extends Cleanup(v) { }
-      case class Finalizer(f: Tree) extends Cleanup (f) { }
-
-      case class Local(tk: BType, name: String, idx: Int, isSynth: Boolean)
-
-      trait EHClause
-      case class NamelessEH(typeToDrop: BType,  caseBody: Tree) extends EHClause
-      case class BoundEH    (patSymbol: Symbol, caseBody: Tree) extends EHClause
 
     } // end of class PlainClassBuilder
 
