@@ -437,6 +437,11 @@ abstract class GenBCode extends BCodeTypes {
         cacheIsModule.getOrElseUpdate(sym, sym.isModule)
       }
 
+      private val cacheIsPackage = mutable.Map.empty[Symbol, Boolean]
+      def isPackage(sym: Symbol): Boolean = {
+        cacheIsPackage.getOrElseUpdate(sym, sym.isPackage)
+      }
+
       private val cacheLoadModule = mutable.Map.empty[Tree, asm.tree.AbstractInsnNode]
       def insnLoadModule(key: Tree, module: Symbol): asm.tree.AbstractInsnNode = {
         /* Any Tree-keyed map is prone to an entry being replaced,
@@ -995,6 +1000,8 @@ abstract class GenBCode extends BCodeTypes {
        * Emits code that adds nothing to the operand stack.
        * Two main cases: `tree` is an assignment,
        * otherwise an `adapt()` to UNIT is performed if needed.
+       *
+       * @fit-for-pass-2
        */
       def genStat(tree: Tree) {
         lineNumber(tree)
@@ -1249,7 +1256,11 @@ abstract class GenBCode extends BCodeTypes {
         if(noInstructionEmitted) { emit(asm.Opcodes.NOP) }
       }
 
-      /** TODO documentation */
+      /**
+       *  TODO documentation
+       *
+       *  @fit-for-pass-2
+       */
       def genLoadTry(tree: Try): BType = {
 
         val Try(block, catches, finalizer) = tree
@@ -1270,7 +1281,7 @@ abstract class GenBCode extends BCodeTypes {
         val postHandlers = new asm.Label
         val hasFinally   = (finalizer != EmptyTree)
         // used in the finally-clause reached via fall-through from try-catch, if any.
-        val guardResult  = hasFinally && (kind != UNIT) && mayCleanStack(finalizer)
+        val guardResult  = memoizing { hasFinally && (kind != UNIT) && mayCleanStack(finalizer) }
         // please notice `tmp` has type tree.tpe, while `earlyReturnVar` has the method return type. Because those two types can be different, dedicated vars are needed.
         val tmp          = if(guardResult) makeCachedLocal(tpeTK(tree), "tmp") else null;
         // upon early return from the try-body or one of its EHs (but not the EH-version of the finally-clause) AND hasFinally, a cleanup is needed.
@@ -1553,7 +1564,7 @@ abstract class GenBCode extends BCodeTypes {
             val hostClass = timeTravel { findHostClass(qualifier.tpe, sym) }
             log(s"Host class of $sym with qual $qualifier (${qualifier.tpe}) is $hostClass")
 
-            if (isModule(sym))             { genLoadModule(tree) } // TODO time-travel
+            if (isModule(sym))            { genLoadModule(tree) }
             else if (isStaticMember(sym)) { fieldLoad(sym, hostClass) }
             else {
               genLoadQualifier(tree)
@@ -1562,7 +1573,7 @@ abstract class GenBCode extends BCodeTypes {
 
           case Ident(name) =>
             val sym = tree.symbol
-            if (!sym.isPackage) {
+            if (!isPackage(sym)) {
               val tk = symInfoTK(sym)
               if (isModule(sym)) { genLoadModule(tree) }
               else { load(sym) }
@@ -1610,7 +1621,7 @@ abstract class GenBCode extends BCodeTypes {
       /**
        * @must-single-thread
        **/
-      final def fieldLoad( field: Symbol, hostClass: Symbol = null) {
+      def fieldLoad( field: Symbol, hostClass: Symbol = null) {
         fieldOp(field, isLoad = true,  hostClass)
       }
       /**
@@ -1641,11 +1652,9 @@ abstract class GenBCode extends BCodeTypes {
       // ---------------- emitting constant values ----------------
 
       /**
-       * For const.tag in {ClazzTag, EnumTag}
-       *   @must-single-thread
-       * Otherwise it's safe to call from multiple threads.
+       *   @fit-for-pass-2 (with the help of `timeTravel()` calls for const.tag in {ClazzTag, EnumTag})
        **/
-      final def genConstant(const: Constant) {
+      def genConstant(const: Constant) {
         (const.tag: @switch) match {
 
           case BooleanTag => bc.boolconst(const.booleanValue)
@@ -1975,6 +1984,9 @@ abstract class GenBCode extends BCodeTypes {
         generatedType
       } // end of GenBCode's genApply()
 
+      /**
+       *  @fit-for-pass-2
+       */
       private def genArrayValue(av: ArrayValue): BType = {
         val ArrayValue(tpt @ TypeTree(), elems) = av
 
@@ -2007,7 +2019,10 @@ abstract class GenBCode extends BCodeTypes {
        * On a first pass over the case clauses, we flatten the keys and their targets (the latter represented with asm.Labels).
        * That representation allows JCodeMethodV to emit a lookupswitch or a tableswitch.
        *
-       * On a second pass, we emit the switch blocks, one for each different target. */
+       * On a second pass, we emit the switch blocks, one for each different target.
+       *
+       * @fit-for-pass-2
+       */
       private def genMatch(tree: Match): BType = {
         lineNumber(tree)
         genLoad(tree.selector, INT)
@@ -2057,7 +2072,11 @@ abstract class GenBCode extends BCodeTypes {
         generatedType
       }
 
-      /* in pass-1, no need to update varsInScope */
+      /*
+       * During pass-1, no need to update varsInScope
+       *
+       * @fit-for-pass-2
+       */
       def genBlock(tree: Block, expectedType: BType) {
         val Block(stats, expr) = tree
         val savedScope = varsInScope
@@ -2096,7 +2115,11 @@ abstract class GenBCode extends BCodeTypes {
         }
       }
 
-      /** Emit code to Load the qualifier of `tree` on top of the stack. */
+      /**
+       *  Emit code to Load the qualifier of `tree` on top of the stack.
+       *
+       *  @fit-for-pass-2
+       */
       def genLoadQualifier(tree: Tree) {
         lineNumber(tree)
         tree match {
@@ -2145,11 +2168,11 @@ abstract class GenBCode extends BCodeTypes {
       }
 
       /**
-       *  @just-prune-and-fit-for-pass-2
+       *  @fit-for-pass-2
        */
       def genLoadModule(tree: Tree): BType = {
         // Working around SI-5604.  Rather than failing the compile when we see a package here, check if there's a package object.
-        val module = (
+        val module = timeTravel (
           if (!tree.symbol.isPackageClass) tree.symbol
           else tree.symbol.info.member(nme.PACKAGE) match {
             case NoSymbol => assert(false, "Cannot use package as value: " + tree) ; NoSymbol
