@@ -198,7 +198,9 @@ abstract class GenBCode extends BCodeTypes {
         pc1.genPlainClass(cd)
 
         val pc2 = new PlainClassStep2(
-          pc1.cnode, pc1.thisName, pc1.claszSymbol,
+          pc1.cnode,
+          pc1.thisName,
+          pc1.claszSymbol,
           pc1.cacheTimeTravel,
           pc1.cacheInternalName,
           pc1.cacheMethodType,
@@ -215,17 +217,16 @@ abstract class GenBCode extends BCodeTypes {
           pc1.cacheIsGetter,
           pc1.cacheLoadModule,
           pc1.cacheMkLocals,
-          pc1.cachedCallsites
+          pc1.cachedCallsites,
+          pc1.methodPacks
         )
-
-        pc2.finishPlainClass(pc1.methodPacks)
 
         val plainC: SubItem2Plain = {
           val label = "" + cd.symbol.name
           val outF: _root_.scala.tools.nsc.io.AbstractFile = {
             if(needsOutfileForSymbol) getFile(cd.symbol, pc1.thisName, ".class") else null
           }
-          SubItem2Plain(label, pc1.thisName, pc1.cnode, outF)
+          SubItem2Plain(label, pc1.thisName, pc2, outF)
         }
 
         // -------------- bean info class, if needed --------------
@@ -278,8 +279,9 @@ abstract class GenBCode extends BCodeTypes {
           } else null;
 
         // -------------- "plain" class --------------
+        plain.pc2.finishPlainClass()
         val cw = new CClassWriter(extraProc)
-        plain.cnode.accept(cw)
+        plain.pc2.cnode.accept(cw)
         val plainC =
           SubItem3(plain.label, plain.jclassName, cw.toByteArray, plain.outF)
 
@@ -517,7 +519,6 @@ abstract class GenBCode extends BCodeTypes {
       /** Locals created without a symbol */
       val cacheMkLocals = new java.util.LinkedList[Symbol]
       def makeCachedLocal(tk: BType, name: String): Symbol = {
-        // TODO debug Console.println(s"[1] $name \t $tk")
         val locSym = makeLocal(tk, name)
         assert(!cacheMkLocals.contains(locSym), "Attempt to cache twice the same local-var symbol: " + locSym)
         cacheMkLocals.offer(locSym)
@@ -1984,8 +1985,9 @@ abstract class GenBCode extends BCodeTypes {
       val isGetter:        collection.Map[Symbol, Boolean],
       val cacheLoadModule: collection.Map[Tree,   asm.tree.AbstractInsnNode],
       val cacheMkLocals:   java.util.LinkedList[Symbol],
-      val cachedCallsites: java.util.LinkedList[List[asm.tree.AbstractInsnNode]]
-    ) {
+      val cachedCallsites: java.util.LinkedList[List[asm.tree.AbstractInsnNode]],
+      val methodPacks:     java.util.LinkedList[MethodPack]
+    ) extends PlainClassStep2Iface {
 
       /* ---------------- caches---------------- */
 
@@ -2016,7 +2018,7 @@ abstract class GenBCode extends BCodeTypes {
       var labelDefsAtOrUnder: collection.Map[Tree, List[LabelDef]] = null
       var labelDef          : collection.Map[Symbol, LabelDef] = null // (LabelDef-sym -> LabelDef)
 
-      def finishPlainClass(methodPacks: java.util.LinkedList[MethodPack]) {
+      override def finishPlainClass() {
         while(!methodPacks.isEmpty) {
 
           val mp = methodPacks.remove()

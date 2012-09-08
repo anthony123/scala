@@ -24,6 +24,11 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
   // when compiling the Scala library, some assertions don't hold (e.g., scala.Boolean has null superClass although it's not an interface)
   val isCompilingStdLib = !(settings.sourcepath.isDefault)
 
+  trait PlainClassStep2Iface {
+    val cnode: asm.tree.ClassNode
+    def finishPlainClass()
+  }
+
   // an item of queue-2 (the queue where the typer-dependent pass dumps its intermediate output) contains two of these (for mirror and bean classes).
   case class SubItem2NonPlain(
     label:      String,
@@ -35,7 +40,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
   case class SubItem2Plain(
     label:      String,
     jclassName: String,
-    cnode:      asm.tree.ClassNode,
+    pc2:        PlainClassStep2Iface,
     outF:       _root_.scala.tools.nsc.io.AbstractFile
   )
 
