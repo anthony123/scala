@@ -194,14 +194,14 @@ abstract class GenBCode extends BCodeTypes {
         }
 
         // -------------- "plain" class --------------
-        val pcb = new PlainClassBuilder(cunit)
-        pcb.genPlainClass(cd)
+        val pc1 = new PlainClassStep1(cunit)
+        pc1.genPlainClass(cd)
         val plainC: SubItem2Plain = {
           val label = "" + cd.symbol.name
           val outF: _root_.scala.tools.nsc.io.AbstractFile = {
-            if(needsOutfileForSymbol) getFile(cd.symbol, pcb.thisName, ".class") else null
+            if(needsOutfileForSymbol) getFile(cd.symbol, pc1.thisName, ".class") else null
           }
-          SubItem2Plain(label, pcb.thisName, pcb.cnode, outF)
+          SubItem2Plain(label, pc1.thisName, pc1.cnode, outF)
         }
 
         // -------------- bean info class, if needed --------------
@@ -378,6 +378,9 @@ abstract class GenBCode extends BCodeTypes {
     case class BoundEH    (patSymbol: Symbol, caseBody: Tree) extends EHClause
 
     case class MethodPack(
+      dd:                 DefDef,
+      jMethodName:        String,
+      methSymbol:         Symbol,
       mnode:              asm.tree.MethodNode,
       locals:             collection.Map[Symbol, Local],
       labelDefsAtOrUnder: collection.Map[Tree, List[LabelDef]],
@@ -386,51 +389,51 @@ abstract class GenBCode extends BCodeTypes {
       returnType:         BType
     )
 
-    final class PlainClassBuilder(cunit: CompilationUnit)
+    final class PlainClassStep1(cunit: CompilationUnit)
       extends BCInitGen
       with    BCJGenSigGen {
 
       /* ---------------- caches---------------- */
 
-      private val cacheTimeTravel = new java.util.LinkedList[Object]
-      def memoizing(t: Boolean): Boolean = { cacheTimeTravel.offer(t: java.lang.Boolean); t }
-      def memoizing(t: Int):     Int     = { cacheTimeTravel.offer(t: java.lang.Integer); t }
+      val cacheTimeTravel = new java.util.LinkedList[Object]
+      def memoizing(t: Boolean): Boolean   = { cacheTimeTravel.offer( if(t) java.lang.Boolean.TRUE else java.lang.Boolean.FALSE ); t }
+      def memoizing(t: Int):     Int       = { cacheTimeTravel.offer(t: java.lang.Integer); t }
       def timeTravel[T <: AnyRef](t: T): T = { cacheTimeTravel.offer(t); t }
 
       // actually timeTravel is a more general mechanism than the dedicated caches below but their presence avoids re-computing stuff.
 
-      private val cacheInternalName = mutable.Map.empty[Symbol, String]
+      val cacheInternalName = mutable.Map.empty[Symbol, String]
       override def internalName(sym: Symbol): String = {
         cacheInternalName.getOrElseUpdate(sym, super[BCInitGen].internalName(sym))
       }
 
-      private val cacheMethodType = mutable.Map.empty[Symbol, BType]
+      val cacheMethodType = mutable.Map.empty[Symbol, BType]
       override def asmMethodType(msym: Symbol): BType = {
         cacheMethodType.getOrElseUpdate(msym, super[BCInitGen].asmMethodType(msym))
       }
 
-      private val cacheTpeTK = mutable.Map.empty[Tree, BType]
+      val cacheTpeTK = mutable.Map.empty[Tree, BType]
       def tpeTK(tree: Tree): BType = {
         cacheTpeTK.getOrElseUpdate(tree, toTypeKind(tree.tpe))
       }
 
-      private val cacheSymInfoTK = mutable.Map.empty[Symbol, BType]
+      val cacheSymInfoTK = mutable.Map.empty[Symbol, BType]
       def symInfoTK(sym: Symbol): BType = {
         cacheSymInfoTK.getOrElseUpdate(sym, toTypeKind(sym.info))
       }
 
-      private val cacheSymTpeTK = mutable.Map.empty[Symbol, BType]
+      val cacheSymTpeTK = mutable.Map.empty[Symbol, BType]
       def symTpeTK(sym: Symbol): BType = { // TODO some of its usages (all?) could be fulfilled by `symInfoTK()` instead.
         cacheSymTpeTK.getOrElseUpdate(sym, toTypeKind(sym.tpe))
       }
 
-      private val cacheParamTKs = mutable.Map.empty[Apply, List[BType]]
+      val cacheParamTKs = mutable.Map.empty[Apply, List[BType]]
       def paramTKs(app: Apply): List[BType] = {
         val Apply(fun, _)  = app
         cacheParamTKs.getOrElseUpdate(app, fun.symbol.info.paramTypes map toTypeKind)
       }
 
-      private val cacheSymInfoResultTK = mutable.Map.empty[Symbol, BType]
+      val cacheSymInfoResultTK = mutable.Map.empty[Symbol, BType]
       def symInfoResultTK(sym: Symbol): BType = {
         cacheSymInfoResultTK.getOrElseUpdate(sym,
           if (sym.isClassConstructor || sym.isConstructor) UNIT // TODO What's the difference between isConstructor and isClassConstructor? Can they differ in value?
@@ -438,37 +441,37 @@ abstract class GenBCode extends BCodeTypes {
         )
       }
 
-      private val cacheModuleTK = mutable.Map.empty[Symbol, BType]
+      val cacheModuleTK = mutable.Map.empty[Symbol, BType]
       def moduleTK(module: Symbol): BType = {
         cacheModuleTK.getOrElseUpdate(module, asmClassType(module))
       }
 
-      private val cacheIsStaticMember = mutable.Map.empty[Symbol, Boolean]
+      val cacheIsStaticMember = mutable.Map.empty[Symbol, Boolean]
       def isStaticMember(sym: Symbol): Boolean = {
         cacheIsStaticMember.getOrElseUpdate(sym, sym.isStaticMember)
       }
 
-      private val cacheIsLabel = mutable.Map.empty[Symbol, Boolean]
+      val cacheIsLabel = mutable.Map.empty[Symbol, Boolean]
       def isLabel(sym: Symbol): Boolean = {
         cacheIsLabel.getOrElseUpdate(sym, sym.isLabel)
       }
 
-      private val cacheIsModule = mutable.Map.empty[Symbol, Boolean]
+      val cacheIsModule = mutable.Map.empty[Symbol, Boolean]
       def isModule(sym: Symbol): Boolean = {
         cacheIsModule.getOrElseUpdate(sym, sym.isModule)
       }
 
-      private val cacheIsPackage = mutable.Map.empty[Symbol, Boolean]
+      val cacheIsPackage = mutable.Map.empty[Symbol, Boolean]
       def isPackage(sym: Symbol): Boolean = {
         cacheIsPackage.getOrElseUpdate(sym, sym.isPackage)
       }
 
-      private val cacheIsGetter = mutable.Map.empty[Symbol, Boolean]
+      val cacheIsGetter = mutable.Map.empty[Symbol, Boolean]
       def isGetter(sym: Symbol): Boolean = {
         cacheIsGetter.getOrElseUpdate(sym, sym.isGetter)
       }
 
-      private val cacheLoadModule = mutable.Map.empty[Tree, asm.tree.AbstractInsnNode]
+      val cacheLoadModule = mutable.Map.empty[Tree, asm.tree.AbstractInsnNode]
       def insnLoadModule(key: Tree, module: Symbol): asm.tree.AbstractInsnNode = {
         /* Any Tree-keyed map is prone to an entry being replaced,
          * because it's possible for the same Tree to be visited more than once during a traversal.
@@ -489,7 +492,7 @@ abstract class GenBCode extends BCodeTypes {
       }
 
       /** Locals created without a symbol */
-      private var cacheMkLocals = new java.util.LinkedList[Symbol]
+      val cacheMkLocals = new java.util.LinkedList[Symbol]
       def makeCachedLocal(tk: BType, name: String): Symbol = {
         val locSym = makeLocal(tk, name)
         assert(!cacheMkLocals.contains(locSym), "Attempt to cache twice the same local-var symbol: " + locSym)
@@ -505,7 +508,7 @@ abstract class GenBCode extends BCodeTypes {
         locSym
       }
 
-      private var cachedCallsites = new java.util.LinkedList[List[asm.tree.AbstractInsnNode]]
+      val cachedCallsites = new java.util.LinkedList[List[asm.tree.AbstractInsnNode]]
       private def genAndCacheCallMethod(method: Symbol, style: InvokeStyle, hostClass0: Symbol = null) = {
         val insns = genCallMethod(method, style, hostClass0)
         cachedCallsites.offer(insns)
@@ -522,7 +525,7 @@ abstract class GenBCode extends BCodeTypes {
       // current class
       var cnode: asm.tree.ClassNode  = null
       var thisName: String           = null // the internal name of the class being emitted
-      private var claszSymbol: Symbol        = null
+      var claszSymbol: Symbol        = null
       // current method
       private var mnode: asm.tree.MethodNode = null
       private var jMethodName: String        = null
@@ -663,7 +666,7 @@ abstract class GenBCode extends BCodeTypes {
       def isAccessorToStaticField(msym: Symbol) = { msym.isAccessor && msym.accessed.hasStaticAnnotation } // @must-single-thread
 
       object bc extends JCodeMethodN {
-        override def jmethod = PlainClassBuilder.this.mnode
+        override def jmethod = PlainClassStep1.this.mnode
       }
 
       /** If the selector type has a member with the right name,
@@ -913,7 +916,7 @@ abstract class GenBCode extends BCodeTypes {
                   if(emitVars) { // only-for-pass-2
                     // add entries to LocalVariableTable JVM attribute
                     val onePastLastProgramPoint = currProgramPoint()
-                    val hasStaticBitSet = ((flags & asm.Opcodes.ACC_STATIC) != 0)
+                    val hasStaticBitSet = memoizing { ((flags & asm.Opcodes.ACC_STATIC) != 0) }
                     if (!hasStaticBitSet) {
                       mnode.visitLocalVariable(
                         "this",
@@ -947,7 +950,7 @@ abstract class GenBCode extends BCodeTypes {
                   }
 
                   methodPacks.offer(MethodPack(
-                    mnode, locals, labelDefsAtOrUnder, labelDef, earlyReturnVar, returnType
+                    dd, jMethodName, methSymbol, mnode, locals, labelDefsAtOrUnder, labelDef, earlyReturnVar, returnType
                   ))
                   mnode  = null
                   locals = null
