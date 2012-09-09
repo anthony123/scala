@@ -698,12 +698,11 @@ abstract class GenBCode extends BCodeTypes {
           makeLocal(p.symbol, toTypeKind(p.symbol.info))
         }
 
-              def emitBodyOfStaticAccessor() {
+              def emitBodyOfStaticAccessor(staticfield: Symbol) {
                 // in companion object accessors to @static fields, we access the static field directly
                 // see https://github.com/scala/scala/commit/892ee3df93a10ffe24fb11b37ad7c3a9cb93d5de
                 val hostClass   = msym.owner.companionClass
                 val fieldName   = msym.accessed.javaSimpleName.toString
-                val staticfield = hostClass.info.findMember(msym.accessed.name, NoFlags, NoFlags, false)
                 val fieldDescr  = toTypeKind(staticfield.tpe).getDescriptor
 
                 if (msym.isGetter) {
@@ -733,9 +732,14 @@ abstract class GenBCode extends BCodeTypes {
 
         if (!isAbstractMethod && !isNative) {
           lineNumber(rhs)
-          if(isAccessorToStaticField(msym)) {
+          val staticField = if (isAccessorToStaticField(msym)) {
+            // https://github.com/scala/scala/commit/cb393fcbe35d0a871f23189d791b44be1b826ed2
+            val compClass = msym.owner.companionClass
+            compClass.info.findMember(msym.accessed.name, NoFlags, NoFlags, false)
+          } else NoSymbol
+          if(staticField != NoSymbol) {
             // special-cased method body for an accessor to @static field
-            emitBodyOfStaticAccessor()
+            emitBodyOfStaticAccessor(staticField)
           } else {
             // normal method body
             val veryFirstProgramPoint = currProgramPoint()
