@@ -955,7 +955,11 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       }
 
     val superInterfaces0: List[Symbol] = csym.mixinClasses
-    val superInterfaces:  List[Symbol] = superInterfaces0 ++ csym.annotations.flatMap(ann => newParentForAttr(ann.symbol)) distinct;
+    val superInterfaces:  List[Symbol] = {
+      val sups = (superInterfaces0 ++ csym.annotations.flatMap(ann => newParentForAttr(ann.symbol)))
+
+      sups.distinct
+    };
 
     assert(!superInterfaces.contains(NoSymbol), "found NoSymbol among: " + superInterfaces.mkString)
     assert(superInterfaces.forall(s => s.isInterface || s.isTrait), "found non-interface among: " + superInterfaces.mkString)
@@ -995,9 +999,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     val key = brefType(csym.javaBinaryName.toTypeName)
     assert(key.isNonSpecial || isCompilingStdLib, "Not a class to track: " + csym.fullName)
 
-    if(exemplars.containsKey(key)) {
-      abort("Maps `symExemplars` and `exemplars` got out of synch.")
-    }
+    assert(!exemplars.containsKey(key), "Maps `symExemplars` and `exemplars` got out of synch.")
     val tr = buildExemplar(key, csym)
     symExemplars.put(csym, tr)
     exemplars.put(tr.c, tr) // tr.c is the hash-consed, internalized, canonical representative for csym's key.
@@ -2394,7 +2396,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
         case Some(pickle) if !nme.isModuleName(newTermName(jclassName)) =>
           val scalaAnnot = {
             val sigBytes = ScalaSigBytes(pickle.bytes.take(pickle.writeIndex))
-            AnnotationInfo(sigBytes.sigAnnot, Nil, List((nme.bytes, sigBytes)))
+            AnnotationInfo(sigBytes.sigAnnot, Nil, (nme.bytes, sigBytes) :: Nil)
           }
           pickledBytes += pickle.writeIndex
           currentRun.symData -= sym
@@ -3086,11 +3088,6 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
     val MIN_SWITCH_DENSITY = 0.7
 
-    // val StringBuilderClassName = definitions.StringBuilderClass.javaBinaryName.toString
-    val BoxesRunTime = "scala/runtime/BoxesRunTime"
-    val mdesc_arrayClone  = "()Ljava/lang/Object;"
-    val tdesc_long        = BType.LONG_TYPE.getDescriptor // ie. "J"
-
     /**
      *  @must-single-thread
      */
@@ -3108,7 +3105,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       jclass.visitField(
         PublicStaticFinal,
         "serialVersionUID",
-        tdesc_long,
+        "J",
         null, // no java-generic-signature
         new java.lang.Long(id)
       ).visitEnd()

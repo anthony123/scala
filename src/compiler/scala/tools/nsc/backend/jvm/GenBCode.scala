@@ -16,7 +16,10 @@ import scala.tools.asm
 /**
  *  Prepare in-memory representations of classfiles using the ASM Tree API, and serialize them to disk.
  *
- *  Three pipelines are at work, each taking work items from one of three different queues:
+ *  Three pipelines are at work, each taking work items from a queue dedicated to that pipeline:
+ *
+ *  (There's another pipeline so to speak, the one that populates queue-1 by traversing a CompilationUnit until ClassDefs are found,
+ *   but the "interesting" pipelines are the ones described below)
  *
  *    (1) In the first queue, an item consists of a ClassDef along with its arrival position.
  *        This position is needed at the time classfiles are serialized to disk,
@@ -42,23 +45,31 @@ import scala.tools.asm
  *        Rather than performing all the work involved in lowering a ClassDef,
  *        pipeline-1 leaves in general for later those operations that don't require typer.
  *        All the @can-multi-thread operations that pipeline-2 performs can also run during pipeline-1, in fact some of them do.
- *        In contrast, typer operations can't be performed by pipeline-2, which consists of MAX_THREADS worker threads running concurrently.
+ *        In contrast, typer operations can't be performed by pipeline-2.
+ *        pipeline-2  consists of MAX_THREADS worker threads running concurrently.
  *
  *        Pipeline 2
  *        ----------
  *
  *        The operations that a worker thread of pipeline-2 can perform are those that rely only on the following abstractions:
- *          - BType:   a typer-independent representation of a JVM-level type,
- *          - Tracked: a bundle of a BType B, its superclass (as a BType), and B's interfaces (as BTypes).
- *          - exemplars: a concurrent map to obtain the Tracked structure for a internal class name used as key.
+ *          - BType:     a typer-independent representation of a JVM-level type,
+ *          - Tracked:   a bundle of a BType B, its superclass (as a BType), and B's interfaces (as BTypes).
+ *          - exemplars: a concurrent map to obtain the Tracked structure using internal class names as keys.
  *          - the tree-based representation of classfiles provided by the ASM Tree API.
  *        For example:
- *          - it's possible to determine whether one BType conforms to another without resorting to typer.
- *          - `CClassWriter.getCommonSuperclass()` (as a result of invoking `MethodNode.visitMaxs()` is also thread-reentrant.
+ *          - it's possible to determine whether a BType conforms to another without resorting to typer.
+ *          - `CClassWriter.getCommonSuperclass()` is thread-reentrant (therefore, it accesses only thread-reentrant functionality).
+ *             This comes handy because in pipelin-2, `MethodNode.visitMaxs()` invokes `getCommonSuperclass()` on different method nodes,
+ *             and each of these activations accesses typer-independent structures (exemplars, Tracked) to compute its answer.
  *
- *        In the future, a pipeline-2 worker could also perform basic optimizations on the ASM tree before handing it over to queue-3,
- *        e.g. collapsing jump-chains, unreachable-code elimination, and removing unused locals.
- *        Many intra-method optimizations are amenable to this approach.
+ *        In the future, a pipeline-2 worker could also perform intra-method optimizations on the ASM tree
+ *        before handing it over to queue-3, including:
+ *          - collapsing jump-chains,
+ *          - constant propagation,
+ *          - arith and logical ops reductions,
+ *          - pattern-based simplification aka peephole optimization,
+ *          - eliminating unreachable-code, and
+ *          - removing unused locals.
  *        See Ch. 8. "Method Analysis" in the ASM User Guide, http://download.forge.objectweb.org/asm/asm4-guide.pdf
  *
  *    (3) The third queue contains items ready for serialization.
@@ -74,17 +85,20 @@ import scala.tools.asm
  *
  *    Summing up, the key facts about this phase are:
  *
- *      (i) The three pipelines can run in parallel, thus allowing finishing earlier.
+ *      (i) Three pipelines run in parallel, thus allowing finishing earlier.
  *
- *     (ii) Only pipeline-2 uses task-parallelism itself (moreover, each of the N workers is limited to invoking ASM and BType operations).
+ *     (ii) Pipelines 1 and 3 are sequential.
+ *          In contrast, pipeline-2 uses task-parallelism (where each of the N workers is limited to invoking ASM and BType operations).
  *
- *    (iii) Pipelines 1 and 3 are sequential.
+ *          All three queues are concurrent:
  *
- *     (iv) Queue-1 connects a single producer (BCodePhase) to a single consumer (Worker-1),
+ *    (iii) Queue-1 connects a single producer (BCodePhase) to a single consumer (Worker-1),
  *          but given they run on different threads, queue-1 has to be concurrent.
  *
- *      (v) Queue-2 is concurrent because several concurrent workers of pipeline-2 take items from it.
- *          Simimlarly, queue-3 is concurrent (it's in fact a priority queue) because those same concurrent workers add items to it.
+ *     (iv) Queue-2 is concurrent because concurrent workers of pipeline-2 take items from it.
+ *
+ *      (v) Queue-3 is concurrent (it's in fact a priority queue) because those same concurrent workers add items to it.
+ *
  *
  *
  *  @author  Miguel Garcia, http://lamp.epfl.ch/~magarcia/ScalaCompilerCornerReloaded/
@@ -108,7 +122,7 @@ abstract class GenBCode extends BCodeTypes {
     override def erasedTypes = true
 
     val MAX_THREADS = scala.math.min(
-      4,
+      2,
       java.lang.Runtime.getRuntime.availableProcessors
     )
 
@@ -158,7 +172,7 @@ abstract class GenBCode extends BCodeTypes {
         while (true) {
           val item = q1.take
           if(item.isPoison) {
-            for(i <- 1 to MAX_THREADS) { q2 put poison2 } // Worker2.run() comments why MAX_THREADS poison pills are needed on queue-2.
+            for(i <- 1 to MAX_THREADS) { q2 put poison2 } // explanation in Worker2.run() as to why MAX_THREADS poison pills are needed on queue-2.
             return
           }
           else { visit(item) }
@@ -274,9 +288,7 @@ abstract class GenBCode extends BCodeTypes {
       // -----------------------
       // Pipeline from q2 to q3.
       // -----------------------
-      // val exec = _root_.java.util.concurrent.Executors.newFixedThreadPool(MAX_THREADS)
       val workers = for(i <- 1 to MAX_THREADS) yield { val w = new Worker2; val t = new _root_.java.lang.Thread(w); t.start(); t }
-      // exec.shutdown()
       // -------------------------------------------------------------------
       // Feed pipeline-1: place all ClassDefs on q1, recording their arrival position.
       // -------------------------------------------------------------------
@@ -311,10 +323,9 @@ abstract class GenBCode extends BCodeTypes {
 
       var moreComing = true
       var remainingWorkers = MAX_THREADS
-      // arrivalPos whose Item3 should be serialized next
+      // `expected` denotes the arrivalPos whose Item3 should be serialized next
       var expected = 0
-      // items to sent to disk once a previous item can be polled from queue-3
-      // (ie "followers" contains items that arrived too soon).
+      // `followers` contains items that arrived too soon, they're parked here waiting for `expected` to be polled from queue-3
       val followers = new java.util.PriorityQueue[Item3](100, i3comparator)
 
       while (moreComing) {
@@ -354,7 +365,7 @@ abstract class GenBCode extends BCodeTypes {
       gen(cunit.body)
     }
 
-    class PlainClassBuilder(cunit: CompilationUnit)
+    final class PlainClassBuilder(cunit: CompilationUnit)
       extends BCInitGen
       with    BCJGenSigGen {
 
@@ -371,7 +382,7 @@ abstract class GenBCode extends BCodeTypes {
       private var earlyReturnVar: Symbol     = null
       private var shouldEmitCleanup          = false
       // used in connection with cleanups
-      private var returnType: BType       = null
+      private var returnType: BType          = null
       // line numbers
       private var lastEmittedLineNr          = -1
 
@@ -412,18 +423,18 @@ abstract class GenBCode extends BCodeTypes {
       def makeLocal(sym: Symbol, tk: BType): Local = {
         assert(!locals.contains(sym), "attempt to create duplicate local var.")
         assert(nxtIdx != -1, "not a valid start index")
-        val loc = Local(tk, sym.javaSimpleName.toString, nxtIdx)
+        val loc = Local(tk, sym.javaSimpleName.toString, nxtIdx, sym.isSynthetic)
         locals += (sym -> loc)
         assert(tk.getSize > 0, "makeLocal called for a symbol whose type is Unit.")
         nxtIdx += tk.getSize
         loc
       }
       def store(locSym: Symbol) {
-        val Local(tk, _, idx) = locals(locSym)
+        val Local(tk, _, idx, _) = locals(locSym)
         bc.store(idx, tk)
       }
       def load(locSym: Symbol) {
-        val Local(tk, _, idx) = locals(locSym)
+        val Local(tk, _, idx, _) = locals(locSym)
         bc.load(idx, tk)
       }
 
@@ -470,6 +481,11 @@ abstract class GenBCode extends BCodeTypes {
               mnode.visitLineNumber(nr, currProgramPoint())
           }
         }
+      }
+
+      def paramTKs(app: Apply): List[BType] = {
+        val Apply(fun, _)  = app
+        fun.symbol.info.paramTypes map toTypeKind
       }
 
       // on entering a method
@@ -619,8 +635,21 @@ abstract class GenBCode extends BCodeTypes {
 
       /* ---------------- helper utils for generating methods and code ---------------- */
 
-      @inline final def emit(opc: Int) { mnode.visitInsn(opc) }
-      @inline final def emit(i: asm.tree.AbstractInsnNode) { mnode.instructions.add(i) }
+      def emit(opc: Int) { mnode.visitInsn(opc) }
+      def emit(i: asm.tree.AbstractInsnNode) { mnode.instructions.add(i) }
+      def emit(is: List[asm.tree.AbstractInsnNode]) { for(i <- is) { mnode.instructions.add(i) } }
+
+      def emitZeroOf(tk: BType) {
+        tk match {
+          case BOOL => bc.boolconst(false)
+          case BYTE | SHORT | CHAR | INT => bc.iconst(0)
+          case LONG   => bc.lconst(0)
+          case FLOAT  => bc.fconst(0)
+          case DOUBLE => bc.dconst(0)
+          case UNIT   => ()
+          case _      => emit(asm.Opcodes.ACONST_NULL)
+        }
+      }
 
       def genDefDef(dd: DefDef) {
         // the only method whose implementation is not emitted: getClass()
@@ -636,8 +665,8 @@ abstract class GenBCode extends BCodeTypes {
         val isNative = msym.hasAnnotation(definitions.NativeAttr)
         val isAbstractMethod = msym.isDeferred || msym.owner.isInterface
 
-        val params      = if(vparamss.isEmpty) Nil else vparamss.head
-        methSymbol      = msym
+        val params = if(vparamss.isEmpty) Nil else vparamss.head
+        methSymbol = msym
 
         // add method-local vars for params
         nxtIdx = if (msym.isStaticMember) 0 else 1;
@@ -759,8 +788,12 @@ abstract class GenBCode extends BCodeTypes {
        **/
       private def appendToStaticCtor(dd: DefDef) {
 
-            def insertBefore(location: asm.tree.AbstractInsnNode, insns: List[asm.tree.AbstractInsnNode]) {
-              insns foreach { i => mnode.instructions.insertBefore(location, i) }
+            def insertBefore(
+                  location: asm.tree.AbstractInsnNode,
+                  i0: asm.tree.AbstractInsnNode,
+                  i1: asm.tree.AbstractInsnNode) {
+              mnode.instructions.insertBefore(location, i0)
+              mnode.instructions.insertBefore(location, i1)
             }
 
         // collect all return instructions
@@ -802,7 +835,7 @@ abstract class GenBCode extends BCodeTypes {
             val jtype  = asmMethodType(callee).getDescriptor
             val i1 = new asm.tree.MethodInsnNode(asm.Opcodes.INVOKESPECIAL, jowner, jname, jtype)
 
-            insertBefore(r, List(i0, i1))
+            insertBefore(r, i0, i1)
           }
 
           if(isParcelableClass) { // android creator code
@@ -817,7 +850,7 @@ abstract class GenBCode extends BCodeTypes {
             // PUTSTATIC `thisName`.CREATOR;
             val i1 = new asm.tree.FieldInsnNode(asm.Opcodes.PUTSTATIC, thisName, andrFieldName, andrFieldDescr)
 
-            insertBefore(r, List(i0, i1))
+            insertBefore(r, i0, i1)
           }
 
         }
@@ -825,8 +858,8 @@ abstract class GenBCode extends BCodeTypes {
       }
 
       private def emitLocalVarScope(sym: Symbol, start: asm.Label, end: asm.Label, force: Boolean = false) {
-        if(force || !sym.isSynthetic /* TODO HIDDEN */ ) {
-          val Local(tk, name, idx) = locals(sym)
+        val Local(tk, name, idx, isSynth) = locals(sym)
+        if(force || !isSynth) {
           mnode.visitLocalVariable(name, tk.getDescriptor, null, start, end, idx)
         }
       }
@@ -848,7 +881,7 @@ abstract class GenBCode extends BCodeTypes {
 
           case Assign(lhs, rhs) =>
             val s = lhs.symbol
-            val Local(tk, _, idx) = locals.getOrElse(s, makeLocal(s, toTypeKind(s.info)))
+            val Local(tk, _, idx, _) = locals.getOrElse(s, makeLocal(s, toTypeKind(s.info)))
             genLoad(rhs, tk)
             lineNumber(tree)
             bc.store(idx, tk)
@@ -930,7 +963,6 @@ abstract class GenBCode extends BCodeTypes {
       def genArrayOp(tree: Tree, code: Int, expectedType: BType): BType = {
         val Apply(Select(arrayObj, _), args) = tree
         val k    = toTypeKind(arrayObj.tpe)
-        val elem = k.getComponentType
         genLoad(arrayObj, k)
         val elementType = typeOfArrayOp.getOrElse(code, abort("Unknown operation on arrays: " + tree + " code: " + code))
 
@@ -940,7 +972,7 @@ abstract class GenBCode extends BCodeTypes {
           // load argument on stack
           assert(args.length == 1, "Too many arguments for array get operation: " + tree);
           genLoad(args.head, INT)
-          generatedType = elem
+          generatedType = k.getComponentType
           bc.aload(elementType)
         }
         else if (scalaPrimitives.isArraySet(code)) {
@@ -1140,7 +1172,7 @@ abstract class GenBCode extends BCodeTypes {
             case BoundEH   (patSymbol,      caseBody) =>
               // test/files/run/contrib674.scala , a local-var already exists for patSymbol.
               // rather than creating on first-access, we do it right away to emit debug-info for the created local var.
-              val Local(patTK, _, patIdx) = locals.getOrElse(patSymbol, makeLocal(patSymbol, toTypeKind(patSymbol.info)))
+              val Local(patTK, _, patIdx, _) = locals.getOrElse(patSymbol, makeLocal(patSymbol, toTypeKind(patSymbol.info)))
               bc.store(patIdx, patTK)
               genLoad(caseBody, kind)
               nopIfNeeded(startHandler)
@@ -1168,7 +1200,7 @@ abstract class GenBCode extends BCodeTypes {
           nopIfNeeded(startTryBody)
           val finalHandler = currProgramPoint() // version of the finally-clause reached via unhandled exception.
           protect(startTryBody, finalHandler, finalHandler, null)
-          val Local(eTK, _, eIdx) = locals(makeLocal(ThrowableReference, "exc"))
+          val Local(eTK, _, eIdx, _) = locals(makeLocal(ThrowableReference, "exc"))
           bc.store(eIdx, eTK)
           emitFinalizer(finalizer, null, true)
           bc.load(eIdx, eTK)
@@ -1281,7 +1313,8 @@ abstract class GenBCode extends BCodeTypes {
           genSynchronized(tree, expectedType)
         else if (scalaPrimitives.isCoercion(code)) {
           genLoad(receiver, toTypeKind(receiver.tpe))
-          genCoercion(tree, code)
+          lineNumber(tree)
+          genCoercion(code)
           coercionTo(code)
         }
         else abort(
@@ -1306,11 +1339,11 @@ abstract class GenBCode extends BCodeTypes {
             val sym = tree.symbol
             /* most of the time, !locals.contains(sym), unless the current activation of genLoad() is being called
                while duplicating a finalizer that contains this ValDef. */
-            val Local(tk, _, idx) = locals.getOrElseUpdate(sym, makeLocal(sym, toTypeKind(sym.info)))
-            if (rhs == EmptyTree) { genConstant(getZeroOf(tk)) }
+            val Local(tk, _, idx, isSynth) = locals.getOrElseUpdate(sym, makeLocal(sym, toTypeKind(sym.info)))
+            if (rhs == EmptyTree) { emitZeroOf(tk) }
             else { genLoad(rhs, tk) }
             bc.store(idx, tk)
-            if(!sym.isSynthetic) { // there are case <synthetic> ValDef's emitted by patmat
+            if(!isSynth) { // there are case <synthetic> ValDef's emitted by patmat
               varsInScope += (sym -> currProgramPoint())
             }
             generatedType = UNIT
@@ -1401,7 +1434,7 @@ abstract class GenBCode extends BCodeTypes {
           case mtch : Match =>
             generatedType = genMatch(mtch)
 
-          case EmptyTree => if (expectedType != UNIT) { genConstant(getZeroOf(expectedType)) }
+          case EmptyTree => if (expectedType != UNIT) { emitZeroOf(expectedType) }
 
           case _ => abort("Unexpected tree in genLoad: " + tree + "/" + tree.getClass + " at: " + tree.pos)
         }
@@ -1418,13 +1451,13 @@ abstract class GenBCode extends BCodeTypes {
       /**
        * @must-single-thread
        **/
-      final def fieldLoad( field: Symbol, hostClass: Symbol = null) { // TODO GenASM could use this method
+      def fieldLoad( field: Symbol, hostClass: Symbol = null) {
         fieldOp(field, isLoad = true,  hostClass)
       }
       /**
        * @must-single-thread
        **/
-      final def fieldStore(field: Symbol, hostClass: Symbol = null) { // TODO GenASM could use this method
+      def fieldStore(field: Symbol, hostClass: Symbol = null) {
         fieldOp(field, isLoad = false, hostClass)
       }
 
@@ -1453,7 +1486,7 @@ abstract class GenBCode extends BCodeTypes {
        *   @must-single-thread
        * Otherwise it's safe to call from multiple threads.
        **/
-      final def genConstant(const: Constant) {
+      def genConstant(const: Constant) {
         (const.tag: @switch) match {
 
           case BooleanTag => bc.boolconst(const.booleanValue)
@@ -1500,7 +1533,7 @@ abstract class GenBCode extends BCodeTypes {
       }
 
       private def genLabelDef(lblDf: LabelDef, expectedType: BType) {
-        // duplication of `finally`-contained LabelDefs is handled when emitting a RET. No bookkeeping for that required here.
+        // duplication of LabelDefs contained in `finally`-clauses is handled when emitting RETURN. No bookkeeping for that required here.
         // no need to call index() over lblDf.params, on first access that magic happens (moreover, no LocalVariableTable entries needed for them).
         markProgramPoint(programPoint(lblDf.symbol))
         lineNumber(lblDf)
@@ -1538,46 +1571,53 @@ abstract class GenBCode extends BCodeTypes {
 
       } // end of genReturn()
 
-      private def genApply(tree: Apply, expectedType: BType): BType = {
+      private def genApply(app: Apply, expectedType: BType): BType = {
+        val BoxesRunTime = "scala/runtime/BoxesRunTime"
         var generatedType = expectedType
-        lineNumber(tree)
-        tree match {
+        lineNumber(app)
+        app match {
 
           case Apply(TypeApply(fun, targs), _) =>
-            val sym = fun.symbol
-            val cast = sym match {
-              case Object_isInstanceOf  => false
-              case Object_asInstanceOf  => true
-              case _                    => abort("Unexpected type application " + fun + "[sym: " + sym.fullName + "]" + " in: " + tree)
-            }
 
-            val Select(obj, _) = fun
-            val l = toTypeKind(obj.tpe)
-            val r = toTypeKind(targs.head.tpe)
-            genLoadQualifier(fun)
+                def genTypeApply(): BType = {
+                  val sym = fun.symbol
+                  val cast = sym match {
+                    case Object_isInstanceOf  => false
+                    case Object_asInstanceOf  => true
+                    case _                    => abort("Unexpected type application " + fun + "[sym: " + sym.fullName + "]" + " in: " + app)
+                  }
 
-            if (l.isValueType && r.isValueType)
-              genConversion(l, r, cast)
-            else if (l.isValueType) {
-              bc drop l
-              if (cast) {
-                mnode.visitTypeInsn(asm.Opcodes.NEW, classCastExceptionType.getInternalName)
-                bc dup ObjectReference
-                emit(asm.Opcodes.ATHROW)
-              } else {
-                bc boolconst false
-              }
-            }
-            else if (r.isValueType && cast) {
-              assert(false, "Erasure should have added an unboxing operation to prevent this cast. Tree: " + tree)
-            }
-            else if (r.isValueType) {
-              bc isInstance classLiteral(r)
-            }
-            else {
-              genCast(l, r, cast)
-            }
-            generatedType = if (cast) r else BOOL;
+                  val Select(obj, _) = fun
+                  val l = toTypeKind(obj.tpe)
+                  val r = toTypeKind(targs.head.tpe)
+                  genLoadQualifier(fun)
+
+                  if (l.isValueType && r.isValueType)
+                    genConversion(l, r, cast)
+                  else if (l.isValueType) {
+                    bc drop l
+                    if (cast) {
+                      mnode.visitTypeInsn(asm.Opcodes.NEW, classCastExceptionType.getInternalName)
+                      bc dup ObjectReference
+                      emit(asm.Opcodes.ATHROW)
+                    } else {
+                      bc boolconst false
+                    }
+                  }
+                  else if (r.isValueType && cast) {
+                    assert(false, "Erasure should have added an unboxing operation to prevent this cast. Tree: " + app)
+                  }
+                  else if (r.isValueType) {
+                    bc isInstance classLiteral(r)
+                  }
+                  else {
+                    genCast(l, r, cast)
+                  }
+
+                  if (cast) r else BOOL
+                } // end of genTypeApply()
+
+            generatedType = genTypeApply()
 
           // 'super' call: Note: since constructors are supposed to
           // return an instance of what they construct, we have to take
@@ -1589,7 +1629,7 @@ abstract class GenBCode extends BCodeTypes {
             val invokeStyle = SuperCall(mix)
             // if (fun.symbol.isConstructor) Static(true) else SuperCall(mix);
             mnode.visitVarInsn(asm.Opcodes.ALOAD, 0)
-            genLoadArguments(args, fun.symbol.info.paramTypes map toTypeKind)
+            genLoadArguments(args, paramTKs(app))
             genCallMethod(fun.symbol, invokeStyle)
             generatedType =
               if (fun.symbol.isConstructor) UNIT
@@ -1608,26 +1648,33 @@ abstract class GenBCode extends BCodeTypes {
 
             generatedType match {
               case arr if generatedType.isArray =>
-                genLoadArguments(args, ctor.info.paramTypes map toTypeKind)
+                genLoadArguments(args, paramTKs(app))
                 val dims = arr.getDimensions
                 var elemKind = arr.getElementType
-                if (args.length > dims) {
-                  cunit.error(tree.pos, "too many arguments for array constructor: found " + args.length +
+                val argsSize = args.length
+                if (argsSize > dims) {
+                  cunit.error(app.pos, "too many arguments for array constructor: found " + args.length +
                                         " but array has only " + dims + " dimension(s)")
                 }
-                if (args.length != dims) {
-                  for (i <- args.length until dims) elemKind = arrayOf(elemKind)
+                if (argsSize < dims) {
+                  /* The BType instantiation below denote the same type as
+                   *    for (i <- args.length until dims) elemKind = arrayOf(elemKind)
+                   * with the advantage of not requiring `arrayOf()`, a must-single-thread operation.
+                   */
+                  elemKind = new BType(BType.ARRAY, arr.off + argsSize, arr.len - argsSize)
                 }
-                args.length match {
-                  case 1          => bc newarray elemKind
-                  case dimensions => mnode.visitMultiANewArrayInsn(arrayN(elemKind, dimensions).getDescriptor, dimensions)
+                (argsSize : @switch) match {
+                  case 1 => bc newarray elemKind
+                  case _ =>
+                    val descr = ('[' * argsSize) + elemKind.getDescriptor // denotes the same as: arrayN(elemKind, argsSize).getDescriptor
+                    mnode.visitMultiANewArrayInsn(descr, argsSize)
                 }
 
               case rt if generatedType.hasObjectSort =>
-                // TODO RE-ENABLE assert(ctor.owner == classSymbol(rt), "Symbol " + ctor.owner.fullName + " is different than " + tpt)
+                assert(exemplar(ctor.owner).c == rt, "Symbol " + ctor.owner.fullName + " is different from " + rt)
                 mnode.visitTypeInsn(asm.Opcodes.NEW, rt.getInternalName)
                 bc dup generatedType
-                genLoadArguments(args, ctor.info.paramTypes map toTypeKind)
+                genLoadArguments(args, paramTKs(app))
                 genCallMethod(ctor, Static(true))
 
               case _ =>
@@ -1656,7 +1703,7 @@ abstract class GenBCode extends BCodeTypes {
             val MethodNameAndType(mname, mdesc) = asmUnboxTo(boxType)
             bc.invokestatic(BoxesRunTime, mname, mdesc)
 
-          case app @ Apply(fun @ Select(qual, _), args)
+          case Apply(fun @ Select(qual, _), args)
           if !methSymbol.isStaticConstructor
           && isAccessorToStaticField(fun.symbol)
           && qual.tpe.typeSymbol.orElse(fun.symbol.owner).companionClass != NoSymbol =>
@@ -1678,7 +1725,7 @@ abstract class GenBCode extends BCodeTypes {
                 import Flags._
                 debuglog("recreating sym.accessed.name: " + sym.accessed.name)
                 val objectfield = hostOwner.info.findMember(sym.accessed.name, NoFlags, NoFlags, false)
-                val staticfield = hostClass.newVariable(newTermName(sym.accessed.name.toString), tree.pos, STATIC | SYNTHETIC | FINAL) setInfo objectfield.tpe
+                val staticfield = hostClass.newVariable(newTermName(sym.accessed.name.toString), app.pos, STATIC | SYNTHETIC | FINAL) setInfo objectfield.tpe
                 staticfield.addAnnotation(definitions.StaticClass)
                 hostClass.info.decls enter staticfield
                 staticfield
@@ -1696,8 +1743,8 @@ abstract class GenBCode extends BCodeTypes {
               )
             } else if (sym.isSetter) {
               // push setter's argument
-              genLoadArguments(args, sym.info.paramTypes map toTypeKind)
-              // GETSTATIC `hostClass`.`accessed`
+              genLoadArguments(args, paramTKs(app))
+              // PUTSTATIC `hostClass`.`accessed`
               emit(
                 new asm.tree.FieldInsnNode(asm.Opcodes.PUTSTATIC,
                                            internalName(hostClass),
@@ -1714,49 +1761,56 @@ abstract class GenBCode extends BCodeTypes {
             val sym = fun.symbol
 
             if (sym.isLabel) {  // jump to a label
-              genLoadLabelArguments(args, labelDef(sym), tree.pos)
+              genLoadLabelArguments(args, labelDef(sym), app.pos)
               bc goTo programPoint(sym)
             } else if (isPrimitive(sym)) { // primitive method call
               generatedType = genPrimitiveOp(app, expectedType)
             } else {  // normal method call
-              val invokeStyle =
-                if (sym.isStaticMember) Static(false)
-                else if (sym.isPrivate || sym.isClassConstructor) Static(true)
-                else Dynamic;
 
-              if (invokeStyle.hasInstance) {
-                genLoadQualifier(fun)
-              }
+                  def genNormalMethodCall(): BType = {
 
-              genLoadArguments(args, sym.info.paramTypes map toTypeKind)
+                    val invokeStyle =
+                      if (sym.isStaticMember) Static(false)
+                      else if (sym.isPrivate || sym.isClassConstructor) Static(true)
+                      else Dynamic;
 
-              // In "a couple cases", squirrel away a extra information (hostClass, targetTypeKind). TODO Document what "in a couple cases" refers to.
-              var hostClass:      Symbol = null
-              var targetTypeKind: BType  = null
-              fun match {
-                case Select(qual, _) =>
-                  val qualSym = findHostClass(qual.tpe, sym)
-                  if (qualSym == ArrayClass) { targetTypeKind = toTypeKind(qual.tpe) }
-                  else { hostClass = qualSym }
+                    if (invokeStyle.hasInstance) {
+                      genLoadQualifier(fun)
+                    }
 
-                  log(
-                    if (qualSym == ArrayClass) "Stored target type kind " + targetTypeKind + " for " + sym.fullName
-                    else s"Set more precise host class for ${sym.fullName} hostClass: $qualSym"
-                  )
-                case _ =>
-              }
-              if((targetTypeKind != null) && (sym == definitions.Array_clone) && invokeStyle.isDynamic) {
-                val target: String = targetTypeKind.getInternalName
-                bc.invokevirtual(target, "clone", mdesc_arrayClone)
-              }
-              else {
-                genCallMethod(sym, invokeStyle, hostClass)
-              }
+                    genLoadArguments(args, paramTKs(app))
+
+                    // In "a couple cases", squirrel away a extra information (hostClass, targetTypeKind). TODO Document what "in a couple cases" refers to.
+                    var hostClass:      Symbol = null
+                    var targetTypeKind: BType  = null
+                    fun match {
+                      case Select(qual, _) =>
+                        val qualSym = findHostClass(qual.tpe, sym)
+                        if (qualSym == ArrayClass) { targetTypeKind = toTypeKind(qual.tpe) }
+                        else { hostClass = qualSym }
+
+                        log(
+                          if (qualSym == ArrayClass) "Stored target type kind " + targetTypeKind + " for " + sym.fullName
+                          else s"Set more precise host class for ${sym.fullName} hostClass: $qualSym"
+                        )
+                      case _ =>
+                    }
+                    if((targetTypeKind != null) && (sym == definitions.Array_clone) && invokeStyle.isDynamic) {
+                      val target: String = targetTypeKind.getInternalName
+                      val mdesc_arrayClone  = "()Ljava/lang/Object;"
+                      bc.invokevirtual(target, "clone", mdesc_arrayClone)
+                    }
+                    else {
+                      genCallMethod(sym, invokeStyle, hostClass)
+                    }
+
+                    if (sym.isClassConstructor) UNIT
+                    else toTypeKind(sym.info.resultType);
+
+                  } // end of genNormalMethodCall()
 
               // TODO if (sym == ctx1.method.symbol) { ctx1.method.recursive = true }
-              generatedType =
-                if (sym.isClassConstructor) UNIT
-                else toTypeKind(sym.info.resultType);
+              generatedType = genNormalMethodCall()
             }
 
         }
@@ -1765,22 +1819,23 @@ abstract class GenBCode extends BCodeTypes {
       } // end of GenBCode's genApply()
 
       private def genArrayValue(av: ArrayValue): BType = {
-        val ArrayValue(tpt @ TypeTree(), elems0) = av
+        val ArrayValue(tpt @ TypeTree(), elems) = av
 
         val elmKind       = toTypeKind(tpt.tpe)
         var generatedType = arrayOf(elmKind)
-        val elems         = elems0.toIndexedSeq
 
         lineNumber(av)
         bc iconst   elems.length
         bc newarray elmKind
 
         var i = 0
-        while (i < elems.length) {
+        var rest = elems
+        while (!rest.isEmpty) {
           bc dup     generatedType
           bc iconst  i
-          genLoad(elems(i), elmKind)
+          genLoad(rest.head, elmKind)
           bc astore  elmKind
+          rest = rest.tail
           i = i + 1
         }
 
@@ -1891,19 +1946,22 @@ abstract class GenBCode extends BCodeTypes {
       /** Generate code that loads args into label parameters. */
       def genLoadLabelArguments(args: List[Tree], lblDef: LabelDef, gotoPos: Position) {
         assert(args forall { a => !a.hasSymbol || a.hasSymbolWhich( s => !s.isLabel) }, "SI-6089 at: " + gotoPos) // SI-6089
-        val params: List[Symbol] = lblDef.params.map(_.symbol)
-        assert(args.length == params.length, "Wrong number of arguments in call to label at: " + gotoPos)
 
-            def isTrivial(kv: (Tree, Symbol)) = kv match {
-              case (This(_), p) if p.name == nme.THIS     => true
-              case (arg @ Ident(_), p) if arg.symbol == p => true
-              case _                                      => false
-            }
+        val aps = {
+          val params: List[Symbol] = lblDef.params.map(_.symbol)
+          assert(args.length == params.length, "Wrong number of arguments in call to label at: " + gotoPos)
 
-        val aps = ((args zip params) filterNot isTrivial)
+              def isTrivial(kv: (Tree, Symbol)) = kv match {
+                case (This(_), p) if p.name == nme.THIS     => true
+                case (arg @ Ident(_), p) if arg.symbol == p => true
+                case _                                      => false
+              }
 
-        // first push *all* arguments. This makes sure any labelDef-var will use the previous value.
-        aps foreach { case (arg, param) => genLoad(arg, locals(param).tk) } // locals.contains(param) because genDefDef visited labelDefsAtOrUnder
+          (args zip params) filterNot isTrivial
+        }
+
+        // first push *all* arguments. This makes sure muliple uses of the same labelDef-var will all denote the (previous) value.
+        aps foreach { case (arg, param) => genLoad(arg, locals(param).tk) } // `locals` is known to contain `param` because `genDefDef()` visited `labelDefsAtOrUnder`
 
         // second assign one by one to the LabelDef's variables.
         aps.reverse foreach {
@@ -1977,8 +2035,7 @@ abstract class GenBCode extends BCodeTypes {
       def isPrimitive(fun: Symbol): Boolean = scalaPrimitives.isPrimitive(fun)
 
       /** Generate coercion denoted by "code" */
-      def genCoercion(tree: Tree, code: Int) = {
-        lineNumber(tree)
+      def genCoercion(code: Int) = {
         import scalaPrimitives._
         (code: @switch) match {
           case B2B | S2S | C2C | I2I | L2L | F2F | D2D => ()
@@ -2104,9 +2161,9 @@ abstract class GenBCode extends BCodeTypes {
               scalaPrimitives.getPrimitive(fun.symbol) == scalaPrimitives.CONCAT)
             liftStringConcat(larg) ::: rarg
           else
-            List(tree)
+            tree :: Nil
         case _ =>
-          List(tree)
+          tree :: Nil
       }
 
       /** Some useful equality helpers. */
@@ -2320,10 +2377,7 @@ abstract class GenBCode extends BCodeTypes {
       }
 
       /** Does this tree have a try-catch block? */
-      def mayCleanStack(tree: Tree): Boolean = tree exists {
-        case Try(_, _, _) => true
-        case _            => false
-      }
+      def mayCleanStack(tree: Tree): Boolean = tree exists { t => t.isInstanceOf[Try] }
 
       /** @can-multi-thread **/
       def getMaxType(ts: List[Type]): BType = {
@@ -2336,7 +2390,7 @@ abstract class GenBCode extends BCodeTypes {
       case class MonitorRelease(v: Symbol) extends Cleanup(v) { }
       case class Finalizer(f: Tree) extends Cleanup (f) { }
 
-      case class Local(tk: BType, name: String, idx: Int)
+      case class Local(tk: BType, name: String, idx: Int, isSynth: Boolean)
 
       trait EHClause
       case class NamelessEH(typeToDrop: BType,  caseBody: Tree) extends EHClause
