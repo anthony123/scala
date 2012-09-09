@@ -46,7 +46,7 @@ import scala.tools.asm
  *        pipeline-1 leaves in general for later those operations that don't require typer.
  *        All the @can-multi-thread operations that pipeline-2 performs can also run during pipeline-1, in fact some of them do.
  *        In contrast, typer operations can't be performed by pipeline-2.
- *        pipeline-2  consists of MAX_THREADS worker threads running concurrently.
+ *        pipeline-2 consists of MAX_THREADS worker threads running concurrently.
  *
  *        Pipeline 2
  *        ----------
@@ -73,7 +73,8 @@ import scala.tools.asm
  *        See Ch. 8. "Method Analysis" in the ASM User Guide, http://download.forge.objectweb.org/asm/asm4-guide.pdf
  *
  *    (3) The third queue contains items ready for serialization.
- *        It's a priority queue that follows the original arrival order, for `ant test.stability` reasons.
+ *        It's a priority queue that follows the original arrival order,
+ *        so as to emit identical jars on repeated compilation of the same sources.
  *
  *        Pipeline 3
  *        ----------
@@ -121,6 +122,7 @@ abstract class GenBCode extends BCodeTypes {
     override def description = "Generate bytecode from ASTs"
     override def erasedTypes = true
 
+    // Once pipeline-2 starts doing optimizations more threads will be needed.
     val MAX_THREADS = scala.math.min(
       2,
       java.lang.Runtime.getRuntime.availableProcessors
@@ -325,7 +327,7 @@ abstract class GenBCode extends BCodeTypes {
       var remainingWorkers = MAX_THREADS
       // `expected` denotes the arrivalPos whose Item3 should be serialized next
       var expected = 0
-      // `followers` contains items that arrived too soon, they're parked here waiting for `expected` to be polled from queue-3
+      // `followers` contains items that arrived too soon, they're parked waiting for `expected` to be polled from queue-3
       val followers = new java.util.PriorityQueue[Item3](100, i3comparator)
 
       while (moreComing) {
@@ -350,6 +352,11 @@ abstract class GenBCode extends BCodeTypes {
       }
     }
 
+    /**
+     *  Apply BCode phase to a compilation unit: enqueue each contained ClassDef in queue-1,
+     *  so as to release the main thread for a duty it cannot delegate: writing classfiles to disk.
+     *  See `drainQ3()`
+     */
     override def apply(cunit: CompilationUnit): Unit = {
 
           def gen(tree: Tree) {
@@ -386,7 +393,11 @@ abstract class GenBCode extends BCodeTypes {
       // line numbers
       private var lastEmittedLineNr          = -1
 
-      // bookkeeping for program points within a method associated to LabelDefs (other program points aren't tracked here).
+      /**
+       *  A jump node is represented as an Apply whose symbol denotes a LabelDef, the jump target.
+       *  The `locLabel` map is used to find the asm.Label to use as destination (upon visiting a jump),
+       *  and to associate an asm.Label with a LabelDef (upon visiting a jump destination).
+       */
       private var locLabel: immutable.Map[ /* LabelDef */ Symbol, asm.Label ] = null
       def programPoint(labelSym: Symbol): asm.Label = {
         assert(labelSym.isLabel, "trying to map a non-label symbol to an asm.Label, at: " + labelSym.pos)
@@ -397,7 +408,35 @@ abstract class GenBCode extends BCodeTypes {
         })
       }
 
-      // bookkeeping for cleanup tasks to perform on leaving a method due to return statement under active (monitor-exits, finally-clauses)
+      /**
+       *  A program point may be lexically nested (at some depth)
+       *    (a) in the try-clause of a try-with-finally expression
+       *    (b) in a synchronized block.
+       *  Each of the constructs above establishes a "cleanup block" to execute upon
+       *  both normal-exit and abrupt-termination of the instructions it encloses.
+       *
+       *  The `cleanups` LIFO queue represents the nesting of active (for the current program point)
+       *  pending cleanups. For each such cleanup an asm.Label indicating the start of its cleanup-block.
+       *  At any given time during traversal of the method body,
+       *  the head of `cleanups` indicates the closest enclosing try-with-finally or synchronized-expression.
+       *
+       *  `cleanups` is used:
+       *
+       *    (1) upon visiting a Return statement.
+       *        In case of pending cleanups, we can't just emit a RETURN instruction, but must instead:
+       *          - store the result (if any) in `earlyReturnVar`, and
+       *          - jump to the next pending cleanup.
+       *        See `genReturn()`
+       *
+       *    (2) upon emitting a try-with-finally or a synchronized-expr,
+       *        In these cases, the targets of the above jumps are emitted,
+       *        provided an early exit was actually encountered somewhere in the protected clauses.
+       *        See `genLoadTry()` and `genSynchronized()`
+       *
+       *  The code thus emitted for jumps and targets covers the early-return case.
+       *  The case of abrupt, exceptional, termination is covered by exception handlers
+       *  emitted for that purpose as described in `genLoadTry()` and `genSynchronized()`.
+       */
       var cleanups: List[asm.Label] = Nil
       def registerCleanup(finCleanup: asm.Label) {
         if(finCleanup != null) { cleanups = finCleanup :: cleanups }
@@ -410,7 +449,7 @@ abstract class GenBCode extends BCodeTypes {
         }
       }
 
-      // bookkeeping for method-local vars and params
+      // bookkeeping for method-local vars and method-params
       private val locals = mutable.Map.empty[Symbol, Local] // (local-or-param-sym -> Local(TypeKind, name, idx))
       private var nxtIdx = -1 // next available index for local-var
       /** Make a fresh local variable, ensuring a unique name.
@@ -429,6 +468,7 @@ abstract class GenBCode extends BCodeTypes {
         nxtIdx += tk.getSize
         loc
       }
+      // don't confuse with `fieldStore` and `fieldLoad` which also take a symbol but a field-symbol.
       def store(locSym: Symbol) {
         val Local(tk, _, idx, _) = locals(locSym)
         bc.store(idx, tk)
@@ -438,7 +478,29 @@ abstract class GenBCode extends BCodeTypes {
         bc.load(idx, tk)
       }
 
-      // bookkeeping: all LabelDefs a method contains (useful when duplicating any `finally` clauses containing one or more LabelDef)
+      /**
+       *  The semantics of try-with-finally and synchronized-expr require their cleanup code
+       *  to be present in three forms in the emitted bytecode:
+       *    (a) as normal-exit code, reached via fall-through from the last program point being protected,
+       *    (b) the early-return case, described under `cleanups` above.
+       *        The only difference between (a) and (b) is their next program-point:
+       *          the former must continue with fall-through while
+       *          the later must continue to the next early-return cleanup.
+       *        Otherwise they are identical.
+       *    (c) as exception-handler, reached via exceptional control flow.
+       *
+       *  The cleanup code may in general contain LabelDefs.
+       *  As a result, when emitting duplicate code for the same cleanup AST, a distinction has to be made
+       *  as to the jump-targets:
+       *    (1) a jump emitted as part of the (a) version of a cleanup AST must target the (a) version of the LabelDef,
+       *    (2) similary for (b) and for (c).
+       *
+       *  The two maps below provide the required bookkeeping:
+       *    - `labelDefsAtOrUnder` lists all LabelDefs enclosed by a given Tree node (the key)
+       *    - `labelDef` provides the LabelDef whose symbol is used as key.
+       *
+       *  Further details in `emitFinalizer()`, which is invoked from `genLoadTry()` and `genSynchronized()`.
+       */
       var labelDefsAtOrUnder: collection.Map[Tree, List[LabelDef]] = null
       var labelDef: collection.Map[Symbol, LabelDef] = null// (LabelDef-sym -> LabelDef)
 
@@ -1212,8 +1274,9 @@ abstract class GenBCode extends BCodeTypes {
         }
 
         /* ------ (3.B) Cleanup-version of the finally-clause.
-         *              Reached upon early RETURN from (1) or from one of the EHs in (2)
-         *                     (and only from there, ie the only from program regions bracketed by registerCleanup/unregisterCleanup).
+         *              Reached upon early RETURN from (1) or upon early RETURN from one of the EHs in (2)
+         *              (and only from there, ie reached only upon early RETURN from
+         *               program regions bracketed by registerCleanup/unregisterCleanup).
          *              Protected only by whatever protects the whole try-catch-finally expression.
          * TODO explain what happens upon RETURN contained in (3.B)
          * ------
@@ -2020,20 +2083,6 @@ abstract class GenBCode extends BCodeTypes {
         if(cast) { bc checkCast  to }
         else     { bc isInstance to }
       }
-
-      def getZeroOf(k: BType): Constant = k match {
-        case UNIT    => Constant(())
-        case BOOL    => Constant(false)
-        case BYTE    => Constant(0: Byte)
-        case SHORT   => Constant(0: Short)
-        case CHAR    => Constant(0: Char)
-        case INT     => Constant(0: Int)
-        case LONG    => Constant(0: Long)
-        case FLOAT   => Constant(0.0f)
-        case DOUBLE  => Constant(0.0d)
-        case _       => Constant(null: Any)
-      }
-
 
       /** Is the given symbol a primitive operation? */
       def isPrimitive(fun: Symbol): Boolean = scalaPrimitives.isPrimitive(fun)
