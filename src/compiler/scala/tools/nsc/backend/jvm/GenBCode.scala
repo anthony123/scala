@@ -122,7 +122,7 @@ abstract class GenBCode extends BCodeTypes {
     override def erasedTypes = true
 
     val MAX_THREADS = scala.math.min(
-      4,
+      2,
       java.lang.Runtime.getRuntime.availableProcessors
     )
 
@@ -963,14 +963,11 @@ abstract class GenBCode extends BCodeTypes {
             val tk = locals.getOrElse(s, makeLocal(s, symInfoTK(s))).tk
             genLoad(rhs, tk)
 
-          case _ =>
-            genLoad(tree, UNIT)
+          case _ => genLoad(tree, UNIT)
         }
       }
 
       def genThrow(expr: Tree): BType = {
-        require(expr.tpe <:< ThrowableClass.tpe, expr.tpe)
-
         val thrownKind = tpeTK(expr)
         genLoad(expr, thrownKind)
 
@@ -986,19 +983,16 @@ abstract class GenBCode extends BCodeTypes {
 
         args match {
           // unary operation
-          case Nil =>
-            genLoad(larg, resKind)
+          case Nil => genLoad(larg, resKind)
 
           // binary operation
           case rarg :: Nil =>
             resKind = maxType(tpeTK(larg), tpeTK(rarg))
-
             genLoad(larg, resKind)
             genLoad(rarg, // check .NET size of shift arguments!
                     if (scalaPrimitives.isShiftOp(code)) INT else resKind)
 
-          case _ =>
-            abort("Too many arguments for primitive function: " + tree)
+          case _ => abort("Too many arguments for primitive function: " + tree)
         }
         resKind
       }
@@ -1009,16 +1003,14 @@ abstract class GenBCode extends BCodeTypes {
       def genArrayOp(tree: Tree, code: Int, expectedType: BType): BType = {
         val Apply(Select(arrayObj, _), args) = tree
         val k    = tpeTK(arrayObj)
-        val elem = k.getComponentType
         genLoad(arrayObj, k)
         val elementType = typeOfArrayOp.getOrElse(code, abort("Unknown operation on arrays: " + tree + " code: " + code))
 
         var generatedType = expectedType
 
         if (scalaPrimitives.isArrayGet(code)) {
-          // load argument on stack
           genLoad(args.head, INT)
-          generatedType = elem
+          generatedType = k.getComponentType
         }
         else if (scalaPrimitives.isArraySet(code)) {
           genLoad(args.head, INT)
@@ -1041,25 +1033,12 @@ abstract class GenBCode extends BCodeTypes {
         val hasResult = (expectedType != UNIT)
         val monitorResult: Symbol = if(hasResult) makeCachedLocal(tpeTK(args.head), "monitorResult") else null;
 
-        /* ------ (1) pushing and entering the monitor, also keeping a reference to it in a local var. ------ */
         genLoadQualifier(fun)
 
-        /* ------ (2) Synchronized block.
-         *            Reached by fall-through from (1).
-         *            Protected by:
-         *            (2.a) the EH-version of the monitor-exit, and
-         *            (2.b) whatever protects the whole synchronized expression.
-         * ------
-         */
         registerCleanup(monCleanup)
         genLoad(args.head, expectedType /* toTypeKind(tree.tpe.resultType) */)
         unregisterCleanup(monCleanup)
 
-        /* ------ (5) cleanup version of monitor-exit code.
-         *            Reached upon early-return from (2).
-         *            Protected by whatever protects the whole synchronized expression.
-         * ------
-         */
         if(shouldEmitCleanup) {
           pendingCleanups()
         }
@@ -1102,15 +1081,9 @@ abstract class GenBCode extends BCodeTypes {
             }
           }
 
-        // ------ (0) locals used later ------
-
-        // points to (a) the finally-clause conceptually reached via fall-through from try-catch, or (b) program point right after the try-catch-finally.
         val hasFinally   = (finalizer != EmptyTree)
-        // used in the finally-clause reached via fall-through from try-catch, if any.
         val guardResult  = memoizing { hasFinally && (kind != UNIT) && mayCleanStack(finalizer) }
-        // please notice `tmp` has type tree.tpe, while `earlyReturnVar` has the method return type. Because those two types can be different, dedicated vars are needed.
         val tmp          = if(guardResult) makeCachedLocal(tpeTK(tree), "tmp") else null;
-        // upon early return from the try-body or one of its EHs (but not the EH-version of the finally-clause) AND hasFinally, a cleanup is needed.
         val finCleanup   = hasFinally
 
         registerCleanup(finCleanup)
@@ -1119,15 +1092,12 @@ abstract class GenBCode extends BCodeTypes {
 
         for (ch <- caseHandlers) {
 
-          // (2.a) emit case clause proper
           registerCleanup(finCleanup)
           ch match {
             case NamelessEH(typeToDrop, caseBody) =>
               genLoad(caseBody, kind) // adapts caseBody to `kind`, thus it can be stored, if `guardResult`, in `tmp`.
 
             case BoundEH(patSymbol, caseBody) =>
-              // test/files/run/contrib674.scala , a local-var already exists for patSymbol.
-              // rather than creating on first-access, we do it right away to emit debug-info for the created local var.
               val patTK = locals.getOrElse(patSymbol, makeLocal(patSymbol, symInfoTK(patSymbol))).tk
               genLoad(caseBody, kind)
           }
@@ -1229,7 +1199,7 @@ abstract class GenBCode extends BCodeTypes {
 
           case app : Apply => genApply(app, expectedType)
 
-          case ApplyDynamic(qual, args) => sys.error("No invokedynamic support yet.")
+          case _ : ApplyDynamic => sys.error("No invokedynamic support yet.")
 
           case This(qual) =>
             assert(tree.symbol == claszSymbol || tree.symbol.isModuleClass,
@@ -1279,7 +1249,7 @@ abstract class GenBCode extends BCodeTypes {
 
           case Typed(expr, _) => genLoad(expr, expectedType)
 
-          case Assign(_, _) => genStat(tree)
+          case _ : Assign => genStat(tree)
 
           case av : ArrayValue => genArrayValue(av)
 
@@ -1372,7 +1342,6 @@ abstract class GenBCode extends BCodeTypes {
       } // end of genReturn()
 
       private def genApply(app: Apply, expectedType: BType): BType = {
-        val BoxesRunTime = "scala/runtime/BoxesRunTime"
         var generatedType = expectedType
         app match {
 
@@ -1470,28 +1439,29 @@ abstract class GenBCode extends BCodeTypes {
             val sym = fun.symbol
             generatedType = symInfoTK(sym.accessed)
 
-            val fieldInsn: asm.tree.FieldInsnNode = timeTravel {
-              val hostOwner   = qual.tpe.typeSymbol.orElse(sym.owner)
-              val hostClass   = hostOwner.companionClass
-              val fieldName   = sym.accessed.javaSimpleName.toString
-              val staticfield = hostClass.info.findMember(sym.accessed.name, NoFlags, NoFlags, false) orElse {
-                if (!currentRun.compiles(hostOwner)) {
-                  // hostOwner was separately compiled -- the static field symbol needs to be recreated in hostClass
-                  import Flags._
-                  debuglog("recreating sym.accessed.name: " + sym.accessed.name)
-                  val objectfield = hostOwner.info.findMember(sym.accessed.name, NoFlags, NoFlags, false)
-                  val staticfield = hostClass.newVariable(newTermName(sym.accessed.name.toString), app.pos, STATIC | SYNTHETIC | FINAL) setInfo objectfield.tpe
-                  staticfield.addAnnotation(definitions.StaticClass)
-                  hostClass.info.decls enter staticfield
-                  staticfield
-                } else NoSymbol
-              }
-              val fieldDescr  = symTpeTK(staticfield).getDescriptor
-              val opc = if (sym.isGetter) asm.Opcodes.GETSTATIC else asm.Opcodes.PUTSTATIC;
+                def computeFieldInsn(): asm.tree.FieldInsnNode = {
+                  val hostOwner   = qual.tpe.typeSymbol.orElse(sym.owner)
+                  val hostClass   = hostOwner.companionClass
+                  val fieldName   = sym.accessed.javaSimpleName.toString
+                  val staticfield = hostClass.info.findMember(sym.accessed.name, NoFlags, NoFlags, false) orElse {
+                    if (!currentRun.compiles(hostOwner)) {
+                      // hostOwner was separately compiled -- the static field symbol needs to be recreated in hostClass
+                      import Flags._
+                      debuglog("recreating sym.accessed.name: " + sym.accessed.name)
+                      val objectfield = hostOwner.info.findMember(sym.accessed.name, NoFlags, NoFlags, false)
+                      val staticfield = hostClass.newVariable(newTermName(sym.accessed.name.toString), app.pos, STATIC | SYNTHETIC | FINAL) setInfo objectfield.tpe
+                      staticfield.addAnnotation(definitions.StaticClass)
+                      hostClass.info.decls enter staticfield
+                      staticfield
+                    } else NoSymbol
+                  }
+                  val fieldDescr  = symTpeTK(staticfield).getDescriptor
+                  val opc = if (sym.isGetter) asm.Opcodes.GETSTATIC else asm.Opcodes.PUTSTATIC;
 
-              new asm.tree.FieldInsnNode(opc, internalName(hostClass), fieldName, fieldDescr)
-            }
+                  new asm.tree.FieldInsnNode(opc, internalName(hostClass), fieldName, fieldDescr)
+                }
 
+            val fieldInsn: asm.tree.FieldInsnNode = timeTravel { computeFieldInsn() }
 
             if (isGetter(sym)) {
             } else {
@@ -1560,12 +1530,10 @@ abstract class GenBCode extends BCodeTypes {
         val elmKind       = tpeTK(tpt)
         var generatedType = timeTravel { arrayOf(elmKind) }
 
-        var i = 0
         var rest = elems
         while (!rest.isEmpty) {
           genLoad(rest.head, elmKind)
           rest = rest.tail
-          i = i + 1
         }
 
         generatedType
@@ -1585,16 +1553,8 @@ abstract class GenBCode extends BCodeTypes {
         genLoad(tree.selector, INT)
         val generatedType = tpeTK(tree)
 
-        var switchBlocks: List[Tree] = Nil
-
-        // collect switch blocks and their keys, but don't emit yet any switch-block.
-        for (caze @ CaseDef(_, _, body) <- tree.cases) {
-          switchBlocks ::= body
-        }
-
-        // emit switch-blocks.
-        for (caseBody <- switchBlocks.reverse) {
-          genLoad(caseBody, generatedType)
+        for (caze <- tree.cases) {
+          genLoad(caze.body, generatedType)
         }
 
         generatedType
@@ -1859,10 +1819,6 @@ abstract class GenBCode extends BCodeTypes {
               }
             }
 
-            def default() = {
-              genLoad(tree, BOOL)
-            }
-
         tree match {
 
           case Apply(fun, args) if isPrimitive(fun.symbol) =>
@@ -1872,15 +1828,9 @@ abstract class GenBCode extends BCodeTypes {
             lazy val Select(lhs, _) = fun
             val rhs = if(args.isEmpty) EmptyTree else args.head; // args.isEmpty only for ZNOT
 
-                def genZandOrZor() = {
-                  genCond(lhs)
-                  genCond(rhs)
-                }
-
             scalaPrimitives.getPrimitive(fun.symbol) match { // getPrimitive(Symbol) is ok during pass-2
-              case ZNOT   => genCond(lhs)
-              case ZAND   => genZandOrZor()
-              case ZOR    => genZandOrZor()
+              case ZNOT       => genCond(lhs)
+              case ZAND | ZOR => genCond(lhs); genCond(rhs)
               case code   =>
                 // TODO !!!!!!!!!! isReferenceType, in the sense of TypeKind? (ie non-array, non-boxed, non-nothing, may be null)
                 if (scalaPrimitives.isUniversalEqualityOp(code) && tpeTK(lhs).hasObjectSort) {
@@ -1889,10 +1839,10 @@ abstract class GenBCode extends BCodeTypes {
                 else if (scalaPrimitives.isComparisonOp(code))
                   genComparisonOp(lhs, rhs, code)
                 else
-                  default
+                  genLoad(tree, BOOL)
             }
 
-          case _ => default
+          case _ => genLoad(tree, BOOL)
         }
 
       } // end of genCond()
@@ -2256,6 +2206,8 @@ abstract class GenBCode extends BCodeTypes {
       def genThrow(expr: Tree): BType = {
 
         val thrownKind = tpeTK(expr)
+        assert(exemplars.get(thrownKind).isSubtypeOf(ThrowableReference))
+
         genLoad(expr, thrownKind)
         lineNumber(expr)
         emit(asm.Opcodes.ATHROW) // ICode enters here into enterIgnoreMode, we'll rely instead on DCE at ClassNode level.
