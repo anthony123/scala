@@ -781,7 +781,8 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
   def clearBCodeTypes() {
     symExemplars.clear()
     exemplars.clear()
-    innerChainsMap.clear()
+    isNoInnerClass.clear()
+    cachedInnerClasses.clear()
   }
 
   val BOXED_UNIT    = brefType("java/lang/Void")
@@ -1902,39 +1903,62 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
   private val EMPTY_INNERCLASSENTRY_ARRAY = Array.empty[InnerClassEntry]
 
-  private val innerChainsMap = mutable.Map.empty[/* class */ Symbol, Array[InnerClassEntry]]
+  /** Contains previously computed answers to the question "Is this symbol known not to denote an inner class?" */
+  private val isNoInnerClass     = mutable.Set.empty[Symbol]
+  /** Both `isNoInnerClass` and `cachedInnerClasses` contain information valid during the current compiler run. */
+  private val cachedInnerClasses = mutable.Map.empty[/* class */ Symbol, Array[InnerClassEntry]]
 
   /**
-   * @must-single-thread
+   *  Computes and caches the chain of inner-class (over the is-member-of relation) for the given argument.
+   *  The chain thus cached is valid during this compiler run, see in contrast `innerClassesBufferASM` for a cache that is valid only for the class being emitted.
+   *  The argument can be any symbol.
+   *  Returns:
+   *    - the csym argument if inner-class,
+   *    - the associated inner-class-symbol (if any) of csym,
+   *    - otherwise NoSymbol
+   *  This method does not add to `innerClassBufferASM`, use instead `bufferIfInner()` for that.
+   *
+   *  @must-single-thread
    **/
-  final def innerClassesChain(csym: Symbol): Array[InnerClassEntry] = {
+  final def cacheInnerClassesFor(csym: Symbol): Symbol = {
+
     val ics = innerClassSymbolFor(csym)
-    if(ics == NoSymbol) return EMPTY_INNERCLASSENTRY_ARRAY
+    if(ics == NoSymbol) {
+      return NoSymbol
+    }
+    val resultOpt = cachedInnerClasses.get(ics)
+    if(resultOpt.isDefined) {
+      return ics
+    }
 
-        def buildInnerClassesChain: Array[InnerClassEntry] = {
-          var chain: List[Symbol] = Nil
+    var chain: List[Symbol] = Nil
 
-          var x = ics
-          while(x ne NoSymbol) {
-            assert(x.isClass, "not an inner-class symbol")
-            val isInner = !x.rawowner.isPackageClass
-            if (isInner) {
-              chain ::= x
-              x = innerClassSymbolFor(x.rawowner)
-            } else {
-              x = NoSymbol
-            }
-          }
+    var x = ics
+    while(x ne NoSymbol) {
+      assert(x.isClass, "not a class symbol: " + x.fullName)
+      val isInner = !x.rawowner.isPackageClass
+      if (isInner) {
+        chain ::= x
+        x = innerClassSymbolFor(x.rawowner)
+      } else {
+        x = NoSymbol
+      }
+    }
 
-          if(chain.isEmpty) EMPTY_INNERCLASSENTRY_ARRAY
-          else {
-            val arr = new Array[InnerClassEntry](chain.size)
-            (chain map toInnerClassEntry).copyToArray(arr)
-            arr
-          }
-        }
+    // now that we have all of `ics` , `csym` , and soon the inner-classes-chain, it's too tempting not to cache.
+    if(chain.isEmpty) {
+      isNoInnerClass += csym
+      if(csym != ics) { isNoInnerClass += ics }
 
-    innerChainsMap.getOrElseUpdate(ics, buildInnerClassesChain)
+      NoSymbol
+    }
+    else {
+      val arr = new Array[InnerClassEntry](chain.size)
+      (chain map toInnerClassEntry).copyToArray(arr)
+      cachedInnerClasses.put(ics, arr)
+      // notice we don't create another entry for csym
+      ics
+    }
   }
 
   /**
@@ -2419,13 +2443,29 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
     // TODO here's where innerClasses-related stuff should go , as well as javaName , and the helpers they invoke.
 
+    /**
+     *  Contains class-symbols that:
+     *    (a) are known to denote inner classes
+     *        (this implies keys must exist for them in `cachedInnerClasses`)
+     *    (b) are mentioned somewhere in the class being generated.
+     *
+     *  In other words, the lifetime of `innerClassBufferASM` is associated to "the class being generated".
+     *  In contrast, `isNoInnerClass` and `cachedInnerClasses` contain information valid for the current compiler run.
+     */
     val innerClassBufferASM = mutable.LinkedHashSet[Symbol]()
 
     /**
-     * @must-single-thread
+     *  Given a symbol (ideally class-symbol but any symbol will do) determines whether it denotes an inner-class.
+     *  In the positive case, add the class in question to `innerClassBufferASM` based on which
+     *  the InnerClasses JVM attribute *for the current clas* will be emitted.
+     *
+     *  @must-single-thread
      **/
     def bufferIfInner(sym: Symbol) {
-      val ics = innerClassSymbolFor(sym)
+      if(isNoInnerClass(sym) || innerClassBufferASM(sym)) {
+        return
+      }
+      val ics = cacheInnerClassesFor(sym)
       if(ics != NoSymbol) {
         innerClassBufferASM += ics
       }
@@ -2558,10 +2598,12 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     /**
      * @must-single-thread
      */
-    def asmMethodType(s: Symbol): BType = {
-      assert(s.isMethod, "not a method-symbol: " + s)
-      val resT: BType = if (s.isClassConstructor) BType.VOID_TYPE else toTypeKind(s.tpe.resultType);
-      BType.getMethodType( resT, mkArray(s.tpe.paramTypes map toTypeKind) )
+    def asmMethodType(msym: Symbol): BType = {
+      assert(msym.isMethod, "not a method-symbol: " + msym)
+      val resT: BType =
+        if (msym.isClassConstructor || msym.isConstructor) BType.VOID_TYPE
+        else toTypeKind(msym.tpe.resultType);
+      BType.getMethodType( resT, mkArray(msym.tpe.paramTypes map toTypeKind) )
     }
 
     /**
@@ -2573,14 +2615,20 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       // result without duplicates, not yet sorted.
       val result = mutable.Set.empty[InnerClassEntry]
 
-      // add inner classes which might not have been referenced yet TODO this should be done in genPlainClass()
-      afterErasure {
-        for (sym <- List(csym, csym.linkedClassOfClass); memberc <- sym.info.decls.map(innerClassSymbolFor) if memberc.isClass) {
-          innerClassBufferASM += memberc
-        }
+      // add inner classes which might not have been mentioned yet.
+      val lateInnerClasses = afterErasure {
+        for (sym <- List(csym, csym.linkedClassOfClass); memberc <- sym.info.decls.map(innerClassSymbolFor) if memberc.isClass)
+        yield memberc
+      }
+      // must do the following outside the above `afterErasure` otherwise innerClassesChain computes funny class names.
+      for(memberc <- lateInnerClasses) {
+        val ics = cacheInnerClassesFor(memberc);
+        assert((memberc != NoSymbol) && (ics == memberc),
+               "innerClassesChain() says this was no inner-class after all: " + memberc.fullName)
+        innerClassBufferASM += memberc
       }
 
-      for(s <- innerClassBufferASM; e <- innerClassesChain(s)) {
+      for(s <- innerClassBufferASM; e <- cachedInnerClasses(s)) {
 
         assert(e.name != null, "innerClassesChain is broken.") // documentation
         val doAdd = seen.get(e.name) match {
