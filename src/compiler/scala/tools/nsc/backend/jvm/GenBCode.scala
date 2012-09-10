@@ -380,6 +380,7 @@ abstract class GenBCode extends BCodeTypes {
       var cnode: asm.tree.ClassNode  = null
       var thisName: String           = null // the internal name of the class being emitted
       private var claszSymbol: Symbol        = null
+      private var isParcelableClass          = false
       // current method
       private var mnode: asm.tree.MethodNode = null
       private var jMethodName: String        = null
@@ -575,8 +576,6 @@ abstract class GenBCode extends BCodeTypes {
 
       override def getCurrentCUnit(): CompilationUnit = { cunit }
 
-      def isParcelableClass = isAndroidParcelableClass(claszSymbol) // @must-single-thread
-
       // see https://github.com/scala/scala/commit/892ee3df93a10ffe24fb11b37ad7c3a9cb93d5de
       def isAccessorToStaticField(msym: Symbol) = { msym.isAccessor && msym.accessed.hasStaticAnnotation } // @must-single-thread
 
@@ -617,6 +616,7 @@ abstract class GenBCode extends BCodeTypes {
         innerClassBufferASM.clear()
 
         claszSymbol = cd.symbol
+        isParcelableClass = isAndroidParcelableClass(claszSymbol)
         thisName = internalName(claszSymbol)
         cnode = new asm.tree.ClassNode()
         initJClass(cnode, claszSymbol, thisName, getGenericSignature(claszSymbol, claszSymbol.owner), cunit)
@@ -702,14 +702,17 @@ abstract class GenBCode extends BCodeTypes {
       def emit(is: List[asm.tree.AbstractInsnNode]) { for(i <- is) { mnode.instructions.add(i) } }
 
       def emitZeroOf(tk: BType) {
-        tk match {
-          case BOOL => bc.boolconst(false)
-          case BYTE | SHORT | CHAR | INT => bc.iconst(0)
-          case LONG   => bc.lconst(0)
-          case FLOAT  => bc.fconst(0)
-          case DOUBLE => bc.dconst(0)
-          case UNIT   => ()
-          case _      => emit(asm.Opcodes.ACONST_NULL)
+        (tk.sort: @switch) match {
+          case asm.Type.BOOLEAN => bc.boolconst(false)
+          case asm.Type.BYTE  |
+               asm.Type.SHORT |
+               asm.Type.CHAR  |
+               asm.Type.INT     => bc.iconst(0)
+          case asm.Type.LONG    => bc.lconst(0)
+          case asm.Type.FLOAT   => bc.fconst(0)
+          case asm.Type.DOUBLE  => bc.dconst(0)
+          case asm.Type.VOID    => ()
+          case _ => emit(asm.Opcodes.ACONST_NULL)
         }
       }
 
@@ -766,31 +769,23 @@ abstract class GenBCode extends BCodeTypes {
                 val hostClass   = msym.owner.companionClass
                 val fieldName   = msym.accessed.javaSimpleName.toString
                 val fieldDescr  = toTypeKind(staticfield.tpe).getDescriptor
+                val opc =
+                  if (msym.isGetter) asm.Opcodes.GETSTATIC
+                  else asm.Opcodes.PUTSTATIC
+                val insn = new asm.tree.FieldInsnNode(opc, internalName(hostClass), fieldName.toString, fieldDescr)
 
-                if (msym.isGetter) {
-                  // GETSTATIC `hostClass`.`accessed`
-                  emit(
-                    new asm.tree.FieldInsnNode(asm.Opcodes.GETSTATIC,
-                                               internalName(hostClass),
-                                               fieldName.toString,
-                                               fieldDescr)
-                  )
-                  // RETURN `returnType`
-                  bc emitRETURN returnType
-                } else if (msym.isSetter) {
-                  // push setter's argument
-                  load(params.head.symbol)
-                  // GETSTATIC `hostClass`.`accessed`
-                  emit(
-                    new asm.tree.FieldInsnNode(asm.Opcodes.PUTSTATIC,
-                                               internalName(hostClass),
-                                               fieldName.toString,
-                                               fieldDescr)
-                  )
-                  // RETURN `returnType`
-                  bc emitRETURN returnType
-                } else assert(false, "unreachable")
-              }
+                if (opc == asm.Opcodes.GETSTATIC) {
+                  emit(insn) // GETSTATIC `hostClass`.`accessed`
+                } else {
+                  assert(msym.isSetter,
+                         "neither getter nor setter found when emitting (GET/PUT)-STATIC, during emitBodyOfStaticAccessor().")
+                  load(params.head.symbol) // push setter's argument
+                  emit(insn) // PUTSTATIC `hostClass`.`accessed`
+                }
+                // RETURN `returnType`
+                bc emitRETURN returnType
+              } // end of emitBodyOfStaticAccessor()
+
 
         if (!isAbstractMethod && !isNative) {
           lineNumber(rhs)
@@ -803,42 +798,45 @@ abstract class GenBCode extends BCodeTypes {
             // special-cased method body for an accessor to @static field
             emitBodyOfStaticAccessor(staticField)
           } else {
-            // normal method body
-            val veryFirstProgramPoint = currProgramPoint()
-            genLoad(rhs, returnType)
 
-            rhs match {
-              case Block(_, Return(_)) => ()
-              case Return(_) => ()
-              case EmptyTree =>
-                globalError("Concrete method has no definition: " + dd + (
-                  if (settings.debug.value) "(found: " + msym.owner.info.decls.toList.mkString(", ") + ")"
-                  else "")
-                )
-              case _ =>
-                bc emitRETURN returnType
-            }
-            if(emitVars) {
-              // add entries to LocalVariableTable JVM attribute
-              val onePastLastProgramPoint = currProgramPoint()
-              val hasStaticBitSet = ((flags & asm.Opcodes.ACC_STATIC) != 0)
-              if (!hasStaticBitSet) {
-                mnode.visitLocalVariable(
-                  "this",
-                  "L" + thisName + ";",
-                  null,
-                  veryFirstProgramPoint,
-                  onePastLastProgramPoint,
-                  0
-                )
-              }
-              for (p <- params) { emitLocalVarScope(p.symbol, veryFirstProgramPoint, onePastLastProgramPoint, force = true) }
-            }
+                def emitNormalMethodBody() {
+                  val veryFirstProgramPoint = currProgramPoint()
+                  genLoad(rhs, returnType)
 
-            if(methSymbol.isStaticConstructor) {
-              appendToStaticCtor(dd)
-            }
+                  rhs match {
+                    case Block(_, Return(_)) => ()
+                    case Return(_) => ()
+                    case EmptyTree =>
+                      globalError("Concrete method has no definition: " + dd + (
+                        if (settings.debug.value) "(found: " + msym.owner.info.decls.toList.mkString(", ") + ")"
+                        else "")
+                      )
+                    case _ =>
+                      bc emitRETURN returnType
+                  }
+                  if(emitVars) {
+                    // add entries to LocalVariableTable JVM attribute
+                    val onePastLastProgramPoint = currProgramPoint()
+                    val hasStaticBitSet = ((flags & asm.Opcodes.ACC_STATIC) != 0)
+                    if (!hasStaticBitSet) {
+                      mnode.visitLocalVariable(
+                        "this",
+                        "L" + thisName + ";",
+                        null,
+                        veryFirstProgramPoint,
+                        onePastLastProgramPoint,
+                        0
+                      )
+                    }
+                    for (p <- params) { emitLocalVarScope(p.symbol, veryFirstProgramPoint, onePastLastProgramPoint, force = true) }
+                  }
 
+                  if(methSymbol.isStaticConstructor) {
+                    appendToStaticCtor(dd)
+                  }
+                } // end of emitNormalMethodBody()
+
+            emitNormalMethodBody()
           }
 
           // Note we don't invoke visitMax, thus there are no FrameNode among mnode.instructions.
@@ -1774,55 +1772,49 @@ abstract class GenBCode extends BCodeTypes {
           if !methSymbol.isStaticConstructor
           && isAccessorToStaticField(fun.symbol)
           && qual.tpe.typeSymbol.orElse(fun.symbol.owner).companionClass != NoSymbol =>
-            // bypass the accessor to the companion object and load the static field directly
-            // this bypass is not done:
-            // - if the static intializer for the static field itself
-            // - if there is no companion class of the object owner - this happens in the REPL
-            // see https://github.com/scala/scala/commit/892ee3df93a10ffe24fb11b37ad7c3a9cb93d5de
-            // see https://github.com/scala/scala/commit/5a8dfad583b825158cf0abdae5d73a4a7f8cd997
-            // see https://github.com/scala/scala/commit/faa114e2fb6003031efa2cdd56a32a3c44aa71fb
-            val sym = fun.symbol
-            generatedType   = toTypeKind(sym.accessed.info)
-            val hostOwner   = qual.tpe.typeSymbol.orElse(sym.owner)
-            val hostClass   = hostOwner.companionClass
-            val fieldName   = sym.accessed.javaSimpleName.toString
-            val staticfield = hostClass.info.findMember(sym.accessed.name, NoFlags, NoFlags, false) orElse {
-              if (!currentRun.compiles(hostOwner)) {
-                // hostOwner was separately compiled -- the static field symbol needs to be recreated in hostClass
-                import Flags._
-                debuglog("recreating sym.accessed.name: " + sym.accessed.name)
-                val objectfield = hostOwner.info.findMember(sym.accessed.name, NoFlags, NoFlags, false)
-                val staticfield = hostClass.newVariable(newTermName(sym.accessed.name.toString), app.pos, STATIC | SYNTHETIC | FINAL) setInfo objectfield.tpe
-                staticfield.addAnnotation(definitions.StaticClass)
-                hostClass.info.decls enter staticfield
-                staticfield
-              } else NoSymbol
-            }
-            val fieldDescr  = toTypeKind(staticfield.tpe).getDescriptor
 
-            if (sym.isGetter) {
-              // GETSTATIC `hostClass`.`accessed`
-              emit(
-                new asm.tree.FieldInsnNode(asm.Opcodes.GETSTATIC,
-                                           internalName(hostClass),
-                                           fieldName,
-                                           fieldDescr)
-              )
-            } else if (sym.isSetter) {
-              // push setter's argument
-              genLoadArguments(args, paramTKs(app))
-              // PUTSTATIC `hostClass`.`accessed`
-              emit(
-                new asm.tree.FieldInsnNode(asm.Opcodes.PUTSTATIC,
-                                           internalName(hostClass),
-                                           fieldName,
-                                           fieldDescr)
-              )
-              // push false
-              bc.boolconst(false) // TODO what purpose does this serve ...
-            } else {
-              assert(false, "supposedly unreachable")
-            }
+                def emitLoadStaticField() {
+                  // bypass the accessor to the companion object and load the static field directly
+                  // this bypass is not done:
+                  // - if the static intializer for the static field itself
+                  // - if there is no companion class of the object owner - this happens in the REPL
+                  // see https://github.com/scala/scala/commit/892ee3df93a10ffe24fb11b37ad7c3a9cb93d5de
+                  // see https://github.com/scala/scala/commit/5a8dfad583b825158cf0abdae5d73a4a7f8cd997
+                  // see https://github.com/scala/scala/commit/faa114e2fb6003031efa2cdd56a32a3c44aa71fb
+                  val sym = fun.symbol
+                  generatedType   = toTypeKind(sym.accessed.info)
+                  val hostOwner   = qual.tpe.typeSymbol.orElse(sym.owner)
+                  val hostClass   = hostOwner.companionClass
+                  val fieldName   = sym.accessed.javaSimpleName.toString
+                  val staticfield = hostClass.info.findMember(sym.accessed.name, NoFlags, NoFlags, false) orElse {
+                    if (!currentRun.compiles(hostOwner)) {
+                      // hostOwner was separately compiled -- the static field symbol needs to be recreated in hostClass
+                      import Flags._
+                      debuglog("recreating sym.accessed.name: " + sym.accessed.name)
+                      val objectfield = hostOwner.info.findMember(sym.accessed.name, NoFlags, NoFlags, false)
+                      val staticfield = hostClass.newVariable(newTermName(sym.accessed.name.toString), app.pos, STATIC | SYNTHETIC | FINAL) setInfo objectfield.tpe
+                      staticfield.addAnnotation(definitions.StaticClass)
+                      hostClass.info.decls enter staticfield
+                      staticfield
+                    } else NoSymbol
+                  }
+                  val fieldDescr  = toTypeKind(staticfield.tpe).getDescriptor
+                  val opc  = if (sym.isGetter) asm.Opcodes.GETSTATIC else asm.Opcodes.PUTSTATIC
+                  val insn = new asm.tree.FieldInsnNode(opc,internalName(hostClass), fieldName, fieldDescr)
+
+                  if (opc == asm.Opcodes.GETSTATIC) {
+                    emit(insn) // GETSTATIC `hostClass`.`accessed`
+                  } else {
+                    assert(sym.isSetter,
+                           "neither getter nor setter when emitting (GET/PUT)-static, during genApply().")
+                    genLoadArguments(args, paramTKs(app)) // push setter's argument
+                    emit(insn) // PUTSTATIC `hostClass`.`accessed`
+                    // push false
+                    bc.boolconst(false) // TODO what purpose does this serve ...
+                  }
+                } // end of emitLoadStaticField()
+
+            emitLoadStaticField()
 
           case app @ Apply(fun, args) =>
             val sym = fun.symbol
