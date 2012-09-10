@@ -506,7 +506,7 @@ abstract class GenBCode extends BCodeTypes {
       var labelDef: collection.Map[Symbol, LabelDef] = null// (LabelDef-sym -> LabelDef)
 
       // bookkeeping the scopes of non-synthetic local vars, to emit debug info (`emitVars`).
-      var varsInScope: immutable.Map[Symbol, asm.Label] = null // (local-var-sym -> start-of-scope)
+      var varsInScope: List[Pair[Symbol, asm.Label]] = null // (local-var-sym -> start-of-scope)
 
       // helpers around program-points.
       def lastInsn: asm.tree.AbstractInsnNode = {
@@ -1409,7 +1409,7 @@ abstract class GenBCode extends BCodeTypes {
             else { genLoad(rhs, tk) }
             bc.store(idx, tk)
             if(!isSynth) { // there are case <synthetic> ValDef's emitted by patmat
-              varsInScope += (sym -> currProgramPoint())
+              varsInScope ::= (sym -> currProgramPoint())
             }
             generatedType = UNIT
 
@@ -1962,12 +1962,12 @@ abstract class GenBCode extends BCodeTypes {
       def genBlock(tree: Block, expectedType: BType) {
         val Block(stats, expr) = tree
         val savedScope = varsInScope
-        varsInScope = immutable.Map.empty[Symbol, asm.Label]
+        varsInScope = Nil
         stats foreach genStat
         genLoad(expr, expectedType)
         val end = currProgramPoint()
         if(emitVars) { // add entries to LocalVariableTable JVM attribute
-          for (Pair(sym, start) <- varsInScope) { emitLocalVarScope(sym, start, end) }
+          for (Pair(sym, start) <- varsInScope.reverse) { emitLocalVarScope(sym, start, end) }
         }
         varsInScope = savedScope
       }

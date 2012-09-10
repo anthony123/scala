@@ -2600,7 +2600,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
       }
       // sort them so inner classes succeed their enclosing class to satisfy the Eclipse Java compiler
-      for(e <- result.toList sortBy (_.name.length)) {
+      for(e <- result.toList sortBy (_.name.toString)) {
         jclass.visitInnerClass(
           e.name.toString,
           if(e.outerName != null) e.outerName.toString else null,
