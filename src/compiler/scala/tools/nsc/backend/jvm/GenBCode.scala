@@ -394,6 +394,37 @@ abstract class GenBCode extends BCodeTypes {
       // line numbers
       private var lastEmittedLineNr          = -1
 
+      /* ---------------- caches to avoid asking the same questions over and over to typer ---------------- */
+
+      val cacheInternalName = mutable.Map.empty[Symbol, String]
+      override def internalName(sym: Symbol): String = {
+        cacheInternalName.getOrElseUpdate(sym, super[BCInitGen].internalName(sym))
+      }
+
+      val cachedClassType = mutable.Map.empty[Symbol, BType]
+      override def asmClassType(csym: Symbol): BType = {
+        cachedClassType.getOrElseUpdate(csym, super[BCInitGen].asmClassType(csym))
+      }
+
+      val cacheMethodType = mutable.Map.empty[Symbol, BType]
+      override def asmMethodType(msym: Symbol): BType = {
+        cacheMethodType.getOrElseUpdate(msym, super[BCInitGen].asmMethodType(msym))
+      }
+
+      val cacheParamTKs = mutable.Map.empty[ /* Apply's fun */ Symbol, List[BType]]
+      def paramTKs(app: Apply): List[BType] = {
+        val Apply(fun, _)  = app
+        val funSym = fun.symbol
+        cacheParamTKs.getOrElseUpdate(funSym, funSym.info.paramTypes map toTypeKind)
+      }
+
+      val cacheSymInfoTK = mutable.Map.empty[Symbol, BType]
+      def symInfoTK(sym: Symbol): BType = {
+        cacheSymInfoTK.getOrElseUpdate(sym, toTypeKind(sym.info))
+      }
+
+      /* ---------------- Part 1 of program points, ie Labels in the ASM world ---------------- */
+
       /**
        *  A jump node is represented as an Apply whose symbol denotes a LabelDef, the jump target.
        *  The `locLabel` map is used to find the asm.Label to use as destination (upon visiting a jump),
@@ -450,6 +481,8 @@ abstract class GenBCode extends BCodeTypes {
         }
       }
 
+      /* ---------------- local variables and params ---------------- */
+
       // bookkeeping for method-local vars and method-params
       private val locals = mutable.Map.empty[Symbol, Local] // (local-or-param-sym -> Local(TypeKind, name, idx))
       private var nxtIdx = -1 // next available index for local-var
@@ -460,6 +493,9 @@ abstract class GenBCode extends BCodeTypes {
         makeLocal(sym, tk)
         sym
       }
+      def makeLocal(sym: Symbol): Local = {
+        makeLocal(sym, symInfoTK(sym))
+      }
       def makeLocal(sym: Symbol, tk: BType): Local = {
         assert(!locals.contains(sym), "attempt to create duplicate local var.")
         assert(nxtIdx != -1, "not a valid start index")
@@ -469,6 +505,9 @@ abstract class GenBCode extends BCodeTypes {
         nxtIdx += tk.getSize
         loc
       }
+
+      /* ---------------- ---------------- */
+
       // don't confuse with `fieldStore` and `fieldLoad` which also take a symbol but a field-symbol.
       def store(locSym: Symbol) {
         val Local(tk, _, idx, _) = locals(locSym)
@@ -478,6 +517,8 @@ abstract class GenBCode extends BCodeTypes {
         val Local(tk, _, idx, _) = locals(locSym)
         bc.load(idx, tk)
       }
+
+      /* ---------------- Part 2 of program points, ie Labels in the ASM world ---------------- */
 
       /**
        *  The semantics of try-with-finally and synchronized-expr require their cleanup code
@@ -546,10 +587,7 @@ abstract class GenBCode extends BCodeTypes {
         }
       }
 
-      def paramTKs(app: Apply): List[BType] = {
-        val Apply(fun, _)  = app
-        fun.symbol.info.paramTypes map toTypeKind
-      }
+      /* ---------------- Code gen proper ---------------- */
 
       // on entering a method
       private def resetMethodBookkeeping(dd: DefDef) {
@@ -735,7 +773,7 @@ abstract class GenBCode extends BCodeTypes {
 
         // add method-local vars for params
         nxtIdx = if (msym.isStaticMember) 0 else 1;
-        for (p <- params) { makeLocal(p.symbol, toTypeKind(p.symbol.info)) }
+        for (p <- params) { makeLocal(p.symbol) }
 
         val Pair(flags, jmethod0) = initJMethod(
           cnode,
@@ -760,7 +798,7 @@ abstract class GenBCode extends BCodeTypes {
          */
         for(ld <- labelDefsAtOrUnder(dd.rhs); p <- ld.params; if !locals.contains(p.symbol)) {
           // the tail-calls xform results in symbols shared btw method-params and labelDef-params, thus the guard above.
-          makeLocal(p.symbol, toTypeKind(p.symbol.info))
+          makeLocal(p.symbol)
         }
 
               def emitBodyOfStaticAccessor(staticfield: Symbol) {
@@ -939,13 +977,13 @@ abstract class GenBCode extends BCodeTypes {
           case Assign(lhs @ Select(_, _), rhs) =>
             val isStatic = lhs.symbol.isStaticMember
             if (!isStatic) { genLoadQualifier(lhs) }
-            genLoad(rhs, toTypeKind(lhs.symbol.info))
+            genLoad(rhs, symInfoTK(lhs.symbol))
             lineNumber(tree)
             fieldStore(lhs.symbol)
 
           case Assign(lhs, rhs) =>
             val s = lhs.symbol
-            val Local(tk, _, idx, _) = locals.getOrElse(s, makeLocal(s, toTypeKind(s.info)))
+            val Local(tk, _, idx, _) = locals.getOrElse(s, makeLocal(s))
             genLoad(rhs, tk)
             lineNumber(tree)
             bc.store(idx, tk)
@@ -1236,7 +1274,7 @@ abstract class GenBCode extends BCodeTypes {
             case BoundEH   (patSymbol,      caseBody) =>
               // test/files/run/contrib674.scala , a local-var already exists for patSymbol.
               // rather than creating on first-access, we do it right away to emit debug-info for the created local var.
-              val Local(patTK, _, patIdx, _) = locals.getOrElse(patSymbol, makeLocal(patSymbol, toTypeKind(patSymbol.info)))
+              val Local(patTK, _, patIdx, _) = locals.getOrElse(patSymbol, makeLocal(patSymbol))
               bc.store(patIdx, patTK)
               genLoad(caseBody, kind)
               nopIfNeeded(startHandler)
@@ -1404,7 +1442,7 @@ abstract class GenBCode extends BCodeTypes {
             val sym = tree.symbol
             /* most of the time, !locals.contains(sym), unless the current activation of genLoad() is being called
                while duplicating a finalizer that contains this ValDef. */
-            val Local(tk, _, idx, isSynth) = locals.getOrElseUpdate(sym, makeLocal(sym, toTypeKind(sym.info)))
+            val Local(tk, _, idx, isSynth) = locals.getOrElseUpdate(sym, makeLocal(sym))
             if (rhs == EmptyTree) { emitZeroOf(tk) }
             else { genLoad(rhs, tk) }
             bc.store(idx, tk)
@@ -1455,7 +1493,7 @@ abstract class GenBCode extends BCodeTypes {
 
           case Select(qualifier, selector) =>
             val sym = tree.symbol
-            generatedType = toTypeKind(sym.info)
+            generatedType = symInfoTK(sym)
             val hostClass = findHostClass(qualifier.tpe, sym)
             log(s"Host class of $sym with qual $qualifier (${qualifier.tpe}) is $hostClass")
 
@@ -1469,7 +1507,7 @@ abstract class GenBCode extends BCodeTypes {
           case Ident(name) =>
             val sym = tree.symbol
             if (!sym.isPackage) {
-              val tk = toTypeKind(sym.info)
+              val tk = symInfoTK(sym)
               if (sym.isModule) { genLoadModule(tree) }
               else { load(sym) }
               generatedType = tk
@@ -1782,7 +1820,7 @@ abstract class GenBCode extends BCodeTypes {
                   // see https://github.com/scala/scala/commit/5a8dfad583b825158cf0abdae5d73a4a7f8cd997
                   // see https://github.com/scala/scala/commit/faa114e2fb6003031efa2cdd56a32a3c44aa71fb
                   val sym = fun.symbol
-                  generatedType   = toTypeKind(sym.accessed.info)
+                  generatedType   = symInfoTK(sym.accessed)
                   val hostOwner   = qual.tpe.typeSymbol.orElse(sym.owner)
                   val hostClass   = hostOwner.companionClass
                   val fieldName   = sym.accessed.javaSimpleName.toString
@@ -1798,7 +1836,7 @@ abstract class GenBCode extends BCodeTypes {
                       staticfield
                     } else NoSymbol
                   }
-                  val fieldDescr  = toTypeKind(staticfield.tpe).getDescriptor
+                  val fieldDescr = toTypeKind(staticfield.tpe).getDescriptor
                   val opc  = if (sym.isGetter) asm.Opcodes.GETSTATIC else asm.Opcodes.PUTSTATIC
                   val insn = new asm.tree.FieldInsnNode(opc,internalName(hostClass), fieldName, fieldDescr)
 

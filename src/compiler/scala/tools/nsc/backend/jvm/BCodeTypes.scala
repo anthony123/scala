@@ -2432,18 +2432,18 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     }
 
     /**
-     *  Tracks (if needed) the inner class given by sym.
+     *  Tracks (if needed) the inner class given by `sym`.
      *
      *  @must-single-thread
      **/
-    final def internalName(sym: Symbol): String = { asmClassType(sym).getInternalName }
+    def internalName(sym: Symbol): String = { asmClassType(sym).getInternalName }
 
     /**
      *  Tracks (if needed) the inner class given by `sym`.
      *
      *  @must-single-thread
      **/
-    final def asmClassType(sym: Symbol): BType = {
+    def asmClassType(sym: Symbol): BType = {
       assert(hasInternalName(sym), "doesn't have internal name: " + sym.fullName)
       bufferIfInner(sym)
       phantomTypeMap.getOrElse(sym, exemplar(sym).c)
@@ -2558,7 +2558,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     /**
      * @must-single-thread
      */
-    final def asmMethodType(s: Symbol): BType = {
+    def asmMethodType(s: Symbol): BType = {
       assert(s.isMethod, "not a method-symbol: " + s)
       val resT: BType = if (s.isClassConstructor) BType.VOID_TYPE else toTypeKind(s.tpe.resultType);
       BType.getMethodType( resT, mkArray(s.tpe.paramTypes map toTypeKind) )
