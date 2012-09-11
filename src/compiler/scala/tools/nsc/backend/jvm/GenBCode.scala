@@ -396,31 +396,42 @@ abstract class GenBCode extends BCodeTypes {
 
       /* ---------------- caches to avoid asking the same questions over and over to typer ---------------- */
 
-      val cacheInternalName = mutable.Map.empty[Symbol, String]
-      override def internalName(sym: Symbol): String = {
-        cacheInternalName.getOrElseUpdate(sym, super[BCInitGen].internalName(sym))
-      }
-
-      val cachedClassType = mutable.Map.empty[Symbol, BType]
-      override def asmClassType(csym: Symbol): BType = {
-        cachedClassType.getOrElseUpdate(csym, super[BCInitGen].asmClassType(csym))
-      }
-
       val cacheMethodType = mutable.Map.empty[Symbol, BType]
       override def asmMethodType(msym: Symbol): BType = {
-        cacheMethodType.getOrElseUpdate(msym, super[BCInitGen].asmMethodType(msym))
+        val mtOpt = cacheMethodType.get(msym)
+        if(mtOpt.isDefined) {
+          return mtOpt.get
+        }
+        val mt = super[BCInitGen].asmMethodType(msym) // this tracks the inner class in innerClassBufferASM, if needed.
+        cacheMethodType.put(msym, mt)
+
+        mt
       }
 
       val cacheParamTKs = mutable.Map.empty[ /* Apply's fun */ Symbol, List[BType]]
       def paramTKs(app: Apply): List[BType] = {
         val Apply(fun, _)  = app
         val funSym = fun.symbol
-        cacheParamTKs.getOrElseUpdate(funSym, funSym.info.paramTypes map toTypeKind)
+        val pksOpt = cacheParamTKs.get(funSym)
+        if(pksOpt.isDefined) {
+          return pksOpt.get
+        }
+        val pks = (funSym.info.paramTypes map toTypeKind) // this tracks the inner class in innerClassBufferASM, if needed.
+        cacheParamTKs.put(funSym, pks)
+
+        pks
       }
 
       val cacheSymInfoTK = mutable.Map.empty[Symbol, BType]
       def symInfoTK(sym: Symbol): BType = {
-        cacheSymInfoTK.getOrElseUpdate(sym, toTypeKind(sym.info))
+        val skOpt = cacheSymInfoTK.get(sym)
+        if(skOpt.isDefined) {
+          return skOpt.get
+        }
+        val sk = toTypeKind(sym.info) // this tracks the inner class in innerClassBufferASM, if needed.
+        cacheSymInfoTK.put(sym, sk)
+
+        sk
       }
 
       /* ---------------- Part 1 of program points, ie Labels in the ASM world ---------------- */

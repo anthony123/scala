@@ -652,7 +652,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
   /**
    * Creates a TypeName and the BType token for it.
-   * This method does not add to `innerClassesBuffer`, use `internalName()` or `asmType()` or `toTypeKind()` for that.
+   * This method does not add to `innerClassesBufferASM`, use `internalName()` or `asmType()` or `toTypeKind()` for that.
    *
    * @must-single-thread
    **/
@@ -660,7 +660,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
   /**
    * Creates a BType token for the TypeName received as argument.
-   * This method does not add to `innerClassesBuffer`, use `internalName()` or `asmType()` or `toTypeKind()` for that.
+   * This method does not add to `innerClassesBufferASM`, use `internalName()` or `asmType()` or `toTypeKind()` for that.
    *
    *  @can-multi-thread
    **/
@@ -781,8 +781,6 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
   def clearBCodeTypes() {
     symExemplars.clear()
     exemplars.clear()
-    isNoInnerClass.clear()
-    cachedInnerClasses.clear()
   }
 
   val BOXED_UNIT    = brefType("java/lang/Void")
@@ -861,7 +859,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
   /**
    *  All methods of this class @can-multi-thread
    **/
-  case class Tracked(c: BType, flags: Int, sc: Tracked, ifaces: Array[Tracked]) {
+  case class Tracked(c: BType, flags: Int, sc: Tracked, ifaces: Array[Tracked], innersChain: Array[InnerClassEntry]) {
 
     /* `isCompilingStdLib` saves the day when compiling:
      *     (1) scala.Nothing (the test `c.isNonSpecial` fails for it)
@@ -885,6 +883,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     def isSynthetic  = hasFlags(ACC_SYNTHETIC)
     def isSuper      = hasFlags(ACC_SUPER)
     def isDeprecated = hasFlags(ACC_DEPRECATED)
+    def isInnerClass = { innersChain != null }
 
     /** @can-multi-thread */
     def superClasses: List[Tracked] = {
@@ -971,7 +970,8 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
   /**
    * Records the superClass and supportedInterfaces relations,
    * so that afterwards queries can be answered without resorting to typer.
-   * This method does not add to `innerClassesBuffer`, use `internalName()` or `asmType()` or `toTypeKind()` for that.
+   * This method does not add to `innerClassesBufferASM`, use `internalName()` or `asmType()` or `toTypeKind()` for that.
+   * On the other hand, this method does record the inner-class status of the argument, via `buildExemplar()`.
    *
    * @must-single-thread
    */
@@ -1038,7 +1038,10 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     )
 
     val tsc = if(sc == NoSymbol) null else exemplar(sc)
-    Tracked(key, flags, tsc, ifacesArr)
+
+    val innersChain = saveInnerClassesFor(csym, key)
+
+    Tracked(key, flags, tsc, ifacesArr, innersChain)
   }
 
   // ---------------- inspector methods on BType  ----------------
@@ -1898,39 +1901,33 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
   private val EMPTY_INNERCLASSENTRY_ARRAY = Array.empty[InnerClassEntry]
 
-  /** Contains previously computed answers to the question "Is this symbol known not to denote an inner class?" */
-  private val isNoInnerClass     = mutable.Set.empty[BType]
-  /** Both `isNoInnerClass` and `cachedInnerClasses` contain information valid during the current compiler run. */
-  private val cachedInnerClasses = mutable.Map.empty[/* class */ BType, Array[InnerClassEntry]]
-
   /**
-   *  Computes and caches the chain of inner-class (over the is-member-of relation) for the given argument.
+   *  Computes the chain of inner-class (over the is-member-of relation) for the given argument.
+   *  The resulting chain will be cached in `exemplars`.
    *
    *  The chain thus cached is valid during this compiler run, see in contrast
    *  `innerClassesBufferASM` for a cache that is valid only for the class being emitted.
    *
-   *  The argument can be any symbol.
+   *  The argument can be any symbol, but given that this method is invoked only from `buildExemplar()`, in practice it has been vetted to be a class-symbol.
    *
-   *  Returns true for an inner-class argument (ie inner-class itself or having an associated inner-class), false otherwise.
+   *  Returns:
+   *    - a non-empty array of entries for an inner-class argument
+   *      (ie the argument is inner-class itself or having an associated inner-class),
+   *    - null otherwise.
    *
-   *  This method does not add to `innerClassBufferASM`, use instead `bufferIfInner()` for that.
+   *  This method does not add to `innerClassBufferASM`, use instead `exemplar()` for that.
    *
    *  @must-single-thread
    **/
-  final def saveInnerClassesFor(csym: Symbol, csymTK: BType): Boolean = {
+  final def saveInnerClassesFor(csym: Symbol, csymTK: BType): Array[InnerClassEntry] = {
 
     val ics = innerClassSymbolFor(csym)
     if(ics == NoSymbol) {
-      return false
+      return null
     }
     assert(ics == csym, "Disagreement between innerClassSymbolFor() and exemplar()'s tracked symbol for the same input: " + csym.fullName)
-    val resultOpt = cachedInnerClasses.get(csymTK)
-    if(resultOpt.isDefined) {
-      return true
-    }
 
     var chain: List[Symbol] = Nil
-
     var x = ics
     while(x ne NoSymbol) {
       assert(x.isClass, "not a class symbol: " + x.fullName)
@@ -1944,17 +1941,12 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     }
 
     // now that we have all of `ics` , `csym` , and soon the inner-classes-chain, it's too tempting not to cache.
-    if(chain.isEmpty) {
-      isNoInnerClass += csymTK
-
-      false
-    }
+    if(chain.isEmpty) { null }
     else {
       val arr = new Array[InnerClassEntry](chain.size)
       (chain map toInnerClassEntry).copyToArray(arr)
-      cachedInnerClasses.put(csymTK, arr)
-      // notice we don't create another entry for csym
-      true
+
+      arr
     }
   }
 
@@ -2452,26 +2444,6 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     val innerClassBufferASM = mutable.LinkedHashSet[BType]()
 
     /**
-     *  Given:
-     *    - a class-symbol `csym`
-     *    - its BType obtained via `exemplar(sym).c`
-     *  this method determines whether `csym` denotes an inner-class.
-     *
-     *  In the positive case, add the class in question to `innerClassBufferASM` based on which
-     *  the InnerClasses JVM attribute *for the current class* will be emitted.
-     *
-     *  @must-single-thread
-     **/
-    def bufferIfInner(csym: Symbol, csymTK: BType) {
-      if(isNoInnerClass(csymTK) || innerClassBufferASM(csymTK)) {
-        return
-      }
-      if(saveInnerClassesFor(csym, csymTK)) {
-        innerClassBufferASM += csymTK
-      }
-    }
-
-    /**
      *  Tracks (if needed) the inner class given by `sym`.
      *
      *  @must-single-thread
@@ -2489,8 +2461,11 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       if(phantOpt.isDefined) {
         return phantOpt.get
       }
-      val tk = exemplar(sym).c
-      bufferIfInner(sym, tk)
+      val tracked = exemplar(sym)
+      val tk = tracked.c
+      if(tracked.isInnerClass) {
+        innerClassBufferASM += tk
+      }
 
       tk
     }
@@ -2538,8 +2513,11 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
             assert(hasInternalName(sym), "Invoked for a symbol lacking JVM internal name: " + sym.fullName)
             assert(!phantomTypeMap.contains(sym), "phantom types not supposed to reach here.")
 
-            val tk = exemplar(sym).c
-            bufferIfInner(sym, tk)
+            val tracked = exemplar(sym)
+            val tk = tracked.c
+            if(tracked.isInnerClass) {
+              innerClassBufferASM += tk
+            }
 
             tk
           }
@@ -2629,13 +2607,13 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       }
       // must do the following outside the above `afterErasure` otherwise `saveInnerClassesFor()` computes funny class names.
       for(memberc <- lateInnerClasses) {
-        val memberCTK = exemplar(memberc).c
-        val isInner = saveInnerClassesFor(memberc, memberCTK)
-        assert(isInner,"saveInnerClassesFor() says this was no inner-class after all: " + memberc.fullName)
+        val tracked = exemplar(memberc)
+        val memberCTK = tracked.c
+        assert(tracked.isInnerClass, "saveInnerClassesFor() says this was no inner-class after all: " + memberc.fullName)
         innerClassBufferASM += memberCTK
       }
 
-      for(s <- innerClassBufferASM; e <- cachedInnerClasses(s)) {
+      for(s <- innerClassBufferASM; e <- exemplars.get(s).innersChain) {
 
         assert(e.name != null, "saveInnerClassesFor() is broken.") // documentation
         val doAdd = seen.get(e.name) match {
