@@ -1,5 +1,5 @@
 /* NSC -- new Scala compiler
- * Copyright 2005-2011 LAMP/EPFL
+ * Copyright 2005-2012 LAMP/EPFL
  * @author  Martin Odersky
  */
 
@@ -637,7 +637,7 @@ abstract class GenBCode extends BCodeTypes {
 
           case _: ModuleDef => abort("Modules should have been eliminated by refchecks: " + tree)
 
-          case ValDef(mods, name, tpt, rhs) => () // fields are added in the case handler for ClassDef
+          case ValDef(mods, name, tpt, rhs) => () // fields are added in `genPlainClass()`, via `addClassFields()`
 
           case dd : DefDef => genDefDef(dd)
 
@@ -2192,10 +2192,6 @@ abstract class GenBCode extends BCodeTypes {
         val jname    = method.javaSimpleName.toString
         val jtype    = asmMethodType(method).getDescriptor
 
-            def dbg(invoke: String) {
-              debuglog("%s %s %s.%s:%s".format(invoke, receiver.accessString, jowner, jname, jtype))
-            }
-
             def initModule() {
               // we initialize the MODULE$ field immediately after the super ctor
               if (isStaticModule(siteSymbol) && !isModuleInitialized &&
@@ -2212,15 +2208,18 @@ abstract class GenBCode extends BCodeTypes {
               }
             }
 
-        style match {
-          case Static(true)                         => dbg("invokespecial");  bc.invokespecial  (jowner, jname, jtype)
-          case Static(false)                        => dbg("invokestatic");   bc.invokestatic   (jowner, jname, jtype)
-          case Dynamic if isInterfaceCall(receiver) => dbg("invokinterface"); bc.invokeinterface(jowner, jname, jtype)
-          case Dynamic                              => dbg("invokevirtual");  bc.invokevirtual  (jowner, jname, jtype)
-          case SuperCall(_)                         =>
-            dbg("invokespecial")
-            bc.invokespecial(jowner, jname, jtype)
-            initModule()
+        if(style.isStatic) {
+          if(style.hasInstance) { bc.invokespecial  (jowner, jname, jtype) }
+          else                  { bc.invokestatic   (jowner, jname, jtype) }
+        }
+        else if(style.isDynamic) {
+          if(isInterfaceCall(receiver)) { bc.invokeinterface(jowner, jname, jtype) }
+          else                          { bc.invokevirtual  (jowner, jname, jtype) }
+        }
+        else {
+          assert(style.isSuper, "An unknown InvokeStyle: " + style)
+          bc.invokespecial(jowner, jname, jtype)
+          initModule()
         }
 
       } // end of genCallMethod()
