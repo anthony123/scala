@@ -139,7 +139,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
         case _ =>
           assert(chrs(off) == '(')
           var resPos = off + 1
-          while(resPos != ')') { resPos += 1 }
+          while(chrs(resPos) != ')') { resPos += 1 }
           val resType = getType(resPos + 1)
           new BType(METHOD, off, resPos + resType.len)
       }
@@ -207,9 +207,8 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
         if (car == ')') {
           keepGoing = false
         } else if (car == 'L') {
-          while (chrs(off) != ';') {
-            off += 1
-          }
+          while (chrs(off) != ';') { off += 1 }
+          off += 1
           size += 1
         } else if (car != '[') {
           size += 1
@@ -220,9 +219,12 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       size = 0
       while (chrs(off) != ')') {
         args(size) = getType(off)
-        off += args(size).len + (if(args(size).sort == OBJECT) 2 else 0)
+        off += args(size).len
+        if(args(size).sort == OBJECT) { off += 2 }
+        // debug: assert("LVZBSCIJFD[)".contains(chrs(off)))
         size += 1
       }
+      // debug: var check = 0; while(check < args.length) { assert(args(check) != null); check += 1 }
       args
     }
 
@@ -390,7 +392,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     def getReturnType: BType = {
       assert(chrs(off) == '(', "doesn't look like a method descriptor: " + toString)
       var resPos = off + 1
-      while(resPos != ')') { resPos += 1 }
+      while(chrs(resPos) != ')') { resPos += 1 }
       BType.getType(resPos + 1)
     }
 
@@ -781,6 +783,9 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
   def clearBCodeTypes() {
     symExemplars.clear()
     exemplars.clear()
+    cacheMethodType.clear()
+    cacheParamTKs.clear()
+    cacheSymInfoTK.clear()
   }
 
   val BOXED_UNIT    = brefType("java/lang/Void")
@@ -855,6 +860,10 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
   val exemplars    = new java.util.concurrent.ConcurrentHashMap[BType,  Tracked]
   val symExemplars = new java.util.concurrent.ConcurrentHashMap[Symbol, Tracked]
+
+  val cacheMethodType = mutable.Map.empty[Symbol, BType]
+  val cacheParamTKs   = mutable.Map.empty[ /* Apply's fun */ Symbol, List[BType]]
+  val cacheSymInfoTK  = mutable.Map.empty[Symbol, BType]
 
   /**
    *  All methods of this class @can-multi-thread

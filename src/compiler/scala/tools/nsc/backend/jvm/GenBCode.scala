@@ -399,53 +399,83 @@ abstract class GenBCode extends BCodeTypes {
       // TODO Do we need the same global/seen/private classification in mirror-class-builder and bean-info-builder ?
       private def trackMentionedInners(tk: BType) {
         (tk.sort: @switch) match {
-          case asm.Type.OBJECT => if(exemplars.get(tk).isInnerClass) { innerClassBufferASM += tk }
+          case asm.Type.OBJECT =>
+            if(!tk.isPhantomType && exemplars.get(tk).isInnerClass) {
+              innerClassBufferASM += tk
+            }
           case asm.Type.ARRAY  => trackMentionedInners(tk.getElementType)
           case asm.Type.METHOD =>
             trackMentionedInners(tk.getReturnType)
-            tk.getArgumentTypes foreach { atk => trackMentionedInners(atk) }
+            val atks = tk.getArgumentTypes
+
+            atks foreach trackMentionedInners
           case _ => ()
         }
       }
 
-      // TODO keep here results for only (1) private methods AS WELL AS (2) seen methods (for which the inner-classes they mention have been collected)
-      // In BCodeTypes' version of `cacheMethodType` go all non-private (including non-private seen ones).
-      val cacheMethodType = mutable.Map.empty[Symbol, BType]
+      /**
+       *  The `seenMethodType` map avoids redundant isInnerClass queries,
+       *  by recording those `msym` for which that processing was done *for this class* already.
+       *  There's a fall-back, compiler-wide cache: BCodeType's cacheMethodType, which contains non-private method-symbols as keys
+       *  (private ones will only be seen while emitting a particular class).
+       */
+      val seenMethodType = mutable.Map.empty[Symbol, BType]
       override def asmMethodType(msym: Symbol): BType = {
-        val mtOpt = cacheMethodType.get(msym)
+        var mtOpt = seenMethodType.get(msym)
+        if(mtOpt.isDefined) { return mtOpt.get }
+
+        var mt: BType = null
+        mtOpt = cacheMethodType.get(msym)
         if(mtOpt.isDefined) {
-          return mtOpt.get
+          mt = mtOpt.get
+          trackMentionedInners(mt) // this tracks mentioned inner classes (in innerClassBufferASM)
+        } else {
+          mt = super[BCInitGen].asmMethodType(msym) // this tracks mentioned inner classes (in innerClassBufferASM)
+          if(!msym.isPrivate) { cacheMethodType.put(msym, mt) }
         }
-        val mt = super[BCInitGen].asmMethodType(msym) // this tracks the inner class in innerClassBufferASM, if needed.
-        cacheMethodType.put(msym, mt)
+        seenMethodType.put(msym, mt)
 
         mt
       }
 
-      // TODO ditto
-      val cacheParamTKs = mutable.Map.empty[ /* Apply's fun */ Symbol, List[BType]]
+      // Similar division of labor between as described for `seenMethodType` above.
+      val seenParamTKs = mutable.Map.empty[ /* Apply's fun */ Symbol, List[BType]]
       def paramTKs(app: Apply): List[BType] = {
         val Apply(fun, _)  = app
         val funSym = fun.symbol
-        val pksOpt = cacheParamTKs.get(funSym)
+        var pksOpt = seenParamTKs.get(funSym)
+        if(pksOpt.isDefined) { return pksOpt.get }
+
+        var pks: List[BType] = null
+        pksOpt = cacheParamTKs.get(funSym)
         if(pksOpt.isDefined) {
-          return pksOpt.get
+          pks = pksOpt.get
+          pks foreach trackMentionedInners // this tracks mentioned inner classes (in innerClassBufferASM)
+        } else {
+          pks = (funSym.info.paramTypes map toTypeKind) // this tracks mentioned inner classes (in innerClassBufferASM)
+          if(!funSym.isPrivate) { cacheParamTKs.put(funSym, pks) }
         }
-        val pks = (funSym.info.paramTypes map toTypeKind) // this tracks the inner class in innerClassBufferASM, if needed.
-        cacheParamTKs.put(funSym, pks)
+        seenParamTKs.put(funSym, pks)
 
         pks
       }
 
-      // TODO ditto
-      val cacheSymInfoTK = mutable.Map.empty[Symbol, BType]
+      // Similar division of labor between as described for `seenMethodType` above.
+      val seenSymInfoTK = mutable.Map.empty[Symbol, BType]
       def symInfoTK(sym: Symbol): BType = {
-        val skOpt = cacheSymInfoTK.get(sym)
+        var skOpt = seenSymInfoTK.get(sym)
+        if(skOpt.isDefined) { return skOpt.get }
+
+        var sk: BType = null
+        skOpt = cacheSymInfoTK.get(sym)
         if(skOpt.isDefined) {
-          return skOpt.get
+          sk = skOpt.get
+          trackMentionedInners(sk) // this tracks mentioned inner classes (in innerClassBufferASM)
+        } else {
+          sk = toTypeKind(sym.info) // this tracks mentioned inner classes (in innerClassBufferASM)
+          if(!sym.isPrivate) { cacheSymInfoTK.put(sym, sk) }
         }
-        val sk = toTypeKind(sym.info) // this tracks the inner class in innerClassBufferASM, if needed.
-        cacheSymInfoTK.put(sym, sk)
+        seenSymInfoTK.put(sym, sk)
 
         sk
       }
