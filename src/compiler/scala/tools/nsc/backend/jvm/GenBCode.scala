@@ -396,6 +396,20 @@ abstract class GenBCode extends BCodeTypes {
 
       /* ---------------- caches to avoid asking the same questions over and over to typer ---------------- */
 
+      // TODO Do we need the same global/seen/private classification in mirror-class-builder and bean-info-builder ?
+      private def trackMentionedInners(tk: BType) {
+        (tk.sort: @switch) match {
+          case asm.Type.OBJECT => if(exemplars.get(tk).isInnerClass) { innerClassBufferASM += tk }
+          case asm.Type.ARRAY  => trackMentionedInners(tk.getElementType)
+          case asm.Type.METHOD =>
+            trackMentionedInners(tk.getReturnType)
+            tk.getArgumentTypes foreach { atk => trackMentionedInners(atk) }
+          case _ => ()
+        }
+      }
+
+      // TODO keep here results for only (1) private methods AS WELL AS (2) seen methods (for which the inner-classes they mention have been collected)
+      // In BCodeTypes' version of `cacheMethodType` go all non-private (including non-private seen ones).
       val cacheMethodType = mutable.Map.empty[Symbol, BType]
       override def asmMethodType(msym: Symbol): BType = {
         val mtOpt = cacheMethodType.get(msym)
@@ -408,6 +422,7 @@ abstract class GenBCode extends BCodeTypes {
         mt
       }
 
+      // TODO ditto
       val cacheParamTKs = mutable.Map.empty[ /* Apply's fun */ Symbol, List[BType]]
       def paramTKs(app: Apply): List[BType] = {
         val Apply(fun, _)  = app
@@ -422,6 +437,7 @@ abstract class GenBCode extends BCodeTypes {
         pks
       }
 
+      // TODO ditto
       val cacheSymInfoTK = mutable.Map.empty[Symbol, BType]
       def symInfoTK(sym: Symbol): BType = {
         val skOpt = cacheSymInfoTK.get(sym)
@@ -682,8 +698,11 @@ abstract class GenBCode extends BCodeTypes {
         if(optSerial.isDefined) { addSerialVUID(optSerial.get, cnode)}
 
         addClassFields(claszSymbol)
+
         gen(cd.impl)
-        addInnerClassesASM(claszSymbol, cnode)
+
+        trackMemberClasses(claszSymbol)
+        addInnerClassesASM(cnode, innerClassBufferASM.toList)
 
         assert(cd.symbol == claszSymbol, "Someone messed up BCodePhase.claszSymbol during genPlainClass().")
 

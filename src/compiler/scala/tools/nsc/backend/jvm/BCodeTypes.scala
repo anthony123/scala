@@ -652,7 +652,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
   /**
    * Creates a TypeName and the BType token for it.
-   * This method does not add to `innerClassesBufferASM`, use `internalName()` or `asmType()` or `toTypeKind()` for that.
+   * This method does not add to `innerClassBufferASM`, use `internalName()` or `asmType()` or `toTypeKind()` for that.
    *
    * @must-single-thread
    **/
@@ -660,7 +660,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
   /**
    * Creates a BType token for the TypeName received as argument.
-   * This method does not add to `innerClassesBufferASM`, use `internalName()` or `asmType()` or `toTypeKind()` for that.
+   * This method does not add to `innerClassBufferASM`, use `internalName()` or `asmType()` or `toTypeKind()` for that.
    *
    *  @can-multi-thread
    **/
@@ -970,7 +970,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
   /**
    * Records the superClass and supportedInterfaces relations,
    * so that afterwards queries can be answered without resorting to typer.
-   * This method does not add to `innerClassesBufferASM`, use `internalName()` or `asmType()` or `toTypeKind()` for that.
+   * This method does not add to `innerClassBufferASM`, use `internalName()` or `asmType()` or `toTypeKind()` for that.
    * On the other hand, this method does record the inner-class status of the argument, via `buildExemplar()`.
    *
    * @must-single-thread
@@ -998,6 +998,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     assert(!exemplars.containsKey(key), "Maps `symExemplars` and `exemplars` got out of synch.")
     val tr = buildExemplar(key, csym)
     symExemplars.put(csym, tr)
+    if(csym != csym0) { symExemplars.put(csym0, tr) }
     exemplars.put(tr.c, tr) // tr.c is the hash-consed, internalized, canonical representative for csym's key.
     tr
   }
@@ -1906,7 +1907,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
    *  The resulting chain will be cached in `exemplars`.
    *
    *  The chain thus cached is valid during this compiler run, see in contrast
-   *  `innerClassesBufferASM` for a cache that is valid only for the class being emitted.
+   *  `innerClassBufferASM` for a cache that is valid only for the class being emitted.
    *
    *  The argument can be any symbol, but given that this method is invoked only from `buildExemplar()`, in practice it has been vetted to be a class-symbol.
    *
@@ -2441,21 +2442,21 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
      *  In other words, the lifetime of `innerClassBufferASM` is associated to "the class being generated".
      *  In contrast, `isNoInnerClass` and `cachedInnerClasses` contain information valid for the current compiler run.
      */
-    val innerClassBufferASM = mutable.LinkedHashSet[BType]()
+    val innerClassBufferASM = mutable.Set.empty[BType]
 
     /**
      *  Tracks (if needed) the inner class given by `sym`.
      *
      *  @must-single-thread
      **/
-    def internalName(sym: Symbol): String = { asmClassType(sym).getInternalName }
+    final def internalName(sym: Symbol): String = { asmClassType(sym).getInternalName }
 
     /**
      *  Tracks (if needed) the inner class given by `sym`.
      *
      *  @must-single-thread
      **/
-    def asmClassType(sym: Symbol): BType = {
+    final def asmClassType(sym: Symbol): BType = {
       assert(hasInternalName(sym), "doesn't have internal name: " + sym.fullName)
       val phantOpt = phantomTypeMap.get(sym)
       if(phantOpt.isDefined) {
@@ -2592,28 +2593,39 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     }
 
     /**
+     *  Adds to `innerClassBufferASM` all (direct) member inner classes of `csym`,
+     *  thus making sure they get entries in the InnerClasses JVM attribute
+     *  even if otherwise not mentioned in the class being built.
+     *
+     *  @must-single-thread
+     **/
+    final def trackMemberClasses(csym: Symbol): List[BType] = {
+      val lateInnerClasses = afterErasure {
+        for (sym <- List(csym, csym.linkedClassOfClass); memberc <- sym.info.decls.map(innerClassSymbolFor) if memberc.isClass)
+        yield memberc
+      }
+      // as a precaution, do the following outside the above `afterErasure` otherwise funny internal names might be computed.
+      for(memberc <- lateInnerClasses) yield {
+        val tracked = exemplar(memberc)
+        val memberCTK = tracked.c
+        assert(tracked.isInnerClass, "saveInnerClassesFor() says this was no inner-class after all: " + memberc.fullName)
+        innerClassBufferASM += memberCTK
+
+        memberCTK
+      }
+    }
+
+    /**
      * @must-single-thread
      **/
-    def addInnerClassesASM(csym: Symbol, jclass: asm.ClassVisitor) {
+    final def addInnerClassesASM(jclass: asm.ClassVisitor, refedInnerClasses: List[BType]) {
       // used to detect duplicates.
       val seen = mutable.Map.empty[Name, Name]
       // result without duplicates, not yet sorted.
       val result = mutable.Set.empty[InnerClassEntry]
 
-      // add inner classes which might not have been mentioned yet.
-      val lateInnerClasses = afterErasure {
-        for (sym <- List(csym, csym.linkedClassOfClass); memberc <- sym.info.decls.map(innerClassSymbolFor) if memberc.isClass)
-        yield memberc
-      }
-      // must do the following outside the above `afterErasure` otherwise `saveInnerClassesFor()` computes funny class names.
-      for(memberc <- lateInnerClasses) {
-        val tracked = exemplar(memberc)
-        val memberCTK = tracked.c
-        assert(tracked.isInnerClass, "saveInnerClassesFor() says this was no inner-class after all: " + memberc.fullName)
-        innerClassBufferASM += memberCTK
-      }
-
-      for(s <- innerClassBufferASM; e <- exemplars.get(s).innersChain) {
+      for(s: BType           <- refedInnerClasses;
+          e: InnerClassEntry <- exemplars.get(s).innersChain) {
 
         assert(e.name != null, "saveInnerClassesFor() is broken.") // documentation
         val doAdd = seen.get(e.name) match {
@@ -2648,14 +2660,14 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
      *
      *  @must-single-thread
      */
-    def descriptor(t: Type):   String = { toTypeKind(t).getDescriptor   }
+    final def descriptor(t: Type):   String = { toTypeKind(t).getDescriptor   }
 
     /**
      *  Tracks (if needed) the inner class given by `sym`.
      *
      *  @must-single-thread
      */
-    def descriptor(sym: Symbol): String = { asmClassType(sym).getDescriptor }
+    final def descriptor(sym: Symbol): String = { asmClassType(sym).getDescriptor }
 
     /**
      * Returns a new ClassWriter for the class given by arguments.
@@ -3034,14 +3046,8 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
         mkArray(thrownExceptions)
       )
 
-      // typestate: entering mode with valid call sequences:
-      //   [ visitAnnotationDefault ] ( visitAnnotation | visitParameterAnnotation | visitAttribute )*
-
       emitAnnotations(mirrorMethod, others)
       emitParamAnnotations(mirrorMethod, m.info.params.map(_.annotations))
-
-      // typestate: entering mode with valid call sequences:
-      //   visitCode ( visitFrame | visitXInsn | visitLabel | visitTryCatchBlock | visitLocalVariable | visitLineNumber )* visitMaxs ] visitEnd
 
       mirrorMethod.visitCode()
 
@@ -3223,8 +3229,6 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       jclass.visit(classfileVersion, flags,
                    thisName, thisSignature,
                    superClass, mkArray(ifaces))
-      // typestate: entering mode with valid call sequences:
-      //   [ visitSource ] [ visitOuterClass ] ( visitAnnotation | visitAttribute )*
 
       if(emitSource) {
         jclass.visitSource(cunit.source.toString, null /* SourceDebugExtension */)
@@ -3236,15 +3240,9 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
         jclass.visitOuterClass(className, methodName, methodType.getDescriptor)
       }
 
-      // typestate: entering mode with valid call sequences:
-      //   ( visitAnnotation | visitAttribute )*
-
       val ssa = getAnnotPickle(thisName, csym)
       jclass.visitAttribute(if(ssa.isDefined) pickleMarkerLocal else pickleMarkerForeign)
       emitAnnotations(jclass, csym.annotations ++ ssa)
-
-      // typestate: entering mode with valid call sequences:
-      //   ( visitInnerClass | visitField | visitMethod )* visitEnd
 
       if (isStaticModule(csym) || isAndroidParcelableClass(csym)) {
 
@@ -3285,9 +3283,6 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
                           null, // no java-generic-signature
                           null  // no initial value
         )
-
-      // typestate: entering mode with valid call sequences:
-      //   ( visitAnnotation | visitAttribute )* visitEnd.
 
       fv.visitEnd()
     }
@@ -3335,9 +3330,6 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       )
 
       // TODO param names: (m.params map (p => javaName(p.sym)))
-
-      // typestate: entering mode with valid call sequences:
-      //   [ visitAnnotationDefault ] ( visitAnnotation | visitParameterAnnotation | visitAttribute )*
 
       emitAnnotations(jmethod, others)
       emitParamAnnotations(jmethod, paramAnnotations)
@@ -3387,9 +3379,6 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
                                      JAVA_LANG_OBJECT.getInternalName,
                                      EMPTY_STRING_ARRAY)
 
-      // typestate: entering mode with valid call sequences:
-      //   [ visitSource ] [ visitOuterClass ] ( visitAnnotation | visitAttribute )*
-
       if(emitSource) {
         mirrorClass.visitSource("" + cunit.source,
                                 null /* SourceDebugExtension */)
@@ -3399,12 +3388,11 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       mirrorClass.visitAttribute(if(ssa.isDefined) pickleMarkerLocal else pickleMarkerForeign)
       emitAnnotations(mirrorClass, modsym.annotations ++ ssa)
 
-      // typestate: entering mode with valid call sequences:
-      //   ( visitInnerClass | visitField | visitMethod )* visitEnd
-
       addForwarders(isRemote(modsym), mirrorClass, mirrorName, modsym)
 
-      addInnerClassesASM(modsym, mirrorClass)
+      trackMemberClasses(modsym)
+      addInnerClassesASM(mirrorClass, innerClassBufferASM.toList)
+
       mirrorClass.visitEnd()
       // leaving for later on purpose invoking `toByteArray()` on mirrorClass (pipeline-2 will do that).
       val outF: _root_.scala.tools.nsc.io.AbstractFile = {
@@ -3445,9 +3433,6 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
             EMPTY_STRING_ARRAY
       )
 
-      // beanInfoClass typestate: entering mode with valid call sequences:
-      //   [ visitSource ] [ visitOuterClass ] ( visitAnnotation | visitAttribute )*
-
       beanInfoClass.visitSource(
         cunit.source.toString,
         null /* SourceDebugExtension */
@@ -3473,9 +3458,6 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 	          !m.isSetter)
        yield javaSimpleName(m)
 
-      // beanInfoClass typestate: entering mode with valid call sequences:
-      //   ( visitInnerClass | visitField | visitMethod )* visitEnd
-
       val constructor = beanInfoClass.visitMethod(
         asm.Opcodes.ACC_PUBLIC,
         INSTANCE_CONSTRUCTOR_NAME,
@@ -3483,9 +3465,6 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
         null, // no java-generic-signature
         EMPTY_STRING_ARRAY // no throwable exceptions
       )
-
-      // constructor typestate: entering mode with valid call sequences:
-      //   [ visitAnnotationDefault ] ( visitAnnotation | visitParameterAnnotation | visitAttribute )*
 
       val stringArrayJType: BType = arrayOf(JAVA_LANG_STRING)
       val conJType: BType =
@@ -3505,9 +3484,6 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
           fi += 1
         }
       }
-
-      // constructor typestate: entering mode with valid call sequences:
-      //   [ visitCode ( visitFrame | visitXInsn | visitLabel | visitTryCatchBlock | visitLocalVariable | visitLineNumber )* visitMaxs ] visitEnd
 
       constructor.visitCode()
 
@@ -3533,7 +3509,9 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       constructor.visitMaxs(0, 0) // just to follow protocol, dummy arguments
       constructor.visitEnd()
 
-      addInnerClassesASM(cls, beanInfoClass)
+      trackMemberClasses(cls)
+      addInnerClassesASM(beanInfoClass, innerClassBufferASM.toList)
+
       beanInfoClass.visitEnd()
       // leaving for later on purpose (to be done by pipeline-2): invoking `visitEnd()` and `toByteArray()` on beanInfoClass.
 
