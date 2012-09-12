@@ -781,7 +781,7 @@ abstract class GenBCode extends BCodeTypes {
           val jfield = new asm.tree.FieldNode(
             flags,
             f.javaSimpleName.toString,
-            toTypeKind(f.tpe).getDescriptor,
+            symInfoTK(f).getDescriptor,
             javagensig,
             null // no initial value
           )
@@ -864,7 +864,7 @@ abstract class GenBCode extends BCodeTypes {
                 // see https://github.com/scala/scala/commit/892ee3df93a10ffe24fb11b37ad7c3a9cb93d5de
                 val hostClass   = msym.owner.companionClass
                 val fieldName   = msym.accessed.javaSimpleName.toString
-                val fieldDescr  = toTypeKind(staticfield.tpe).getDescriptor
+                val fieldDescr  = symInfoTK(staticfield).getDescriptor
                 val opc =
                   if (msym.isGetter) asm.Opcodes.GETSTATIC
                   else asm.Opcodes.PUTSTATIC
@@ -1631,7 +1631,7 @@ abstract class GenBCode extends BCodeTypes {
           if(hostClass == null) internalName(field.owner)
           else                  internalName(hostClass)
         val fieldJName = field.javaSimpleName.toString
-        val fieldDescr = toTypeKind(field.tpe).getDescriptor
+        val fieldDescr = symInfoTK(field).getDescriptor
         val isStatic   = field.isStaticMember
         val opc =
           if(isLoad) { if (isStatic) asm.Opcodes.GETSTATIC else asm.Opcodes.GETFIELD }
@@ -1892,7 +1892,7 @@ abstract class GenBCode extends BCodeTypes {
                       staticfield
                     } else NoSymbol
                   }
-                  val fieldDescr = toTypeKind(staticfield.tpe).getDescriptor
+                  val fieldDescr = symInfoTK(staticfield).getDescriptor
                   val opc  = if (sym.isGetter) asm.Opcodes.GETSTATIC else asm.Opcodes.PUTSTATIC
                   val insn = new asm.tree.FieldInsnNode(opc,internalName(hostClass), fieldName, fieldDescr)
 
