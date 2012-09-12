@@ -417,7 +417,7 @@ abstract class GenBCode extends BCodeTypes {
        *  The `seenMethodType` map avoids redundant isInnerClass queries,
        *  by recording those `msym` for which that processing was done *for this class* already.
        *  There's a fall-back, compiler-wide cache: BCodeType's cacheMethodType, which contains non-private method-symbols as keys
-       *  (private ones will only be seen while emitting a particular class).
+       *  (private ones will only be seen while emitting a particular class and thus aren't stored there).
        */
       val seenMethodType = mutable.Map.empty[Symbol, BType]
       override def asmMethodType(msym: Symbol): BType = {
@@ -663,9 +663,7 @@ abstract class GenBCode extends BCodeTypes {
         earlyReturnVar      = null
         shouldEmitCleanup   = false
         // used in connection with cleanups
-        returnType =
-          if (dd.symbol.isConstructor) UNIT
-          else toTypeKind(dd.symbol.info.resultType)
+        returnType = asmMethodType(dd.symbol).getReturnType
         lastEmittedLineNr = -1
       }
 
@@ -1794,9 +1792,7 @@ abstract class GenBCode extends BCodeTypes {
             mnode.visitVarInsn(asm.Opcodes.ALOAD, 0)
             genLoadArguments(args, paramTKs(app))
             genCallMethod(fun.symbol, invokeStyle)
-            generatedType =
-              if (fun.symbol.isConstructor) UNIT
-              else toTypeKind(fun.symbol.info.resultType)
+            generatedType = asmMethodType(fun.symbol).getReturnType
 
           // 'new' constructor call: Note: since constructors are
           // thought to return an instance of what they construct,
@@ -1961,8 +1957,7 @@ abstract class GenBCode extends BCodeTypes {
                       genCallMethod(sym, invokeStyle, hostClass)
                     }
 
-                    if (sym.isClassConstructor) UNIT
-                    else toTypeKind(sym.info.resultType);
+                    asmMethodType(sym).getReturnType
 
                   } // end of genNormalMethodCall()
 
