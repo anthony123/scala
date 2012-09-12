@@ -1941,13 +1941,17 @@ abstract class GenBCode extends BCodeTypes {
                     fun match {
                       case Select(qual, _) =>
                         val qualSym = findHostClass(qual.tpe, sym)
-                        if (qualSym == ArrayClass) { targetTypeKind = tpeTK(qual) }
-                        else { hostClass = qualSym }
+                        if (qualSym == ArrayClass) {
+                          targetTypeKind = tpeTK(qual)
+                          log(s"Stored target type kind for {$sym.fullName} as $targetTypeKind")
+                        }
+                        else {
+                          hostClass = qualSym
+                          if (qual.tpe.typeSymbol != qualSym) {
+                            log(s"Precisified host class for $sym from ${qual.tpe.typeSymbol.fullName} to ${qualSym.fullName}")
+                          }
+                        }
 
-                        log(
-                          if (qualSym == ArrayClass) "Stored target type kind " + targetTypeKind + " for " + sym.fullName
-                          else s"Set more precise host class for ${sym.fullName} hostClass: $qualSym"
-                        )
                       case _ =>
                     }
                     if((targetTypeKind != null) && (sym == definitions.Array_clone) && invokeStyle.isDynamic) {
