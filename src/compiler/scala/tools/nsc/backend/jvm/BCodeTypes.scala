@@ -720,6 +720,9 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
   var BeanInfoAttr: Symbol = null
 
+  /** The Object => String overload. */
+  var String_valueOf: Symbol = null
+
   /**
    * @must-single-thread
    **/
@@ -774,6 +777,15 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     AndroidCreatorClass        = rootMirror.getClassIfDefined("android.os.Parcelable$Creator")
 
     BeanInfoAttr = rootMirror.getRequiredClass("scala.beans.BeanInfo")
+
+    String_valueOf = {
+      getMember(StringModule, nme.valueOf) filter (sym =>
+        sym.info.paramTypes match {
+          case List(pt) => pt.typeSymbol == ObjectClass
+          case _        => false
+        }
+      )
+    }
 
   }
 
