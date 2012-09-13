@@ -723,6 +723,13 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
   /** The Object => String overload. */
   var String_valueOf: Symbol = null
 
+  /** From the reference documentation of the Android SDK:
+   *  The `Parcelable` interface identifies classes whose instances can be written to and restored from a `Parcel`.
+   *  Classes implementing the `Parcelable` interface must also have a static field called `CREATOR`,
+   *  which is an object implementing the `Parcelable.Creator` interface.
+   */
+  var androidFieldName: TermName = null
+
   /**
    * @must-single-thread
    **/
@@ -786,6 +793,8 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
         }
       )
     }
+
+    androidFieldName = newTermName("CREATOR")
 
   }
 
@@ -2377,9 +2386,9 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
    **/
   trait BCPickles {
 
-    import scala.reflect.internal.pickling.{ PickleFormat, PickleBuffer }
-
     val versionPickle = {
+      import scala.reflect.internal.pickling.{ PickleFormat, PickleBuffer }
+
       val vp = new PickleBuffer(new Array[Byte](16), -1, 0)
       assert(vp.writeIndex == 0, vp)
       vp writeNat PickleFormat.MajorVersion
@@ -2451,8 +2460,6 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
   } // end of trait BCPickles
 
   trait BCInnerClassGen {
-
-    // TODO here's where innerClasses-related stuff should go , as well as javaName , and the helpers they invoke.
 
     /**
      *  Contains class-symbols that:
@@ -3403,13 +3410,6 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
   trait JAndroidBuilder {
     self: BCInnerClassGen =>
-
-    /** From the reference documentation of the Android SDK:
-     *  The `Parcelable` interface identifies classes whose instances can be written to and restored from a `Parcel`.
-     *  Classes implementing the `Parcelable` interface must also have a static field called `CREATOR`,
-     *  which is an object implementing the `Parcelable.Creator` interface.
-     */
-    val androidFieldName = newTermName("CREATOR")
 
     /**
      * @must-single-thread

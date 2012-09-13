@@ -404,8 +404,8 @@ abstract class GenBCode extends BCodeTypes {
     }
 
     final class PlainClassBuilder(cunit: CompilationUnit, emitSource: Boolean, emitLines: Boolean, emitVars: Boolean)
-      extends BCClassGen // none of these traits should invoke typer during initialization.
-      with    BCAnnotGen
+      extends BCClassGen   // none of these traits should invoke typer during initialization.
+      with    BCAnnotGen   // otherwise we'd need to lock while constructing PlainClassBuilder.
       with    BCInnerClassGen
       with    JAndroidBuilder
       with    BCForwardersGen
