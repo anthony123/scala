@@ -169,7 +169,7 @@ abstract class GenBCode extends BCodeTypes {
      *
      *  @must-single-thread (because it relies on typer).
      */
-    class Worker1(needsOutfileForSymbol: Boolean) extends _root_.java.lang.Runnable {
+    class Worker1(needsOutfileForSymbol: Boolean, emitSource: Boolean, emitLines: Boolean, emitVars: Boolean) extends _root_.java.lang.Runnable {
 
       def run() {
         val id = java.lang.Thread.currentThread.getId
@@ -204,7 +204,7 @@ abstract class GenBCode extends BCodeTypes {
 
           if (isStaticModule(claszSymbol) && isTopLevelModule(claszSymbol)) {
             if (claszSymbol.companionClass == NoSymbol) {
-              mirrorC = mirrorCodeGen.genMirrorClass(claszSymbol, cunit)
+              mirrorC = mirrorCodeGen.genMirrorClass(claszSymbol, cunit, emitSource)
             } else {
               log("No mirror class for module with linked class: " + claszSymbol.fullName)
             }
@@ -213,7 +213,7 @@ abstract class GenBCode extends BCodeTypes {
         }
 
         // -------------- "plain" class --------------
-        val pcb = new PlainClassBuilder(cunit)
+        val pcb = new PlainClassBuilder(cunit, emitSource, emitLines, emitVars)
         pcb.genPlainClass(cd)
         val plainC: SubItem2Plain = SubItem2Plain(plainClassLabel, pcb.thisName, pcb.cnode, outF)
 
@@ -299,8 +299,14 @@ abstract class GenBCode extends BCodeTypes {
       // -----------------------
       // Pipeline from q1 to q2.
       // -----------------------
+      def debugLevel = settings.debuginfo.indexOfChoice
+
+      val emitSource = debugLevel >= 1
+      val emitLines  = debugLevel >= 2
+      val emitVars   = debugLevel >= 3
+
       val workersP1 = for(i <- 1 to MAX_THREADS) yield {
-        val w = new Worker1(needsOutfileForSymbol)
+        val w = new Worker1(needsOutfileForSymbol, emitSource, emitLines, emitVars)
         val t = new _root_.java.lang.Thread(w)
         t.start()
         t
@@ -397,8 +403,8 @@ abstract class GenBCode extends BCodeTypes {
       gen(cunit.body)
     }
 
-    final class PlainClassBuilder(cunit: CompilationUnit)
-      extends BCClassGen
+    final class PlainClassBuilder(cunit: CompilationUnit, emitSource: Boolean, emitLines: Boolean, emitVars: Boolean)
+      extends BCClassGen // none of these traits should invoke typer during initialization.
       with    BCAnnotGen
       with    BCInnerClassGen
       with    JAndroidBuilder
@@ -672,7 +678,7 @@ abstract class GenBCode extends BCodeTypes {
         (lastInsn match { case labnode: asm.tree.LabelNode => (labnode.getLabel == lbl); case _ => false } )
       }
       def lineNumber(tree: Tree) {
-        if(!tree.pos.isDefined) return;
+        if(!emitLines || !tree.pos.isDefined) return;
         val nr = tree.pos.line
         if(nr != lastEmittedLineNr) {
           lastEmittedLineNr = nr

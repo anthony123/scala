@@ -2452,12 +2452,6 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
   trait BCInnerClassGen {
 
-    def debugLevel = settings.debuginfo.indexOfChoice
-
-    val emitSource = debugLevel >= 1
-    val emitLines  = debugLevel >= 2
-    val emitVars   = debugLevel >= 3
-
     // TODO here's where innerClasses-related stuff should go , as well as javaName , and the helpers they invoke.
 
     /**
@@ -3249,7 +3243,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
      *
      *  @must-single-thread
      */
-    def genMirrorClass(modsym: Symbol, cunit: CompilationUnit): SubItem2NonPlain = {
+    def genMirrorClass(modsym: Symbol, cunit: CompilationUnit, emitSource: Boolean): SubItem2NonPlain = {
       assert(modsym.companionClass == NoSymbol, modsym)
       innerClassBufferASM.clear()
       this.cunit = cunit
