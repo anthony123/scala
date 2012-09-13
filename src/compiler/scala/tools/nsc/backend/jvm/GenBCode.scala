@@ -373,15 +373,21 @@ abstract class GenBCode extends BCodeTypes {
     }
 
     final class PlainClassBuilder(cunit: CompilationUnit)
-      extends BCInitGen
+      extends BCClassGen
+      with    BCAnnotGen
+      with    BCInnerClassGen
+      with    JAndroidBuilder
+      with    BCForwardersGen
+      with    BCPickles
       with    BCJGenSigGen {
 
       // current class
       var cnode: asm.tree.ClassNode  = null
       var thisName: String           = null // the internal name of the class being emitted
       private var claszSymbol: Symbol        = null
-      private var isParcelableClass          = false
+      private var isCZParcelable             = false
       private var isCZStaticModule           = false
+      private var isCZRemote                 = false
       // current method
       private var mnode: asm.tree.MethodNode = null
       private var jMethodName: String        = null
@@ -431,7 +437,7 @@ abstract class GenBCode extends BCodeTypes {
           mt = mtOpt.get
           trackMentionedInners(mt) // this tracks mentioned inner classes (in innerClassBufferASM)
         } else {
-          mt = super[BCInitGen].asmMethodType(msym) // this tracks mentioned inner classes (in innerClassBufferASM)
+          mt = super[BCInnerClassGen].asmMethodType(msym) // this tracks mentioned inner classes (in innerClassBufferASM)
           if(!msym.isPrivate) { cacheMethodType.put(msym, mt) }
         }
         seenMethodType.put(msym, mt)
@@ -482,6 +488,10 @@ abstract class GenBCode extends BCodeTypes {
       }
 
       def tpeTK(tree: Tree): BType = { toTypeKind(tree.tpe) }
+
+      def log(msg: => AnyRef) {
+        global synchronized { global.log(msg) }
+      }
 
       /* ---------------- Part 1 of program points, ie Labels in the ASM world ---------------- */
 
@@ -712,17 +722,18 @@ abstract class GenBCode extends BCodeTypes {
         innerClassBufferASM.clear()
 
         claszSymbol       = cd.symbol
-        isParcelableClass = isAndroidParcelableClass(claszSymbol)
+        isCZParcelable    = isAndroidParcelableClass(claszSymbol)
         isCZStaticModule  = isStaticModule(claszSymbol)
+        isCZRemote        = isRemote(claszSymbol)
         thisName          = internalName(claszSymbol)
         cnode             = new asm.tree.ClassNode()
 
-        initJClass(cnode, claszSymbol, thisName, getGenericSignature(claszSymbol, claszSymbol.owner), cunit)
+        initJClass(cnode)
 
         val hasStaticCtor = methodSymbols(cd) exists (_.isStaticConstructor)
         if(!hasStaticCtor) {
           // but needs one ...
-          if(isCZStaticModule || isParcelableClass) {
+          if(isCZStaticModule || isCZParcelable) {
             fabricateStaticInit()
           }
         }
@@ -730,7 +741,7 @@ abstract class GenBCode extends BCodeTypes {
         val optSerial: Option[Long] = serialVUID(claszSymbol)
         if(optSerial.isDefined) { addSerialVUID(optSerial.get, cnode)}
 
-        addClassFields(claszSymbol)
+        addClassFields()
         trackMemberClasses(claszSymbol)
 
         gen(cd.impl)
@@ -740,6 +751,132 @@ abstract class GenBCode extends BCodeTypes {
         assert(cd.symbol == claszSymbol, "Someone messed up BCodePhase.claszSymbol during genPlainClass().")
 
       } // end of method genPlainClass()
+
+      /**
+       * @must-single-thread
+       */
+      private def initJClass(jclass: asm.ClassVisitor) {
+
+        val ps = claszSymbol.info.parents
+        val superClass: String = if(ps.isEmpty) JAVA_LANG_OBJECT.getInternalName else internalName(ps.head.typeSymbol);
+        val ifaces = getSuperInterfaces(claszSymbol) map internalName // `internalName()` tracks inner classes
+
+        // `internalName()` tracks inner classes.
+
+        val flags = mkFlags(
+          javaFlags(claszSymbol),
+          if(isDeprecated(claszSymbol)) asm.Opcodes.ACC_DEPRECATED else 0 // ASM pseudo access flag
+        )
+
+        val thisSignature = getGenericSignature(claszSymbol, claszSymbol.owner)
+        cnode.visit(classfileVersion, flags,
+                    thisName, thisSignature,
+                    superClass, mkArray(ifaces))
+
+        if(emitSource) {
+          cnode.visitSource(cunit.source.toString, null /* SourceDebugExtension */)
+        }
+
+        val enclM = getEnclosingMethodAttribute(claszSymbol)
+        if(enclM != null) {
+          val EnclMethodEntry(className, methodName, methodType) = enclM
+          cnode.visitOuterClass(className, methodName, methodType.getDescriptor)
+        }
+
+        val ssa = getAnnotPickle(thisName, claszSymbol)
+        cnode.visitAttribute(if(ssa.isDefined) pickleMarkerLocal else pickleMarkerForeign)
+        emitAnnotations(cnode, claszSymbol.annotations ++ ssa)
+
+        if (isCZStaticModule || isCZParcelable) {
+
+          if (isCZStaticModule) { addModuleInstanceField() }
+
+        } else {
+
+          val skipStaticForwarders = (claszSymbol.isInterface || settings.noForwarders.value)
+          if (!skipStaticForwarders) {
+            val lmoc = claszSymbol.companionModule
+            // add static forwarders if there are no name conflicts; see bugs #363 and #1735
+            if (lmoc != NoSymbol) {
+              // it must be a top level class (name contains no $s)
+              val isCandidateForForwarders = {
+                afterPickler { !(lmoc.name.toString contains '$') && lmoc.hasModuleFlag && !lmoc.isImplClass && !lmoc.isNestedClass }
+              }
+              if (isCandidateForForwarders) {
+                log("Adding static forwarders from '%s' to implementations in '%s'".format(claszSymbol, lmoc))
+                addForwarders(isRemote(claszSymbol), cnode, thisName, lmoc.moduleClass)
+              }
+            }
+          }
+
+        }
+
+        // the invoker is responsible for adding a class-static constructor.
+
+      } // end of method initJClass
+
+      /**
+       * @can-multi-thread
+       */
+      private def addModuleInstanceField() {
+        val fv =
+          cnode.visitField(PublicStaticFinal, // TODO confirm whether we really don't want ACC_SYNTHETIC nor ACC_DEPRECATED
+                           strMODULE_INSTANCE_FIELD,
+                           "L" + thisName + ";",
+                           null, // no java-generic-signature
+                           null  // no initial value
+          )
+
+        fv.visitEnd()
+      }
+
+      /**
+       * @must-single-thread
+       */
+      private def initJMethod(
+                      msym:             Symbol,
+                      isNative:         Boolean,
+                      paramTypes:       List[BType],
+                      paramAnnotations: List[List[AnnotationInfo]]
+      ): Pair[Int, asm.MethodVisitor] = {
+
+        var resTpe: BType = toTypeKind(msym.info.resultType) // TODO confirm: was msym.tpe.resultType
+        if (msym.isClassConstructor)
+          resTpe = BType.VOID_TYPE
+
+        val flags = mkFlags(
+          javaFlags(msym),
+          if (claszSymbol.isInterface) asm.Opcodes.ACC_ABSTRACT   else 0,
+          if (msym.isStrictFP)         asm.Opcodes.ACC_STRICT     else 0,
+          if (isNative)                asm.Opcodes.ACC_NATIVE     else 0, // native methods of objects are generated in mirror classes
+          if(isDeprecated(msym))       asm.Opcodes.ACC_DEPRECATED else 0  // ASM pseudo access flag
+        )
+
+        // TODO needed? for(ann <- m.symbol.annotations) { ann.symbol.initialize }
+        val jgensig = getGenericSignature(msym, claszSymbol)
+        addRemoteExceptionAnnot(isCZRemote, hasPublicBitSet(flags), msym)
+        val (excs, others) = msym.annotations partition (_.symbol == definitions.ThrowsClass)
+        val thrownExceptions: List[String] = getExceptions(excs)
+
+        val jMethodName =
+          if(msym.isStaticConstructor) CLASS_CONSTRUCTOR_NAME
+          else msym.javaSimpleName.toString
+        val mdesc = BType.getMethodDescriptor(resTpe, mkArray(paramTypes))
+        val jmethod = cnode.visitMethod(
+          flags,
+          jMethodName,
+          mdesc,
+          jgensig,
+          mkArray(thrownExceptions)
+        )
+
+        // TODO param names: (m.params map (p => javaName(p.sym)))
+
+        emitAnnotations(jmethod, others)
+        emitParamAnnotations(jmethod, paramAnnotations)
+
+        Pair(flags, jmethod)
+      } // end of method initJMethod
 
       /**
        * @must-single-thread
@@ -761,14 +898,14 @@ abstract class GenBCode extends BCodeTypes {
           clinit.visitMethodInsn(asm.Opcodes.INVOKESPECIAL,
                                  thisName, INSTANCE_CONSTRUCTOR_NAME, mdesc_arglessvoid)
         }
-        if (isParcelableClass) { legacyAddCreatorCode(clinit, cnode, thisName) }
+        if (isCZParcelable) { legacyAddCreatorCode(clinit, cnode, thisName) }
         clinit.visitInsn(asm.Opcodes.RETURN)
 
         clinit.visitMaxs(0, 0) // just to follow protocol, dummy arguments
         clinit.visitEnd()
       }
 
-      def addClassFields(cls: Symbol) {
+      def addClassFields() {
         /** Non-method term members are fields, except for module members. Module
          *  members can only happen on .NET (no flatten) for inner traits. There,
          *  a module symbol is generated (transformInfo in mixin) which is used
@@ -776,8 +913,8 @@ abstract class GenBCode extends BCodeTypes {
          *  backend emits them as static).
          *  No code is needed for this module symbol.
          */
-        for (f <- fieldSymbols(cls)) {
-          val javagensig = getGenericSignature(f, cls)
+        for (f <- fieldSymbols(claszSymbol)) {
+          val javagensig = getGenericSignature(f, claszSymbol)
           val flags = mkFlags(
             javaFieldFlags(f),
             if(isDeprecated(f)) asm.Opcodes.ACC_DEPRECATED else 0 // ASM pseudo access flag
@@ -839,9 +976,7 @@ abstract class GenBCode extends BCodeTypes {
         for (p <- params) { makeLocal(p.symbol) }
 
         val Pair(flags, jmethod0) = initJMethod(
-          cnode,
           msym, isNative,
-          claszSymbol,  claszSymbol.isInterface,
           params.map(p => locals(p.symbol).tk),
           params.map(p => p.symbol.annotations)
         )
@@ -991,7 +1126,7 @@ abstract class GenBCode extends BCodeTypes {
         var insnParcA: asm.tree.AbstractInsnNode = null
         var insnParcB: asm.tree.AbstractInsnNode = null
         // android creator code
-        if(isParcelableClass) {
+        if(isCZParcelable) {
           // add a static field ("CREATOR") to this class to cache android.os.Parcelable$Creator
           val andrFieldDescr = asmClassType(AndroidCreatorClass).getDescriptor
           cnode.visitField(
