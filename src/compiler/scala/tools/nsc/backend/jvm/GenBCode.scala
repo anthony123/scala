@@ -1011,7 +1011,7 @@ abstract class GenBCode extends BCodeTypes {
                 val opc =
                   if (methSymbol.isGetter) asm.Opcodes.GETSTATIC
                   else asm.Opcodes.PUTSTATIC
-                val insn = new asm.tree.FieldInsnNode(opc, internalName(hostClass), fieldName.toString, fieldDescr)
+                val insn = new asm.tree.FieldInsnNode(opc, internalName(hostClass), fieldName, fieldDescr)
 
                 if (opc == asm.Opcodes.GETSTATIC) {
                   emit(insn) // GETSTATIC `hostClass`.`accessed`
@@ -2285,7 +2285,7 @@ abstract class GenBCode extends BCodeTypes {
       }
 
       def genLoadModule(module: Symbol) {
-        if (claszSymbol == module.moduleClass && jMethodName != nme.readResolve.toString) {
+        if (claszSymbol == module.moduleClass && jMethodName != "readResolve") {
           mnode.visitVarInsn(asm.Opcodes.ALOAD, 0)
         } else {
           mnode.visitFieldInsn(
