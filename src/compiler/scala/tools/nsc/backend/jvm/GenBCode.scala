@@ -391,6 +391,7 @@ abstract class GenBCode extends BCodeTypes {
       // current method
       private var mnode: asm.tree.MethodNode = null
       private var jMethodName: String        = null
+      private var isMethSymStaticCtor        = false
       private var returnType: BType          = null
       private var methSymbol: Symbol         = null
       // in GenASM this is local to genCode(), ie should get false whenever a new method is emitted (including fabricated ones eg addStaticInit())
@@ -856,14 +857,14 @@ abstract class GenBCode extends BCodeTypes {
         val (excs, others) = methSymbol.annotations partition (_.symbol == definitions.ThrowsClass)
         val thrownExceptions: List[String] = getExceptions(excs)
 
-        val jMethodName2 =
-          if(methSymbol.isStaticConstructor) CLASS_CONSTRUCTOR_NAME
+        val bytecodeName =
+          if(isMethSymStaticCtor) CLASS_CONSTRUCTOR_NAME
           else jMethodName
 
         val mdesc = asmMethodType(methSymbol).getDescriptor
         mnode = cnode.visitMethod(
           flags,
-          jMethodName2,
+          bytecodeName,
           mdesc,
           jgensig,
           mkArray(thrownExceptions)
@@ -960,6 +961,7 @@ abstract class GenBCode extends BCodeTypes {
         methSymbol  = dd.symbol
         jMethodName = methSymbol.javaSimpleName.toString
         returnType  = asmMethodType(dd.symbol).getReturnType
+        isMethSymStaticCtor = methSymbol.isStaticConstructor
 
         resetMethodBookkeeping(dd)
 
@@ -1068,9 +1070,7 @@ abstract class GenBCode extends BCodeTypes {
                     for (p <- params) { emitLocalVarScope(p.symbol, veryFirstProgramPoint, onePastLastProgramPoint, force = true) }
                   }
 
-                  if(methSymbol.isStaticConstructor) {
-                    appendToStaticCtor(dd)
-                  }
+                  if(isMethSymStaticCtor) { appendToStaticCtor(dd) }
                 } // end of emitNormalMethodBody()
 
             emitNormalMethodBody()
@@ -2001,7 +2001,7 @@ abstract class GenBCode extends BCodeTypes {
             bc.invokestatic(BoxesRunTime, mname, mdesc)
 
           case Apply(fun @ Select(qual, _), args)
-          if !methSymbol.isStaticConstructor
+          if !isMethSymStaticCtor
           && isAccessorToStaticField(fun.symbol)
           && qual.tpe.typeSymbol.orElse(fun.symbol.owner).companionClass != NoSymbol =>
 
