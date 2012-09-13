@@ -413,11 +413,15 @@ abstract class GenBCode extends BCodeTypes {
           case asm.Type.ARRAY  => trackMentionedInners(tk.getElementType)
           case asm.Type.METHOD =>
             trackMentionedInners(tk.getReturnType)
-            val atks = tk.getArgumentTypes
-
-            atks foreach trackMentionedInners
+            trackMentionedInners(tk.getArgumentTypes)
           case _ => ()
         }
+      }
+      private def trackMentionedInners(arr: Array[BType]) {
+        var i = 0; while(i < arr.length) { trackMentionedInners(arr(i)); i += 1 }
+      }
+      private def trackMentionedInners(lst: List[BType]) {
+        var rest = lst; while(rest.nonEmpty) { trackMentionedInners(rest.head); rest = rest.tail }
       }
 
       /**
@@ -438,7 +442,8 @@ abstract class GenBCode extends BCodeTypes {
           trackMentionedInners(mt) // this tracks mentioned inner classes (in innerClassBufferASM)
         } else {
           mt = super[BCInnerClassGen].asmMethodType(msym) // this tracks mentioned inner classes (in innerClassBufferASM)
-          if(!msym.isPrivate) { cacheMethodType.put(msym, mt) }
+          val isPrivate = msym.isPrivate
+          if(!isPrivate) { cacheMethodType.put(msym, mt) }
         }
         seenMethodType.put(msym, mt)
 
@@ -457,10 +462,11 @@ abstract class GenBCode extends BCodeTypes {
         pksOpt = cacheParamTKs.get(funSym)
         if(pksOpt.isDefined) {
           pks = pksOpt.get
-          pks foreach trackMentionedInners // this tracks mentioned inner classes (in innerClassBufferASM)
+          trackMentionedInners(pks)
         } else {
           pks = (funSym.info.paramTypes map toTypeKind) // this tracks mentioned inner classes (in innerClassBufferASM)
-          if(!funSym.isPrivate) { cacheParamTKs.put(funSym, pks) }
+          val isPrivate = funSym.isPrivate
+          if(!isPrivate) { cacheParamTKs.put(funSym, pks) }
         }
         seenParamTKs.put(funSym, pks)
 
@@ -759,8 +765,19 @@ abstract class GenBCode extends BCodeTypes {
 
         val ps = claszSymbol.info.parents
         val superClass: String = if(ps.isEmpty) JAVA_LANG_OBJECT.getInternalName else internalName(ps.head.typeSymbol);
-        val ifaces = getSuperInterfaces(claszSymbol) map internalName // `internalName()` tracks inner classes
-
+        val ifaces: Array[String] = {
+          val arrIfacesTr: Array[Tracked] = exemplar(claszSymbol).ifaces
+          val arrIfaces = new Array[String](arrIfacesTr.length)
+          var i = 0
+          while(i < arrIfacesTr.length) {
+            val ifaceTr = arrIfacesTr(i)
+            val bt = ifaceTr.c
+            if(ifaceTr.isInnerClass) { innerClassBufferASM += bt }
+            arrIfaces(i) = bt.getInternalName
+            i += 1
+          }
+          arrIfaces
+        }
         // `internalName()` tracks inner classes.
 
         val flags = mkFlags(
@@ -771,7 +788,7 @@ abstract class GenBCode extends BCodeTypes {
         val thisSignature = getGenericSignature(claszSymbol, claszSymbol.owner)
         cnode.visit(classfileVersion, flags,
                     thisName, thisSignature,
-                    superClass, mkArray(ifaces))
+                    superClass, ifaces)
 
         if(emitSource) {
           cnode.visitSource(cunit.source.toString, null /* SourceDebugExtension */)
@@ -840,9 +857,7 @@ abstract class GenBCode extends BCodeTypes {
                       paramAnnotations: List[List[AnnotationInfo]]
       ): Pair[Int, asm.MethodVisitor] = {
 
-        var resTpe: BType = toTypeKind(msym.info.resultType) // TODO confirm: was msym.tpe.resultType
-        if (msym.isClassConstructor)
-          resTpe = BType.VOID_TYPE
+        val resTpe: BType = asmMethodType(msym).getReturnType // TODO confirm: was msym.tpe.resultType
 
         val flags = mkFlags(
           javaFlags(msym),

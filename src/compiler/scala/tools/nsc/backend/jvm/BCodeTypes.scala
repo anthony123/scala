@@ -1899,7 +1899,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
    * the value of the outer_class_info_index item must be zero if the value of the inner_name_index item is zero.
    */
 
-  case class InnerClassEntry(name: Name, outerName: Name, innerName: String, access: Int) {
+  case class InnerClassEntry(name: String, outerName: String, innerName: String, access: Int) {
     assert(name != null, "Null isn't good as class name in an InnerClassEntry.")
   }
 
@@ -2004,9 +2004,15 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       if(isDeprecated(innerSym)) asm.Opcodes.ACC_DEPRECATED else 0 // ASM pseudo-access flag
     ) & (INNER_CLASSES_FLAGS | asm.Opcodes.ACC_DEPRECATED)
 
-    val jname = innerSym.javaBinaryName // never null
-    val oname = outerName(innerSym)     // null when method-enclosed
-    val iname = innerName(innerSym)     // null for anonymous inner class
+    val jname = innerSym.javaBinaryName.toString // never null
+    val oname = { // null when method-enclosed
+      val on = outerName(innerSym)
+      if(on == null) null else on.toString
+    }
+    val iname = { // null for anonymous inner class
+      val in = innerName(innerSym)
+      if(in == null) null else in.toString
+    }
 
     InnerClassEntry(jname, oname, iname, access)
   }
@@ -2637,11 +2643,11 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     }
 
     /**
-     * @must-single-thread
+     * @can-multi-thread
      **/
     final def addInnerClassesASM(jclass: asm.ClassVisitor, refedInnerClasses: List[BType]) {
       // used to detect duplicates.
-      val seen = mutable.Map.empty[Name, Name]
+      val seen = mutable.Map.empty[String, String]
       // result without duplicates, not yet sorted.
       val result = mutable.Set.empty[InnerClassEntry]
 
@@ -2667,11 +2673,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       }
       // sort them so inner classes succeed their enclosing class to satisfy the Eclipse Java compiler
       for(e <- result.toList sortBy (_.name.toString)) {
-        jclass.visitInnerClass(
-          e.name.toString,
-          if(e.outerName != null) e.outerName.toString else null,
-          e.innerName,
-          e.access)
+        jclass.visitInnerClass(e.name, e.outerName, e.innerName, e.access)
       }
 
     } // end of method addInnerClassesASM()
@@ -3425,12 +3427,12 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     /**
      * @must-single-thread
      */
-    def legacyAddCreatorCode(clinit: asm.MethodVisitor, jclass: asm.ClassVisitor, thisName: String) {
+    def legacyAddCreatorCode(clinit: asm.MethodVisitor, cnode: asm.tree.ClassNode, thisName: String) {
       // this tracks the inner class in innerClassBufferASM, if needed.
       val androidCreatorType = asmClassType(AndroidCreatorClass)
       val tdesc_creator = androidCreatorType.getDescriptor
 
-      jclass.visitField(
+      cnode.visitField(
         PublicStaticFinal,
         "CREATOR",
         tdesc_creator,
