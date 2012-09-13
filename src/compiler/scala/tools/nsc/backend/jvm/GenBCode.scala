@@ -190,9 +190,18 @@ abstract class GenBCode extends BCodeTypes {
         val Item1(arrivalPos, cd, cunit) = item
         val claszSymbol = cd.symbol
 
+        var isBeanInfo      = false
+        var plainClassLabel = ""
+        var outF: _root_.scala.tools.nsc.io.AbstractFile = null
+
         // -------------- mirror class, if needed --------------
         var mirrorC: SubItem2NonPlain = null
         global synchronized {
+
+          isBeanInfo      = claszSymbol hasAnnotation BeanInfoAttr
+          plainClassLabel = claszSymbol.name.toString
+          outF            = if(needsOutfileForSymbol) getFile(claszSymbol, claszSymbol.javaBinaryName.toString, ".class") else null
+
           if (isStaticModule(claszSymbol) && isTopLevelModule(claszSymbol)) {
             if (claszSymbol.companionClass == NoSymbol) {
               mirrorC = mirrorCodeGen.genMirrorClass(claszSymbol, cunit)
@@ -200,28 +209,25 @@ abstract class GenBCode extends BCodeTypes {
               log("No mirror class for module with linked class: " + claszSymbol.fullName)
             }
           }
+
         }
 
         // -------------- "plain" class --------------
         val pcb = new PlainClassBuilder(cunit)
         pcb.genPlainClass(cd)
-        val plainC: SubItem2Plain = {
-          val label = "" + cd.symbol.name
-          val outF: _root_.scala.tools.nsc.io.AbstractFile = {
-            if(needsOutfileForSymbol) getFile(cd.symbol, pcb.thisName, ".class") else null
-          }
-          SubItem2Plain(label, pcb.thisName, pcb.cnode, outF)
-        }
+        val plainC: SubItem2Plain = SubItem2Plain(plainClassLabel, pcb.thisName, pcb.cnode, outF)
 
         // -------------- bean info class, if needed --------------
         var beanC: SubItem2NonPlain = null
-        if (claszSymbol hasAnnotation BeanInfoAttr) {
-          beanC =
-            beanInfoCodeGen.genBeanInfoClass(
-              claszSymbol, cunit,
-              fieldSymbols(claszSymbol),
-              methodSymbols(cd)
-            )
+        if (isBeanInfo) {
+          global synchronized {
+            beanC =
+              beanInfoCodeGen.genBeanInfoClass(
+                claszSymbol, cunit,
+                fieldSymbols(claszSymbol),
+                methodSymbols(cd)
+              )
+          }
         }
 
         q2 put Item2(arrivalPos, mirrorC, plainC, beanC)
