@@ -797,7 +797,7 @@ abstract class GenBCode extends BCodeTypes {
 
         if(optSerial.isDefined) { addSerialVUID(optSerial.get, cnode)}
 
-        global synchronized { gen(cd.impl) }
+        gen(cd.impl)
       } // end of method genPlainClass()
 
       /**
@@ -996,6 +996,9 @@ abstract class GenBCode extends BCodeTypes {
       def emit(i: asm.tree.AbstractInsnNode) { mnode.instructions.add(i) }
       def emit(is: List[asm.tree.AbstractInsnNode]) { for(i <- is) { mnode.instructions.add(i) } }
 
+      /**
+       *  @can-multi-thread
+       */
       def emitZeroOf(tk: BType) {
         (tk.sort: @switch) match {
           case asm.Type.BOOLEAN => bc.boolconst(false)
@@ -1012,53 +1015,65 @@ abstract class GenBCode extends BCodeTypes {
       }
 
       def genDefDef(dd: DefDef) {
-        // the only method whose implementation is not emitted: getClass()
-        if(definitions.isGetClass(dd.symbol)) { return }
         assert(mnode == null, "GenBCode detected nested method.")
 
-        methSymbol  = dd.symbol
-        jMethodName = methSymbol.javaSimpleName.toString
-        returnType  = asmMethodType(dd.symbol).getReturnType
-        isMethSymStaticCtor = methSymbol.isStaticConstructor
-
+        methSymbol = dd.symbol
         resetMethodBookkeeping(dd)
-
-        // add method-local vars for params
         val DefDef(_, _, _, vparamss, _, rhs) = dd
         assert(vparamss.isEmpty || vparamss.tail.isEmpty, "Malformed parameter list: " + vparamss)
         val params = if(vparamss.isEmpty) Nil else vparamss.head
-        nxtIdx = if (methSymbol.isStaticMember) 0 else 1;
-        for (p <- params) { makeLocal(p.symbol) }
-        // debug assert((params.map(p => locals(p.symbol).tk)) == asmMethodType(methSymbol).getArgumentTypes.toList, "debug")
+        val pendingLDVars = for(ld  <- labelDefsAtOrUnder(dd.rhs); ldp <- ld.params) yield ldp.symbol;
 
-        val isNative         = methSymbol.hasAnnotation(definitions.NativeAttr)
-        val isAbstractMethod = (methSymbol.isDeferred || methSymbol.owner.isInterface)
-        val flags = mkFlags(
-          javaFlags(methSymbol),
-          if (claszSymbol.isInterface) asm.Opcodes.ACC_ABSTRACT   else 0,
-          if (methSymbol.isStrictFP)   asm.Opcodes.ACC_STRICT     else 0,
-          if (isNative)                asm.Opcodes.ACC_NATIVE     else 0, // native methods of objects are generated in mirror classes
-          if(isDeprecated(methSymbol)) asm.Opcodes.ACC_DEPRECATED else 0  // ASM pseudo access flag
-        )
+        var isSFAccessor     = false
+        var isNative         = false
+        var isAbstractMethod = false
+        var flags: Int       = 0
 
-        // TODO needed? for(ann <- m.symbol.annotations) { ann.symbol.initialize }
-        initJMethod(flags, params.map(p => p.symbol.annotations))
+        global synchronized {
 
-        /* Add method-local vars for LabelDef-params.
-         *
-         * This makes sure that:
-         *   (1) upon visiting any "forward-jumping" Apply (ie visited before its target LabelDef), and after
-         *   (2) grabbing the corresponding param symbols,
-         * those param-symbols can be used to access method-local vars.
-         *
-         * When duplicating a finally-contained LabelDef, another program-point is needed for the copy (each such copy has its own asm.Label),
-         * but the same vars (given by the LabelDef's params) can be reused,
-         * because no LabelDef ends up nested within itself after such duplication.
-         */
-        for(ld <- labelDefsAtOrUnder(dd.rhs); ldp <- ld.params; if !locals.contains(ldp.symbol)) {
-          // the tail-calls xform results in symbols shared btw method-params and labelDef-params, thus the guard above.
-          makeLocal(ldp.symbol)
-        }
+          // the only method whose implementation is not emitted: getClass()
+          if(definitions.isGetClass(dd.symbol)) { return }
+          jMethodName = methSymbol.javaSimpleName.toString
+          returnType  = asmMethodType(dd.symbol).getReturnType
+          isMethSymStaticCtor = methSymbol.isStaticConstructor
+
+          // add method-local vars for params
+          nxtIdx = if (methSymbol.isStaticMember) 0 else 1;
+          for (p <- params) { makeLocal(p.symbol) }
+          // debug assert((params.map(p => locals(p.symbol).tk)) == asmMethodType(methSymbol).getArgumentTypes.toList, "debug")
+
+          isNative         = methSymbol.hasAnnotation(definitions.NativeAttr)
+          isAbstractMethod = (methSymbol.isDeferred || methSymbol.owner.isInterface)
+          flags = mkFlags(
+            javaFlags(methSymbol),
+            if (claszSymbol.isInterface) asm.Opcodes.ACC_ABSTRACT   else 0,
+            if (methSymbol.isStrictFP)   asm.Opcodes.ACC_STRICT     else 0,
+            if (isNative)                asm.Opcodes.ACC_NATIVE     else 0, // native methods of objects are generated in mirror classes
+            if(isDeprecated(methSymbol)) asm.Opcodes.ACC_DEPRECATED else 0  // ASM pseudo access flag
+          )
+
+          // TODO needed? for(ann <- m.symbol.annotations) { ann.symbol.initialize }
+          initJMethod(flags, params.map(p => p.symbol.annotations))
+
+          /* Add method-local vars for LabelDef-params.
+           *
+           * This makes sure that:
+           *   (1) upon visiting any "forward-jumping" Apply (ie visited before its target LabelDef), and after
+           *   (2) grabbing the corresponding param symbols,
+           * those param-symbols can be used to access method-local vars.
+           *
+           * When duplicating a finally-contained LabelDef, another program-point is needed for the copy (each such copy has its own asm.Label),
+           * but the same vars (given by the LabelDef's params) can be reused,
+           * because no LabelDef ends up nested within itself after such duplication.
+           */
+          for(s <- pendingLDVars; if !locals.contains(s)) {
+            // the tail-calls xform results in symbols shared btw method-params and labelDef-params, thus the guard.
+            makeLocal(s)
+          }
+
+          isSFAccessor = isAccessorToStaticField(methSymbol)
+
+        } // end of synchronized
 
               def emitBodyOfStaticAccessor(staticfield: Symbol) {
                 // in companion object accessors to @static fields, we access the static field directly
@@ -1086,19 +1101,23 @@ abstract class GenBCode extends BCodeTypes {
 
         if (!isAbstractMethod && !isNative) {
           lineNumber(rhs)
-          val staticField = if (isAccessorToStaticField(methSymbol)) {
-            // https://github.com/scala/scala/commit/cb393fcbe35d0a871f23189d791b44be1b826ed2
-            val compClass = methSymbol.owner.companionClass
-            compClass.info.findMember(methSymbol.accessed.name, NoFlags, NoFlags, false)
+          val staticField = if (isSFAccessor) {
+            global synchronized {
+              // https://github.com/scala/scala/commit/cb393fcbe35d0a871f23189d791b44be1b826ed2
+              val compClass = methSymbol.owner.companionClass
+              compClass.info.findMember(methSymbol.accessed.name, NoFlags, NoFlags, false)
+            }
           } else NoSymbol
           if(staticField != NoSymbol) {
             // special-cased method body for an accessor to @static field
-            emitBodyOfStaticAccessor(staticField)
+            global synchronized { emitBodyOfStaticAccessor(staticField) }
           } else {
 
                 def emitNormalMethodBody() {
                   val veryFirstProgramPoint = currProgramPoint()
-                  genLoad(rhs, returnType)
+                  global synchronized {
+                    genLoad(rhs, returnType) // PENDING
+                  }
 
                   rhs match {
                     case Block(_, Return(_)) => ()
@@ -1171,38 +1190,42 @@ abstract class GenBCode extends BCodeTypes {
         var insnModB: asm.tree.AbstractInsnNode = null
         // call object's private ctor from static ctor
         if (isCZStaticModule) {
-          // NEW `moduleName`
-          val className = internalName(methSymbol.enclClass)
-          insnModA      = new asm.tree.TypeInsnNode(asm.Opcodes.NEW, className)
-          // INVOKESPECIAL <init>
-          val callee = methSymbol.enclClass.primaryConstructor
-          val jname  = callee.javaSimpleName.toString
-          val jowner = internalName(callee.owner)
-          val jtype  = asmMethodType(callee).getDescriptor
-          insnModB   = new asm.tree.MethodInsnNode(asm.Opcodes.INVOKESPECIAL, jowner, jname, jtype)
+          global synchronized {
+            // NEW `moduleName`
+            val className = internalName(methSymbol.enclClass)
+            insnModA      = new asm.tree.TypeInsnNode(asm.Opcodes.NEW, className)
+            // INVOKESPECIAL <init>
+            val callee = methSymbol.enclClass.primaryConstructor
+            val jname  = callee.javaSimpleName.toString
+            val jowner = internalName(callee.owner)
+            val jtype  = asmMethodType(callee).getDescriptor
+            insnModB   = new asm.tree.MethodInsnNode(asm.Opcodes.INVOKESPECIAL, jowner, jname, jtype)
+          }
         }
 
         var insnParcA: asm.tree.AbstractInsnNode = null
         var insnParcB: asm.tree.AbstractInsnNode = null
         // android creator code
         if(isCZParcelable) {
-          // add a static field ("CREATOR") to this class to cache android.os.Parcelable$Creator
-          val andrFieldDescr = asmClassType(AndroidCreatorClass).getDescriptor
-          cnode.visitField(
-            asm.Opcodes.ACC_STATIC | asm.Opcodes.ACC_FINAL,
-            "CREATOR",
-            andrFieldDescr,
-            null,
-            null
-          )
-          // INVOKESTATIC CREATOR(): android.os.Parcelable$Creator; -- TODO where does this Android method come from?
-          val callee = definitions.getMember(claszSymbol.companionModule, androidFieldName)
-          val jowner = internalName(callee.owner)
-          val jname  = callee.javaSimpleName.toString
-          val jtype  = asmMethodType(callee).getDescriptor
-          insnParcA  = new asm.tree.MethodInsnNode(asm.Opcodes.INVOKESTATIC, jowner, jname, jtype)
-          // PUTSTATIC `thisName`.CREATOR;
-          insnParcB  = new asm.tree.FieldInsnNode(asm.Opcodes.PUTSTATIC, thisName, "CREATOR", andrFieldDescr)
+          global synchronized {
+            // add a static field ("CREATOR") to this class to cache android.os.Parcelable$Creator
+            val andrFieldDescr = asmClassType(AndroidCreatorClass).getDescriptor
+            cnode.visitField(
+              asm.Opcodes.ACC_STATIC | asm.Opcodes.ACC_FINAL,
+              "CREATOR",
+              andrFieldDescr,
+              null,
+              null
+            )
+            // INVOKESTATIC CREATOR(): android.os.Parcelable$Creator; -- TODO where does this Android method come from?
+            val callee = definitions.getMember(claszSymbol.companionModule, androidFieldName)
+            val jowner = internalName(callee.owner)
+            val jname  = callee.javaSimpleName.toString
+            val jtype  = asmMethodType(callee).getDescriptor
+            insnParcA  = new asm.tree.MethodInsnNode(asm.Opcodes.INVOKESTATIC, jowner, jname, jtype)
+            // PUTSTATIC `thisName`.CREATOR;
+            insnParcB  = new asm.tree.FieldInsnNode(asm.Opcodes.PUTSTATIC, thisName, "CREATOR", andrFieldDescr)
+          }
         }
 
         // insert a few instructions for initialization before each return instruction
@@ -2169,11 +2192,18 @@ abstract class GenBCode extends BCodeTypes {
         generatedType
       } // end of GenBCode's genApply()
 
+      /**
+       *  @can-multi-thread
+       */
       private def genArrayValue(av: ArrayValue): BType = {
         val ArrayValue(tpt @ TypeTree(), elems) = av
 
-        val elmKind       = tpeTK(tpt)
-        var generatedType = arrayOf(elmKind)
+        var elmKind: BType       = null
+        var generatedType: BType = null
+        global synchronized {
+          elmKind       = tpeTK(tpt)
+          generatedType = arrayOf(elmKind)
+        }
 
         lineNumber(av)
         bc iconst   elems.length
@@ -2201,11 +2231,14 @@ abstract class GenBCode extends BCodeTypes {
        * On a first pass over the case clauses, we flatten the keys and their targets (the latter represented with asm.Labels).
        * That representation allows JCodeMethodV to emit a lookupswitch or a tableswitch.
        *
-       * On a second pass, we emit the switch blocks, one for each different target. */
+       * On a second pass, we emit the switch blocks, one for each different target.
+       *
+       *  @can-multi-thread
+       */
       private def genMatch(tree: Match): BType = {
         lineNumber(tree)
         genLoad(tree.selector, INT)
-        val generatedType = tpeTK(tree)
+        val generatedType = global synchronized { tpeTK(tree) }
 
         var flatKeys: List[Int]       = Nil
         var targets:  List[asm.Label] = Nil
@@ -2264,6 +2297,9 @@ abstract class GenBCode extends BCodeTypes {
         varsInScope = savedScope
       }
 
+      /**
+       *  @can-multi-thread
+       */
       def adapt(from: BType, to: BType): Unit = {
         if (!conforms(from, to) && !(from.isNullType && to.isNothingType)) {
           to match {
