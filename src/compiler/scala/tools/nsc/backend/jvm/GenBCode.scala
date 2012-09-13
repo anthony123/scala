@@ -215,12 +215,14 @@ abstract class GenBCode extends BCodeTypes {
         // -------------- "plain" class --------------
         val pcb = new PlainClassBuilder(cunit, emitSource, emitLines, emitVars)
         pcb.genPlainClass(cd)
+        pcb.addInnerClassesASM(pcb.cnode, pcb.innerClassBufferASM)
+        assert(cd.symbol == claszSymbol, "Someone messed up BCodePhase.claszSymbol during genPlainClass().")
         val plainC: SubItem2Plain = SubItem2Plain(plainClassLabel, pcb.thisName, pcb.cnode, outF)
 
         // -------------- bean info class, if needed --------------
         var beanC: SubItem2NonPlain = null
         if (isBeanInfo) {
-          global synchronized {
+          global synchronized { // emitting bean infos is infrequent enough for non-fine-granular locking to be good enough.
             beanC =
               beanInfoCodeGen.genBeanInfoClass(
                 claszSymbol, cunit,
@@ -467,14 +469,15 @@ abstract class GenBCode extends BCodeTypes {
         var mtOpt = seenMethodType.get(msym)
         if(mtOpt.isDefined) { return mtOpt.get }
 
-        var mt: BType = null
-        mtOpt = cacheMethodType.get(msym)
-        if(mtOpt.isDefined) {
-          mt = mtOpt.get
+        var mt: BType = cacheMethodType.get(msym)
+        if(mt != null) {
           trackMentionedInners(mt) // this tracks mentioned inner classes (in innerClassBufferASM)
         } else {
-          mt = super[BCInnerClassGen].asmMethodType(msym) // this tracks mentioned inner classes (in innerClassBufferASM)
-          val isPrivate = msym.isPrivate
+          var isPrivate = false
+          global synchronized {
+            mt = super[BCInnerClassGen].asmMethodType(msym) // this tracks mentioned inner classes (in innerClassBufferASM)
+            isPrivate = msym.isPrivate
+          }
           if(!isPrivate) { cacheMethodType.put(msym, mt) }
         }
         seenMethodType.put(msym, mt)
@@ -490,14 +493,15 @@ abstract class GenBCode extends BCodeTypes {
         var pksOpt = seenParamTKs.get(funSym)
         if(pksOpt.isDefined) { return pksOpt.get }
 
-        var pks: List[BType] = null
-        pksOpt = cacheParamTKs.get(funSym)
-        if(pksOpt.isDefined) {
-          pks = pksOpt.get
+        var pks: List[BType] = cacheParamTKs.get(funSym)
+        if(pks != null) {
           trackMentionedInners(pks)
         } else {
-          pks = (funSym.info.paramTypes map toTypeKind) // this tracks mentioned inner classes (in innerClassBufferASM)
-          val isPrivate = funSym.isPrivate
+          var isPrivate = false
+          global synchronized {
+            pks = (funSym.info.paramTypes map toTypeKind) // this tracks mentioned inner classes (in innerClassBufferASM)
+            isPrivate = funSym.isPrivate
+          }
           if(!isPrivate) { cacheParamTKs.put(funSym, pks) }
         }
         seenParamTKs.put(funSym, pks)
@@ -511,14 +515,16 @@ abstract class GenBCode extends BCodeTypes {
         var skOpt = seenSymInfoTK.get(sym)
         if(skOpt.isDefined) { return skOpt.get }
 
-        var sk: BType = null
-        skOpt = cacheSymInfoTK.get(sym)
-        if(skOpt.isDefined) {
-          sk = skOpt.get
+        var sk: BType = cacheSymInfoTK.get(sym)
+        if(sk != null) {
           trackMentionedInners(sk) // this tracks mentioned inner classes (in innerClassBufferASM)
         } else {
-          sk = toTypeKind(sym.info) // this tracks mentioned inner classes (in innerClassBufferASM)
-          if(!sym.isPrivate) { cacheSymInfoTK.put(sym, sk) }
+          var isPrivate = false
+          global synchronized {
+            sk = toTypeKind(sym.info) // this tracks mentioned inner classes (in innerClassBufferASM)
+            isPrivate = sym.isPrivate
+          }
+          if(!isPrivate) { cacheSymInfoTK.put(sym, sk) }
         }
         seenSymInfoTK.put(sym, sk)
 
@@ -757,35 +763,35 @@ abstract class GenBCode extends BCodeTypes {
       def genPlainClass(cd: ClassDef) {
         assert(cnode == null, "GenBCode detected nested methods.")
         innerClassBufferASM.clear()
+        claszSymbol = cd.symbol
+        cnode       = new asm.tree.ClassNode()
 
-        claszSymbol       = cd.symbol
-        isCZParcelable    = isAndroidParcelableClass(claszSymbol)
-        isCZStaticModule  = isStaticModule(claszSymbol)
-        isCZRemote        = isRemote(claszSymbol)
-        thisName          = internalName(claszSymbol)
-        cnode             = new asm.tree.ClassNode()
+        var hasStaticCtor = false
 
-        initJClass(cnode)
+        global synchronized {
+          isCZParcelable    = isAndroidParcelableClass(claszSymbol)
+          isCZStaticModule  = isStaticModule(claszSymbol)
+          isCZRemote        = isRemote(claszSymbol)
+          thisName          = internalName(claszSymbol)
 
-        val hasStaticCtor = methodSymbols(cd) exists (_.isStaticConstructor)
-        if(!hasStaticCtor) {
-          // but needs one ...
-          if(isCZStaticModule || isCZParcelable) {
-            fabricateStaticInit()
+          initJClass(cnode)
+
+          hasStaticCtor = methodSymbols(cd) exists (_.isStaticConstructor)
+          if(!hasStaticCtor) {
+            // but needs one ...
+            if(isCZStaticModule || isCZParcelable) {
+              fabricateStaticInit()
+            }
           }
+
+          val optSerial: Option[Long] = serialVUID(claszSymbol)
+          if(optSerial.isDefined) { addSerialVUID(optSerial.get, cnode)}
+
+          addClassFields()
+          trackMemberClasses(claszSymbol)
+
+          gen(cd.impl)
         }
-
-        val optSerial: Option[Long] = serialVUID(claszSymbol)
-        if(optSerial.isDefined) { addSerialVUID(optSerial.get, cnode)}
-
-        addClassFields()
-        trackMemberClasses(claszSymbol)
-
-        gen(cd.impl)
-
-        addInnerClassesASM(cnode, innerClassBufferASM.toList)
-
-        assert(cd.symbol == claszSymbol, "Someone messed up BCodePhase.claszSymbol during genPlainClass().")
 
       } // end of method genPlainClass()
 
@@ -794,22 +800,36 @@ abstract class GenBCode extends BCodeTypes {
        */
       private def initJClass(jclass: asm.ClassVisitor) {
 
-        val ps = claszSymbol.info.parents
-        val superClass: String = if(ps.isEmpty) JAVA_LANG_OBJECT.getInternalName else internalName(ps.head.typeSymbol);
-        val ifaces: Array[String] = {
-          val arrIfacesTr: Array[Tracked] = exemplar(claszSymbol).ifaces
-          val arrIfaces = new Array[String](arrIfacesTr.length)
+        var superClass: String    = null
+        var ifaces: Array[String] = null
+
+        val tr = symExemplars.get(claszSymbol)
+
+        /*if(tr == null)*/ {
+          // must be compiling the Scala library, slow path
+          global synchronized {
+            val ps = claszSymbol.info.parents
+            superClass = if(ps.isEmpty) JAVA_LANG_OBJECT.getInternalName else internalName(ps.head.typeSymbol);
+            ifaces = (getSuperInterfaces(claszSymbol) map internalName).toArray // `internalName()` tracks inner classes
+          }
+        }
+        if(tr != null) {
+          val superClass2 =
+            if(tr.sc == null) JAVA_LANG_OBJECT.getInternalName
+            else tr.sc.c.getInternalName
+          val arrIfacesTr: Array[Tracked] = tr.ifaces
+          val ifaces2 = new Array[String](arrIfacesTr.length)
           var i = 0
           while(i < arrIfacesTr.length) {
             val ifaceTr = arrIfacesTr(i)
             val bt = ifaceTr.c
             if(ifaceTr.isInnerClass) { innerClassBufferASM += bt }
-            arrIfaces(i) = bt.getInternalName
+            ifaces2(i) = bt.getInternalName
             i += 1
           }
-          arrIfaces
+          assert(superClass == superClass2)
+          assert(ifaces sameElements ifaces2)
         }
-        // `internalName()` tracks inner classes.
 
         val flags = mkFlags(
           javaFlags(claszSymbol),
@@ -909,7 +929,7 @@ abstract class GenBCode extends BCodeTypes {
       } // end of method initJMethod
 
       /**
-       * @must-single-thread
+       * @can-multi-thread
        */
       private def fabricateStaticInit() {
 

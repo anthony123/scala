@@ -882,9 +882,9 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
   val exemplars    = new java.util.concurrent.ConcurrentHashMap[BType,  Tracked]
   val symExemplars = new java.util.concurrent.ConcurrentHashMap[Symbol, Tracked]
 
-  val cacheMethodType = mutable.Map.empty[Symbol, BType]
-  val cacheParamTKs   = mutable.Map.empty[ /* Apply's fun */ Symbol, List[BType]]
-  val cacheSymInfoTK  = mutable.Map.empty[Symbol, BType]
+  val cacheMethodType = new java.util.concurrent.ConcurrentHashMap[Symbol, BType]
+  val cacheParamTKs   = new java.util.concurrent.ConcurrentHashMap[ /* Apply's fun */ Symbol, List[BType]]
+  val cacheSymInfoTK  = new java.util.concurrent.ConcurrentHashMap[Symbol, BType]
 
   /**
    *  All methods of this class @can-multi-thread
@@ -2646,7 +2646,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     /**
      * @can-multi-thread
      **/
-    final def addInnerClassesASM(jclass: asm.ClassVisitor, refedInnerClasses: List[BType]) {
+    final def addInnerClassesASM(jclass: asm.ClassVisitor, refedInnerClasses: collection.Set[BType]) {
       // used to detect duplicates.
       val seen = mutable.Map.empty[String, String]
       // result without duplicates, not yet sorted.
@@ -3276,7 +3276,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       addForwarders(isRemote(modsym), mirrorClass, mirrorName, modsym)
 
       trackMemberClasses(modsym)
-      addInnerClassesASM(mirrorClass, innerClassBufferASM.toList)
+      addInnerClassesASM(mirrorClass, innerClassBufferASM)
 
       mirrorClass.visitEnd()
       // leaving for later on purpose invoking `toByteArray()` on mirrorClass (pipeline-2 will do that).
@@ -3395,7 +3395,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       constructor.visitEnd()
 
       trackMemberClasses(cls)
-      addInnerClassesASM(beanInfoClass, innerClassBufferASM.toList)
+      addInnerClassesASM(beanInfoClass, innerClassBufferASM)
 
       beanInfoClass.visitEnd()
       // leaving for later on purpose (to be done by pipeline-2): invoking `visitEnd()` and `toByteArray()` on beanInfoClass.
@@ -3422,43 +3422,47 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
      * @must-single-thread
      */
     def legacyAddCreatorCode(clinit: asm.MethodVisitor, cnode: asm.tree.ClassNode, thisName: String) {
-      // this tracks the inner class in innerClassBufferASM, if needed.
-      val androidCreatorType = asmClassType(AndroidCreatorClass)
-      val tdesc_creator = androidCreatorType.getDescriptor
+      global synchronized {
 
-      cnode.visitField(
-        PublicStaticFinal,
-        "CREATOR",
-        tdesc_creator,
-        null, // no java-generic-signature
-        null  // no initial value
-      ).visitEnd()
+        // this tracks the inner class in innerClassBufferASM, if needed.
+        val androidCreatorType = asmClassType(AndroidCreatorClass)
+        val tdesc_creator = androidCreatorType.getDescriptor
 
-      val moduleName = (thisName + "$")
+        cnode.visitField(
+          PublicStaticFinal,
+          "CREATOR",
+          tdesc_creator,
+          null, // no java-generic-signature
+          null  // no initial value
+        ).visitEnd()
 
-      // GETSTATIC `moduleName`.MODULE$ : `moduleName`;
-      clinit.visitFieldInsn(
-        asm.Opcodes.GETSTATIC,
-        moduleName,
-        strMODULE_INSTANCE_FIELD,
-        "L" + moduleName + ";"
-      )
+        val moduleName = (thisName + "$")
 
-      // INVOKEVIRTUAL `moduleName`.CREATOR() : android.os.Parcelable$Creator;
-      clinit.visitMethodInsn(
-        asm.Opcodes.INVOKEVIRTUAL,
-        moduleName,
-        "CREATOR",
-        BType.getMethodDescriptor(androidCreatorType, Array.empty[BType])
-      )
+        // GETSTATIC `moduleName`.MODULE$ : `moduleName`;
+        clinit.visitFieldInsn(
+          asm.Opcodes.GETSTATIC,
+          moduleName,
+          strMODULE_INSTANCE_FIELD,
+          "L" + moduleName + ";"
+        )
 
-      // PUTSTATIC `thisName`.CREATOR;
-      clinit.visitFieldInsn(
-        asm.Opcodes.PUTSTATIC,
-        thisName,
-        "CREATOR",
-        tdesc_creator
-      )
+        // INVOKEVIRTUAL `moduleName`.CREATOR() : android.os.Parcelable$Creator;
+        clinit.visitMethodInsn(
+          asm.Opcodes.INVOKEVIRTUAL,
+          moduleName,
+          "CREATOR",
+          BType.getMethodDescriptor(androidCreatorType, Array.empty[BType])
+        )
+
+        // PUTSTATIC `thisName`.CREATOR;
+        clinit.visitFieldInsn(
+          asm.Opcodes.PUTSTATIC,
+          thisName,
+          "CREATOR",
+          tdesc_creator
+        )
+
+      }
     }
 
   } // end of trait JAndroidBuilder
