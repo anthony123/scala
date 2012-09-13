@@ -192,11 +192,13 @@ abstract class GenBCode extends BCodeTypes {
 
         // -------------- mirror class, if needed --------------
         var mirrorC: SubItem2NonPlain = null
-        if (isStaticModule(claszSymbol) && isTopLevelModule(claszSymbol)) {
-          if (claszSymbol.companionClass == NoSymbol) {
-            mirrorC = mirrorCodeGen.genMirrorClass(claszSymbol, cunit)
-          } else {
-            log("No mirror class for module with linked class: " + claszSymbol.fullName)
+        global synchronized {
+          if (isStaticModule(claszSymbol) && isTopLevelModule(claszSymbol)) {
+            if (claszSymbol.companionClass == NoSymbol) {
+              mirrorC = mirrorCodeGen.genMirrorClass(claszSymbol, cunit)
+            } else {
+              log("No mirror class for module with linked class: " + claszSymbol.fullName)
+            }
           }
         }
 
