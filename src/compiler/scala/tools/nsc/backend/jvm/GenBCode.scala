@@ -162,7 +162,7 @@ abstract class GenBCode extends BCodeTypes {
       }
     }
     private val poison3 = Item3(Int.MaxValue, null, null, null)
-    private val q3 = new _root_.java.util.concurrent.PriorityBlockingQueue[Item3](1000, i3comparator)
+    private val q3 = new _root_.java.util.concurrent.PriorityBlockingQueue[Item3](100, i3comparator)
 
     /**
      *  Pipeline that takes ClassDefs from queue-1, lowers them into an intermediate form, placing them on queue-2
@@ -383,6 +383,8 @@ abstract class GenBCode extends BCodeTypes {
           expected += 1
         }
       }
+
+      assert(followers.isEmpty, "This logic was working fine up until now.")
     }
 
     /**
@@ -766,33 +768,36 @@ abstract class GenBCode extends BCodeTypes {
         claszSymbol = cd.symbol
         cnode       = new asm.tree.ClassNode()
 
-        var hasStaticCtor = false
+        var hasStaticCtor           = false
+        var optSerial: Option[Long] = None
 
         global synchronized {
+
           isCZParcelable    = isAndroidParcelableClass(claszSymbol)
           isCZStaticModule  = isStaticModule(claszSymbol)
           isCZRemote        = isRemote(claszSymbol)
           thisName          = internalName(claszSymbol)
 
-          initJClass(cnode)
-
           hasStaticCtor = methodSymbols(cd) exists (_.isStaticConstructor)
-          if(!hasStaticCtor) {
-            // but needs one ...
-            if(isCZStaticModule || isCZParcelable) {
-              fabricateStaticInit()
-            }
-          }
-
-          val optSerial: Option[Long] = serialVUID(claszSymbol)
-          if(optSerial.isDefined) { addSerialVUID(optSerial.get, cnode)}
+          optSerial = serialVUID(claszSymbol)
 
           addClassFields()
           trackMemberClasses(claszSymbol)
 
-          gen(cd.impl)
+        } // end of synchronized
+
+        initJClass(cnode)
+
+        if(!hasStaticCtor) {
+          // but needs one ...
+          if(isCZStaticModule || isCZParcelable) {
+            fabricateStaticInit()
+          }
         }
 
+        if(optSerial.isDefined) { addSerialVUID(optSerial.get, cnode)}
+
+        global synchronized { gen(cd.impl) }
       } // end of method genPlainClass()
 
       /**
@@ -805,7 +810,7 @@ abstract class GenBCode extends BCodeTypes {
 
         val tr = symExemplars.get(claszSymbol)
 
-        /*if(tr == null)*/ {
+        if(tr == null) {
           // must be compiling the Scala library, slow path
           global synchronized {
             val ps = claszSymbol.info.parents
@@ -813,71 +818,73 @@ abstract class GenBCode extends BCodeTypes {
             ifaces = (getSuperInterfaces(claszSymbol) map internalName).toArray // `internalName()` tracks inner classes
           }
         }
-        if(tr != null) {
-          val superClass2 =
+        else {
+          superClass =
             if(tr.sc == null) JAVA_LANG_OBJECT.getInternalName
             else tr.sc.c.getInternalName
           val arrIfacesTr: Array[Tracked] = tr.ifaces
-          val ifaces2 = new Array[String](arrIfacesTr.length)
+          ifaces = new Array[String](arrIfacesTr.length)
           var i = 0
           while(i < arrIfacesTr.length) {
             val ifaceTr = arrIfacesTr(i)
             val bt = ifaceTr.c
             if(ifaceTr.isInnerClass) { innerClassBufferASM += bt }
-            ifaces2(i) = bt.getInternalName
+            ifaces(i) = bt.getInternalName
             i += 1
           }
-          assert(superClass == superClass2)
-          assert(ifaces sameElements ifaces2)
         }
 
-        val flags = mkFlags(
-          javaFlags(claszSymbol),
-          if(isDeprecated(claszSymbol)) asm.Opcodes.ACC_DEPRECATED else 0 // ASM pseudo access flag
-        )
+        global synchronized {
 
-        val thisSignature = getGenericSignature(claszSymbol, claszSymbol.owner)
-        cnode.visit(classfileVersion, flags,
-                    thisName, thisSignature,
-                    superClass, ifaces)
+          val flags = mkFlags(
+            javaFlags(claszSymbol),
+            if(isDeprecated(claszSymbol)) asm.Opcodes.ACC_DEPRECATED else 0 // ASM pseudo access flag
+          )
 
-        if(emitSource) {
-          cnode.visitSource(cunit.source.toString, null /* SourceDebugExtension */)
-        }
+          val thisSignature = getGenericSignature(claszSymbol, claszSymbol.owner)
+          cnode.visit(classfileVersion, flags,
+                      thisName, thisSignature,
+                      superClass, ifaces)
 
-        val enclM = getEnclosingMethodAttribute(claszSymbol)
-        if(enclM != null) {
-          val EnclMethodEntry(className, methodName, methodType) = enclM
-          cnode.visitOuterClass(className, methodName, methodType.getDescriptor)
-        }
-
-        val ssa = getAnnotPickle(thisName, claszSymbol)
-        cnode.visitAttribute(if(ssa.isDefined) pickleMarkerLocal else pickleMarkerForeign)
-        emitAnnotations(cnode, claszSymbol.annotations ++ ssa)
-
-        if (isCZStaticModule || isCZParcelable) {
-
-          if (isCZStaticModule) { addModuleInstanceField() }
-
-        } else {
-
-          val skipStaticForwarders = (claszSymbol.isInterface || settings.noForwarders.value)
-          if (!skipStaticForwarders) {
-            val lmoc = claszSymbol.companionModule
-            // add static forwarders if there are no name conflicts; see bugs #363 and #1735
-            if (lmoc != NoSymbol) {
-              // it must be a top level class (name contains no $s)
-              val isCandidateForForwarders = {
-                afterPickler { !(lmoc.name.toString contains '$') && lmoc.hasModuleFlag && !lmoc.isImplClass && !lmoc.isNestedClass }
-              }
-              if (isCandidateForForwarders) {
-                log("Adding static forwarders from '%s' to implementations in '%s'".format(claszSymbol, lmoc))
-                addForwarders(isRemote(claszSymbol), cnode, thisName, lmoc.moduleClass)
-              }
-            }
+          if(emitSource) {
+            cnode.visitSource(cunit.source.toString, null /* SourceDebugExtension */)
           }
 
-        }
+          val enclM = getEnclosingMethodAttribute(claszSymbol)
+          if(enclM != null) {
+            val EnclMethodEntry(className, methodName, methodType) = enclM
+            cnode.visitOuterClass(className, methodName, methodType.getDescriptor)
+          }
+
+          val ssa = getAnnotPickle(thisName, claszSymbol)
+          cnode.visitAttribute(if(ssa.isDefined) pickleMarkerLocal else pickleMarkerForeign)
+          emitAnnotations(cnode, claszSymbol.annotations ++ ssa)
+
+          if (isCZStaticModule || isCZParcelable) {
+
+            if (isCZStaticModule) { addModuleInstanceField() }
+
+          } else {
+
+            val skipStaticForwarders = (claszSymbol.isInterface || settings.noForwarders.value)
+            if (!skipStaticForwarders) {
+              val lmoc = claszSymbol.companionModule
+              // add static forwarders if there are no name conflicts; see bugs #363 and #1735
+              if (lmoc != NoSymbol) {
+                // it must be a top level class (name contains no $s)
+                val isCandidateForForwarders = {
+                  afterPickler { !(lmoc.name.toString contains '$') && lmoc.hasModuleFlag && !lmoc.isImplClass && !lmoc.isNestedClass }
+                }
+                if (isCandidateForForwarders) {
+                  log("Adding static forwarders from '%s' to implementations in '%s'".format(claszSymbol, lmoc))
+                  addForwarders(isRemote(claszSymbol), cnode, thisName, lmoc.moduleClass)
+                }
+              }
+            }
+
+          }
+
+        } // end of synchronized
 
         // the invoker is responsible for adding a class-static constructor.
 
