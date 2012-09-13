@@ -128,8 +128,9 @@ abstract class GenBCode extends BCodeTypes {
       java.lang.Runtime.getRuntime.availableProcessors
     )
 
-    private val woStarted = new java.util.concurrent.ConcurrentHashMap[Long, Long]  // debug
-    private val woExited  = new java.util.concurrent.ConcurrentHashMap[Long, Item2] // debug
+    private val woStarted  = new java.util.concurrent.ConcurrentHashMap[Long, Long] // debug
+    private val woExitedP1 = new java.util.concurrent.ConcurrentHashMap[Long, Long] // debug
+    private val woExitedP2 = new java.util.concurrent.ConcurrentHashMap[Long, Long] // debug
 
     private var bytecodeWriter  : BytecodeWriter   = null
     private var mirrorCodeGen   : JMirrorBuilder   = null
@@ -171,10 +172,14 @@ abstract class GenBCode extends BCodeTypes {
     class Worker1(needsOutfileForSymbol: Boolean) extends _root_.java.lang.Runnable {
 
       def run() {
+        val id = java.lang.Thread.currentThread.getId
+        woStarted.put(id, id)
+
         while (true) {
           val item = q1.take
           if(item.isPoison) {
-            for(i <- 1 to MAX_THREADS) { q2 put poison2 } // explanation in Worker2.run() as to why MAX_THREADS poison pills are needed on queue-2.
+            woExitedP1.put(id, id)
+            q2 put poison2
             return
           }
           else { visit(item) }
@@ -236,7 +241,7 @@ abstract class GenBCode extends BCodeTypes {
         while (true) {
           val item = q2.take
           if(item.isPoison) {
-            woExited.put(id, item)
+            woExitedP2.put(id, id)
             q3 put poison3 // therefore queue-3 will contain as many poison pills as worker threads in pipeline-2
             return // in order to terminate all workers, queue-1 must contain as many poison pills as worker threads in pipeline-2
           }
@@ -286,16 +291,26 @@ abstract class GenBCode extends BCodeTypes {
       // -----------------------
       // Pipeline from q1 to q2.
       // -----------------------
-      new _root_.java.lang.Thread(new Worker1(needsOutfileForSymbol)).start()
+      val workersP1 = for(i <- 1 to MAX_THREADS) yield {
+        val w = new Worker1(needsOutfileForSymbol)
+        val t = new _root_.java.lang.Thread(w)
+        t.start()
+        t
+      }
       // -----------------------
       // Pipeline from q2 to q3.
       // -----------------------
-      val workers = for(i <- 1 to MAX_THREADS) yield { val w = new Worker2; val t = new _root_.java.lang.Thread(w); t.start(); t }
+      val workersP2 = for(i <- 1 to MAX_THREADS) yield {
+        val w = new Worker2
+        val t = new _root_.java.lang.Thread(w)
+        t.start()
+        t
+      }
       // -------------------------------------------------------------------
       // Feed pipeline-1: place all ClassDefs on q1, recording their arrival position.
       // -------------------------------------------------------------------
       super.run()
-      q1 put poison1
+      for(i <- 1 to MAX_THREADS) { q1 put poison1 }
       // -------------------------------------------------------
       // Pipeline that writes classfile representations to disk.
       // -------------------------------------------------------
@@ -306,8 +321,10 @@ abstract class GenBCode extends BCodeTypes {
       assert(q3.isEmpty, "Some classfiles weren't written to disk: "      + q3.toString)
       // assert(exec.isTerminated, "Some workers just keep working.")
 
-      for(t <- workers) { assert(woExited.containsKey(t.getId)) } // debug
-      assert(woExited.size == MAX_THREADS)                        // debug
+      for(t <- workersP1) { assert(woExitedP1.containsKey(t.getId)) } // debug
+      for(t <- workersP2) { assert(woExitedP2.containsKey(t.getId)) } // debug
+      assert(woExitedP1.size == MAX_THREADS)                          // debug
+      assert(woExitedP2.size == MAX_THREADS)                          // debug
 
       // clearing maps, closing output files.
       bytecodeWriter.close()
