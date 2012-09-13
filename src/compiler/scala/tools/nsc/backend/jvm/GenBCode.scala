@@ -391,13 +391,13 @@ abstract class GenBCode extends BCodeTypes {
       // current method
       private var mnode: asm.tree.MethodNode = null
       private var jMethodName: String        = null
-      private var isModuleInitialized        = false // in GenASM this is local to genCode(), ie should get false whenever a new method is emitted (including fabricated ones eg addStaticInit())
+      private var returnType: BType          = null
       private var methSymbol: Symbol         = null
+      // in GenASM this is local to genCode(), ie should get false whenever a new method is emitted (including fabricated ones eg addStaticInit())
+      private var isModuleInitialized        = false
       // used by genLoadTry() and genSynchronized()
       private var earlyReturnVar: Symbol     = null
       private var shouldEmitCleanup          = false
-      // used in connection with cleanups
-      private var returnType: BType          = null
       // line numbers
       private var lastEmittedLineNr          = -1
 
@@ -681,8 +681,7 @@ abstract class GenBCode extends BCodeTypes {
         isModuleInitialized = false
         earlyReturnVar      = null
         shouldEmitCleanup   = false
-        // used in connection with cleanups
-        returnType = asmMethodType(dd.symbol).getReturnType
+
         lastEmittedLineNr = -1
       }
 
@@ -850,47 +849,31 @@ abstract class GenBCode extends BCodeTypes {
       /**
        * @must-single-thread
        */
-      private def initJMethod(
-                      msym:             Symbol,
-                      isNative:         Boolean,
-                      paramTypes:       List[BType],
-                      paramAnnotations: List[List[AnnotationInfo]]
-      ): Pair[Int, asm.MethodVisitor] = {
+      def initJMethod(flags: Int, paramAnnotations: List[List[AnnotationInfo]]) {
 
-        val resTpe: BType = asmMethodType(msym).getReturnType // TODO confirm: was msym.tpe.resultType
-
-        val flags = mkFlags(
-          javaFlags(msym),
-          if (claszSymbol.isInterface) asm.Opcodes.ACC_ABSTRACT   else 0,
-          if (msym.isStrictFP)         asm.Opcodes.ACC_STRICT     else 0,
-          if (isNative)                asm.Opcodes.ACC_NATIVE     else 0, // native methods of objects are generated in mirror classes
-          if(isDeprecated(msym))       asm.Opcodes.ACC_DEPRECATED else 0  // ASM pseudo access flag
-        )
-
-        // TODO needed? for(ann <- m.symbol.annotations) { ann.symbol.initialize }
-        val jgensig = getGenericSignature(msym, claszSymbol)
-        addRemoteExceptionAnnot(isCZRemote, hasPublicBitSet(flags), msym)
-        val (excs, others) = msym.annotations partition (_.symbol == definitions.ThrowsClass)
+        val jgensig = getGenericSignature(methSymbol, claszSymbol)
+        addRemoteExceptionAnnot(isCZRemote, hasPublicBitSet(flags), methSymbol)
+        val (excs, others) = methSymbol.annotations partition (_.symbol == definitions.ThrowsClass)
         val thrownExceptions: List[String] = getExceptions(excs)
 
-        val jMethodName =
-          if(msym.isStaticConstructor) CLASS_CONSTRUCTOR_NAME
-          else msym.javaSimpleName.toString
-        val mdesc = BType.getMethodDescriptor(resTpe, mkArray(paramTypes))
-        val jmethod = cnode.visitMethod(
+        val jMethodName2 =
+          if(methSymbol.isStaticConstructor) CLASS_CONSTRUCTOR_NAME
+          else jMethodName
+
+        val mdesc = asmMethodType(methSymbol).getDescriptor
+        mnode = cnode.visitMethod(
           flags,
-          jMethodName,
+          jMethodName2,
           mdesc,
           jgensig,
           mkArray(thrownExceptions)
-        )
+        ).asInstanceOf[asm.tree.MethodNode]
 
         // TODO param names: (m.params map (p => javaName(p.sym)))
 
-        emitAnnotations(jmethod, others)
-        emitParamAnnotations(jmethod, paramAnnotations)
+        emitAnnotations(mnode, others)
+        emitParamAnnotations(mnode, paramAnnotations)
 
-        Pair(flags, jmethod)
       } // end of method initJMethod
 
       /**
@@ -972,31 +955,34 @@ abstract class GenBCode extends BCodeTypes {
       def genDefDef(dd: DefDef) {
         // the only method whose implementation is not emitted: getClass()
         if(definitions.isGetClass(dd.symbol)) { return }
-
         assert(mnode == null, "GenBCode detected nested method.")
-        val msym = dd.symbol
-        // clear method-specific stuff
+
+        methSymbol  = dd.symbol
+        jMethodName = methSymbol.javaSimpleName.toString
+        returnType  = asmMethodType(dd.symbol).getReturnType
+
         resetMethodBookkeeping(dd)
 
+        // add method-local vars for params
         val DefDef(_, _, _, vparamss, _, rhs) = dd
         assert(vparamss.isEmpty || vparamss.tail.isEmpty, "Malformed parameter list: " + vparamss)
-        val isNative = msym.hasAnnotation(definitions.NativeAttr)
-        val isAbstractMethod = msym.isDeferred || msym.owner.isInterface
-
         val params = if(vparamss.isEmpty) Nil else vparamss.head
-        methSymbol = msym
-
-        // add method-local vars for params
-        nxtIdx = if (msym.isStaticMember) 0 else 1;
+        nxtIdx = if (methSymbol.isStaticMember) 0 else 1;
         for (p <- params) { makeLocal(p.symbol) }
+        // debug assert((params.map(p => locals(p.symbol).tk)) == asmMethodType(methSymbol).getArgumentTypes.toList, "debug")
 
-        val Pair(flags, jmethod0) = initJMethod(
-          msym, isNative,
-          params.map(p => locals(p.symbol).tk),
-          params.map(p => p.symbol.annotations)
+        val isNative         = methSymbol.hasAnnotation(definitions.NativeAttr)
+        val isAbstractMethod = (methSymbol.isDeferred || methSymbol.owner.isInterface)
+        val flags = mkFlags(
+          javaFlags(methSymbol),
+          if (claszSymbol.isInterface) asm.Opcodes.ACC_ABSTRACT   else 0,
+          if (methSymbol.isStrictFP)   asm.Opcodes.ACC_STRICT     else 0,
+          if (isNative)                asm.Opcodes.ACC_NATIVE     else 0, // native methods of objects are generated in mirror classes
+          if(isDeprecated(methSymbol)) asm.Opcodes.ACC_DEPRECATED else 0  // ASM pseudo access flag
         )
-        mnode       = jmethod0.asInstanceOf[asm.tree.MethodNode]
-        jMethodName = msym.javaSimpleName.toString
+
+        // TODO needed? for(ann <- m.symbol.annotations) { ann.symbol.initialize }
+        initJMethod(flags, params.map(p => p.symbol.annotations))
 
         /* Add method-local vars for LabelDef-params.
          *
@@ -1009,26 +995,26 @@ abstract class GenBCode extends BCodeTypes {
          * but the same vars (given by the LabelDef's params) can be reused,
          * because no LabelDef ends up nested within itself after such duplication.
          */
-        for(ld <- labelDefsAtOrUnder(dd.rhs); p <- ld.params; if !locals.contains(p.symbol)) {
+        for(ld <- labelDefsAtOrUnder(dd.rhs); ldp <- ld.params; if !locals.contains(ldp.symbol)) {
           // the tail-calls xform results in symbols shared btw method-params and labelDef-params, thus the guard above.
-          makeLocal(p.symbol)
+          makeLocal(ldp.symbol)
         }
 
               def emitBodyOfStaticAccessor(staticfield: Symbol) {
                 // in companion object accessors to @static fields, we access the static field directly
                 // see https://github.com/scala/scala/commit/892ee3df93a10ffe24fb11b37ad7c3a9cb93d5de
-                val hostClass   = msym.owner.companionClass
-                val fieldName   = msym.accessed.javaSimpleName.toString
+                val hostClass   = methSymbol.owner.companionClass
+                val fieldName   = methSymbol.accessed.javaSimpleName.toString
                 val fieldDescr  = symInfoTK(staticfield).getDescriptor
                 val opc =
-                  if (msym.isGetter) asm.Opcodes.GETSTATIC
+                  if (methSymbol.isGetter) asm.Opcodes.GETSTATIC
                   else asm.Opcodes.PUTSTATIC
                 val insn = new asm.tree.FieldInsnNode(opc, internalName(hostClass), fieldName.toString, fieldDescr)
 
                 if (opc == asm.Opcodes.GETSTATIC) {
                   emit(insn) // GETSTATIC `hostClass`.`accessed`
                 } else {
-                  assert(msym.isSetter,
+                  assert(methSymbol.isSetter,
                          "neither getter nor setter found when emitting (GET/PUT)-STATIC, during emitBodyOfStaticAccessor().")
                   load(params.head.symbol) // push setter's argument
                   emit(insn) // PUTSTATIC `hostClass`.`accessed`
@@ -1040,10 +1026,10 @@ abstract class GenBCode extends BCodeTypes {
 
         if (!isAbstractMethod && !isNative) {
           lineNumber(rhs)
-          val staticField = if (isAccessorToStaticField(msym)) {
+          val staticField = if (isAccessorToStaticField(methSymbol)) {
             // https://github.com/scala/scala/commit/cb393fcbe35d0a871f23189d791b44be1b826ed2
-            val compClass = msym.owner.companionClass
-            compClass.info.findMember(msym.accessed.name, NoFlags, NoFlags, false)
+            val compClass = methSymbol.owner.companionClass
+            compClass.info.findMember(methSymbol.accessed.name, NoFlags, NoFlags, false)
           } else NoSymbol
           if(staticField != NoSymbol) {
             // special-cased method body for an accessor to @static field
@@ -1059,7 +1045,7 @@ abstract class GenBCode extends BCodeTypes {
                     case Return(_) => ()
                     case EmptyTree =>
                       globalError("Concrete method has no definition: " + dd + (
-                        if (settings.debug.value) "(found: " + msym.owner.info.decls.toList.mkString(", ") + ")"
+                        if (settings.debug.value) "(found: " + methSymbol.owner.info.decls.toList.mkString(", ") + ")"
                         else "")
                       )
                     case _ =>
