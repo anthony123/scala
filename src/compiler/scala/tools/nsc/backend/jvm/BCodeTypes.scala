@@ -1022,7 +1022,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     // slow path
     var tr: Tracked  = null
     var csym: Symbol = null
-    global synchronized {
+    BType synchronized {
 
       csym = {
         if(csym0.isJavaDefined && csym0.isModuleClass) csym0.linkedClassOfClass
@@ -3438,7 +3438,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
      * @must-single-thread
      */
     def legacyAddCreatorCode(clinit: asm.MethodVisitor, cnode: asm.tree.ClassNode, thisName: String) {
-      global synchronized {
+      BType synchronized {
 
         // this tracks the inner class in innerClassBufferASM, if needed.
         val androidCreatorType = asmClassType(AndroidCreatorClass)
