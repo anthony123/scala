@@ -591,9 +591,11 @@ abstract class GenBCode extends BCodeTypes {
        *  emitted for that purpose as described in `genLoadTry()` and `genSynchronized()`.
        */
       var cleanups: List[asm.Label] = Nil
+      /** @can-multi-thread */
       def registerCleanup(finCleanup: asm.Label) {
         if(finCleanup != null) { cleanups = finCleanup :: cleanups }
       }
+      /** @can-multi-thread */
       def unregisterCleanup(finCleanup: asm.Label) {
         if(finCleanup != null) {
           assert(cleanups.head eq finCleanup,
@@ -1036,7 +1038,12 @@ abstract class GenBCode extends BCodeTypes {
         val DefDef(_, _, _, vparamss, _, rhs) = dd
         assert(vparamss.isEmpty || vparamss.tail.isEmpty, "Malformed parameter list: " + vparamss)
         val params = if(vparamss.isEmpty) Nil else vparamss.head
-        val pendingLDVars = for(ld  <- labelDefsAtOrUnder(dd.rhs); ldp <- ld.params) yield ldp.symbol;
+        val paramsSyms = params map (_.symbol)
+        val pendingLDVars =
+          for(ld  <- labelDefsAtOrUnder(dd.rhs);
+              ldp <- ld.params;
+              if !(paramsSyms.contains(ldp.symbol)) // the tail-calls xform results in symbols shared btw method-params and labelDef-params, thus the guard.
+          ) yield ldp.symbol;
 
         var isSFAccessor     = false
         var isNative         = false
@@ -1080,10 +1087,7 @@ abstract class GenBCode extends BCodeTypes {
            * but the same vars (given by the LabelDef's params) can be reused,
            * because no LabelDef ends up nested within itself after such duplication.
            */
-          for(s <- pendingLDVars; if !locals.contains(s)) {
-            // the tail-calls xform results in symbols shared btw method-params and labelDef-params, thus the guard.
-            makeLocal(s)
-          }
+          for(s <- pendingLDVars) { makeLocal(s) }
 
           isSFAccessor = isAccessorToStaticField(methSymbol)
 
@@ -1492,13 +1496,20 @@ abstract class GenBCode extends BCodeTypes {
       }
 
       /** Detects whether no instructions have been emitted since label `lbl` (by checking whether the current program point is still `lbl`)
-       *  and if so emits a NOP. This can be used to avoid an empty try-block being protected by exception handlers, which results in an illegal class file format exception. */
+       *  and if so emits a NOP. This can be used to avoid an empty try-block being protected by exception handlers, which results in an illegal class file format exception.
+       *
+       *  @can-multi-thread
+       */
       def nopIfNeeded(lbl: asm.Label) {
         val noInstructionEmitted = isAtProgramPoint(lbl)
         if(noInstructionEmitted) { emit(asm.Opcodes.NOP) }
       }
 
-      /** TODO documentation */
+      /**
+       *  TODO documentation
+       *
+       *  @can-multi-thread
+       */
       def genLoadTry(tree: Try): BType = global synchronized { // PENDING
 
         val Try(block, catches, finalizer) = tree
@@ -1635,7 +1646,11 @@ abstract class GenBCode extends BCodeTypes {
         kind
       } // end of genLoadTry()
 
-      /** if no more pending cleanups, all that remains to do is return. Otherwise jump to the next (outer) pending cleanup. */
+      /**
+       *  if no more pending cleanups, all that remains to do is return. Otherwise jump to the next (outer) pending cleanup.
+       *
+       *  @can-multi-thread
+       */
       private def pendingCleanups() {
         cleanups match {
           case Nil =>
@@ -1652,6 +1667,7 @@ abstract class GenBCode extends BCodeTypes {
         }
       }
 
+      /** @can-multi-thread */
       private def protect(start: asm.Label, end: asm.Label, handler: asm.Label, excType: BType) {
         val excInternalName: String =
           if (excType == null) null
@@ -1660,7 +1676,11 @@ abstract class GenBCode extends BCodeTypes {
         mnode.visitTryCatchBlock(start, end, handler, excInternalName)
       }
 
-      /** `tmp` (if non-null) is the symbol of the local-var used to preserve the result of the try-body, see `guardResult` */
+      /**
+       *  `tmp` (if non-null) is the symbol of the local-var used to preserve the result of the try-body, see `guardResult`
+       *
+       *  @can-multi-thread
+       */
       private def emitFinalizer(finalizer: Tree, tmp: Symbol, isDuplicate: Boolean) {
         var saved: immutable.Map[ /* LabelDef */ Symbol, asm.Label ] = null
         if(isDuplicate) {
@@ -2773,7 +2793,11 @@ abstract class GenBCode extends BCodeTypes {
         }
       }
 
-      /** Does this tree have a try-catch block? */
+      /**
+       *  Does this tree have a try-catch block?
+       *
+       *  @can-multi-thread
+       */
       def mayCleanStack(tree: Tree): Boolean = tree exists { t => t.isInstanceOf[Try] }
 
       /** @can-multi-thread **/
