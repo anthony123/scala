@@ -1299,10 +1299,28 @@ abstract class GenBCode extends BCodeTypes {
         RT_NOTHING // always returns the same, the invoker should know :)
       }
 
-      /** Generate code for primitive arithmetic operations. */
+      /** Takes promotions of numeric primitives into account.
+       *
+       *  @can-multi-thread
+       **/
+      def maxTypeTrees(a: Tree, other: Tree): BType = {
+        var atk: BType = null
+        var btk: BType = null
+        global synchronized {
+          atk = toTypeKind(a.tpe)
+          btk = toTypeKind(other.tpe)
+        }
+        maxType(atk, btk)
+      }
+
+      /**
+       *  Generate code for primitive arithmetic operations.
+       *
+       *  @can-multi-thread
+       */
       def genArithmeticOp(tree: Tree, code: Int): BType = {
         val Apply(fun @ Select(larg, _), args) = tree
-        var resKind = toTypeKind(larg.tpe)
+        var resKind = tpeTK(larg)
 
         assert(args.length <= 1, "Too many arguments for primitive function: " + fun.symbol)
         assert(resKind.isNumericType || (resKind == BOOL),
@@ -1321,7 +1339,7 @@ abstract class GenBCode extends BCodeTypes {
 
           // binary operation
           case rarg :: Nil =>
-            resKind = maxType(tpeTK(larg), tpeTK(rarg))
+            resKind = maxTypeTrees(larg, rarg)
             if (scalaPrimitives.isShiftOp(code) || scalaPrimitives.isBitwiseOp(code)) {
               assert(resKind.isIntegralType || (resKind == BOOL),
                      resKind.toString + " incompatible with arithmetic modulo operation.")
@@ -1356,7 +1374,9 @@ abstract class GenBCode extends BCodeTypes {
         resKind
       }
 
-      /** Generate primitive array operations. */
+      /** Generate primitive array operations.
+       *  @can-multi-thread
+       */
       def genArrayOp(tree: Tree, code: Int, expectedType: BType): BType = {
         val Apply(Select(arrayObj, _), args) = tree
         val k = tpeTK(arrayObj)
@@ -1375,7 +1395,7 @@ abstract class GenBCode extends BCodeTypes {
         else if (scalaPrimitives.isArraySet(code)) {
           assert(args.length == 2, "Too many arguments for array set operation: " + tree);
           genLoad(args.head, INT)
-          genLoad(args.tail.head, toTypeKind(args.tail.head.tpe))
+          genLoad(args.tail.head, tpeTK(args.tail.head))
           // the following line should really be here, but because of bugs in erasure
           // we pretend we generate whatever type is expected from us.
           //generatedType = UNIT
@@ -1390,7 +1410,7 @@ abstract class GenBCode extends BCodeTypes {
         generatedType
       }
 
-      def genSynchronized(tree: Apply, expectedType: BType): BType = {
+      def genSynchronized(tree: Apply, expectedType: BType): BType = global synchronized {  // PENDING
         val Apply(fun, args) = tree
         val monitor = makeLocal(ObjectReference, "monitor")
         val monCleanup = new asm.Label
@@ -1698,7 +1718,7 @@ abstract class GenBCode extends BCodeTypes {
         }
       }
 
-      def genPrimitiveOp(tree: Apply, expectedType: BType): BType = global synchronized { // PENDING
+      def genPrimitiveOp(tree: Apply, expectedType: BType): BType = {
         val sym = tree.symbol
         val Apply(fun @ Select(receiver, _), _) = tree
         val code = global synchronized { scalaPrimitives.getPrimitive(sym, receiver.tpe) } // PENDING
@@ -2470,7 +2490,11 @@ abstract class GenBCode extends BCodeTypes {
       /** Is the given symbol a primitive operation? */
       def isPrimitive(fun: Symbol): Boolean = scalaPrimitives.isPrimitive(fun)
 
-      /** Generate coercion denoted by "code" */
+      /**
+       *  Generate coercion denoted by "code"
+       *
+       *  @can-multi-thread
+       */
       def genCoercion(code: Int) = {
         import scalaPrimitives._
         (code: @switch) match {
@@ -2482,6 +2506,7 @@ abstract class GenBCode extends BCodeTypes {
         }
       }
 
+      /** @can-multi-thread */
       def genStringConcat(tree: Tree): BType = {
         lineNumber(tree)
         liftStringConcat(tree) match {
@@ -2570,7 +2595,11 @@ abstract class GenBCode extends BCodeTypes {
 
       } // end of genCallMethod()
 
-      /** Generate the scala ## method. */
+      /**
+       *  Generate the scala ## method.
+       *
+       *  @can-multi-thread
+       */
       def genScalaHash(tree: Tree): BType = {
         genLoadModule(ScalaRunTimeModule) // TODO why load ScalaRunTimeModule if ## has InvokeStyle of Static(false) ?
         genLoad(tree, ObjectReference)
@@ -2582,6 +2611,8 @@ abstract class GenBCode extends BCodeTypes {
       /**
        * Returns a list of trees that each should be concatenated, from left to right.
        * It turns a chained call like "a".+("b").+("c") into a list of arguments.
+       *
+       * @can-multi-thread
        */
       def liftStringConcat(tree: Tree): List[Tree] = tree match {
         case Apply(fun @ Select(larg, method), rarg) =>
