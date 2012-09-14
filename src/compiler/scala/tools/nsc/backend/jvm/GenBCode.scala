@@ -814,37 +814,39 @@ abstract class GenBCode extends BCodeTypes {
           }
         }
 
+        var flags: Int = 0
+        var thisSignature: String       = null
+        var enclM: EnclMethodEntry      = null
+        var ssa: Option[AnnotationInfo] = null
+
         BType synchronized {
 
-          val flags = mkFlags(
+          flags = mkFlags(
             javaFlags(claszSymbol),
             if(isDeprecated(claszSymbol)) asm.Opcodes.ACC_DEPRECATED else 0 // ASM pseudo access flag
           )
+          thisSignature = getGenericSignature(claszSymbol, claszSymbol.owner)
+          enclM = getEnclosingMethodAttribute(claszSymbol)
+          ssa = getAnnotPickle(thisName, claszSymbol)
 
-          val thisSignature = getGenericSignature(claszSymbol, claszSymbol.owner)
-          cnode.visit(classfileVersion, flags,
-                      thisName, thisSignature,
-                      superClass, ifaces)
+        } // end of synchronized
 
-          if(emitSource) {
-            cnode.visitSource(cunit.source.toString, null /* SourceDebugExtension */)
-          }
+        cnode.visit(classfileVersion, flags, thisName, thisSignature, superClass, ifaces)
+        if(emitSource) { cnode.visitSource(cunit.source.toString, null) } /* SourceDebugExtension */
+        if(enclM != null) {
+          val EnclMethodEntry(className, methodName, methodType) = enclM
+          cnode.visitOuterClass(className, methodName, methodType.getDescriptor)
+        }
+        cnode.visitAttribute(if(ssa.isDefined) pickleMarkerLocal else pickleMarkerForeign)
+        if (isCZStaticModule || isCZParcelable) {
+          if (isCZStaticModule) { addModuleInstanceField() }
+        }
 
-          val enclM = getEnclosingMethodAttribute(claszSymbol)
-          if(enclM != null) {
-            val EnclMethodEntry(className, methodName, methodType) = enclM
-            cnode.visitOuterClass(className, methodName, methodType.getDescriptor)
-          }
 
-          val ssa = getAnnotPickle(thisName, claszSymbol)
-          cnode.visitAttribute(if(ssa.isDefined) pickleMarkerLocal else pickleMarkerForeign)
+        BType synchronized {
           emitAnnotations(cnode, claszSymbol.annotations ++ ssa)
 
-          if (isCZStaticModule || isCZParcelable) {
-
-            if (isCZStaticModule) { addModuleInstanceField() }
-
-          } else {
+          if (!isCZStaticModule && !isCZParcelable) {
 
             val skipStaticForwarders = (claszSymbol.isInterface || settings.noForwarders.value)
             if (!skipStaticForwarders) {
@@ -1140,7 +1142,7 @@ abstract class GenBCode extends BCodeTypes {
       } // end of method genDefDef()
 
       /**
-       *  @must-single-thread
+       *  @can-multi-thread
        *
        *  TODO document, explain interplay with `fabricateStaticInit()`
        **/
