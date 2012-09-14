@@ -1701,7 +1701,7 @@ abstract class GenBCode extends BCodeTypes {
       def genPrimitiveOp(tree: Apply, expectedType: BType): BType = global synchronized { // PENDING
         val sym = tree.symbol
         val Apply(fun @ Select(receiver, _), _) = tree
-        val code = scalaPrimitives.getPrimitive(sym, receiver.tpe)
+        val code = global synchronized { scalaPrimitives.getPrimitive(sym, receiver.tpe) } // PENDING
 
         import scalaPrimitives.{isArithmeticOp, isArrayOp, isLogicalOp, isComparisonOp}
 
@@ -1995,7 +1995,8 @@ abstract class GenBCode extends BCodeTypes {
 
       } // end of genReturn()
 
-      private def genApply(app: Apply, expectedType: BType): BType = global synchronized { // PENDING
+      /** @can-multi-thread */
+      private def genApply(app: Apply, expectedType: BType): BType = {
         val BoxesRunTime = "scala/runtime/BoxesRunTime"
         var generatedType = expectedType
         lineNumber(app)
@@ -2196,9 +2197,7 @@ abstract class GenBCode extends BCodeTypes {
                       else Dynamic;
                     }
 
-                    if (invokeStyle.hasInstance) {
-                      genLoadQualifier(fun)
-                    }
+                    if (invokeStyle.hasInstance) { genLoadQualifier(fun) }
 
                     genLoadArguments(args, paramTKs(app))
 
@@ -2214,10 +2213,11 @@ abstract class GenBCode extends BCodeTypes {
                         }
                         else {
                           hostClass = qualSym
-                          val qtps = global synchronized { qual.tpe.typeSymbol }
-                          if (qtps != qualSym) {
-                            log(s"Precisified host class for $sym from ${qual.tpe.typeSymbol.fullName} to ${qualSym.fullName}")
-                          }
+                          ifDebug( global synchronized {
+                              if (qual.tpe.typeSymbol != qualSym) {
+                                log(s"Precisified host class for $sym from ${qual.tpe.typeSymbol.fullName} to ${qualSym.fullName}")
+                              }
+                          } )
                         }
 
                       case _ =>
