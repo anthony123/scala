@@ -721,8 +721,10 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
   var BeanInfoAttr: Symbol = null
 
   /** The Object => String overload. */
-  var String_valueOf:   Symbol = null
-  var symObject_equals: Symbol = null
+  var symString_valueOf:         Symbol = null
+  var symObject_equals:       Symbol = null
+  var symObject_isInstanceOf: Symbol = null
+  var symObject_asInstanceOf: Symbol = null
 
   /** From the reference documentation of the Android SDK:
    *  The `Parcelable` interface identifies classes whose instances can be written to and restored from a `Parcel`.
@@ -786,7 +788,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
     BeanInfoAttr = rootMirror.getRequiredClass("scala.beans.BeanInfo")
 
-    String_valueOf = {
+    symString_valueOf = {
       getMember(StringModule, nme.valueOf) filter (sym =>
         sym.info.paramTypes match {
           case List(pt) => pt.typeSymbol == ObjectClass
@@ -795,7 +797,9 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       )
     }
 
-    symObject_equals = Object_equals
+    symObject_equals       = Object_equals
+    symObject_isInstanceOf = Object_isInstanceOf // inits the lazy val
+    symObject_asInstanceOf = Object_asInstanceOf
 
     androidFieldName = newTermName("CREATOR")
 

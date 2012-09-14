@@ -1698,7 +1698,7 @@ abstract class GenBCode extends BCodeTypes {
         }
       }
 
-      def genPrimitiveOp(tree: Apply, expectedType: BType): BType = {
+      def genPrimitiveOp(tree: Apply, expectedType: BType): BType = global synchronized { // PENDING
         val sym = tree.symbol
         val Apply(fun @ Select(receiver, _), _) = tree
         val code = scalaPrimitives.getPrimitive(sym, receiver.tpe)
@@ -2005,11 +2005,10 @@ abstract class GenBCode extends BCodeTypes {
 
                 def genTypeApply(): BType = {
                   val sym = fun.symbol
-                  val cast = sym match {
-                    case Object_isInstanceOf  => false
-                    case Object_asInstanceOf  => true
-                    case _                    => abort("Unexpected type application " + fun + "[sym: " + sym.fullName + "]" + " in: " + app)
-                  }
+                  val cast =
+                    if      (sym == symObject_isInstanceOf) false
+                    else if (sym == symObject_asInstanceOf) true
+                    else abort("Unexpected type application " + fun + "[sym: " + sym.fullName + "]" + " in: " + app)
 
                   val Select(obj, _) = fun
                   val l = tpeTK(obj)
@@ -2035,7 +2034,7 @@ abstract class GenBCode extends BCodeTypes {
                     bc isInstance classLiteral(r)
                   }
                   else {
-                    genCast(l, r, cast)
+                    genCast(r, cast)
                   }
 
                   if (cast) r else BOOL
@@ -2063,7 +2062,9 @@ abstract class GenBCode extends BCodeTypes {
           // instance (on JVM, <init> methods return VOID).
           case Apply(fun @ Select(New(tpt), nme.CONSTRUCTOR), args) =>
             val ctor = fun.symbol
-            assert(ctor.isClassConstructor, "'new' call to non-constructor: " + ctor.name)
+            ifDebug( global synchronized {
+              assert(ctor.isClassConstructor, "'new' call to non-constructor: " + ctor.name)
+            } )
 
             generatedType = tpeTK(tpt)
             assert(generatedType.isRefOrArrayType, "Non reference type cannot be instantiated: " + generatedType)
@@ -2071,7 +2072,7 @@ abstract class GenBCode extends BCodeTypes {
             generatedType match {
               case arr if generatedType.isArray =>
                 genLoadArguments(args, paramTKs(app))
-                val dims = arr.getDimensions
+                val dims     = arr.getDimensions
                 var elemKind = arr.getElementType
                 val argsSize = args.length
                 if (argsSize > dims) {
@@ -2079,7 +2080,7 @@ abstract class GenBCode extends BCodeTypes {
                                         " but array has only " + dims + " dimension(s)")
                 }
                 if (argsSize < dims) {
-                  /* The BType instantiation below denote the same type as
+                  /* The BType instantiation below denotes the same type as
                    *    for (i <- args.length until dims) elemKind = arrayOf(elemKind)
                    * with the advantage of not requiring `arrayOf()`, a must-single-thread operation.
                    */
@@ -2093,7 +2094,9 @@ abstract class GenBCode extends BCodeTypes {
                 }
 
               case rt if generatedType.hasObjectSort =>
-                assert(exemplar(ctor.owner).c == rt, "Symbol " + ctor.owner.fullName + " is different from " + rt)
+                ifDebug( global synchronized {
+                  assert(exemplar(ctor.owner).c == rt, "Symbol " + ctor.owner.fullName + " is different from " + rt)
+                } )
                 mnode.visitTypeInsn(asm.Opcodes.NEW, rt.getInternalName)
                 bc dup generatedType
                 genLoadArguments(args, paramTKs(app))
@@ -2126,11 +2129,12 @@ abstract class GenBCode extends BCodeTypes {
             bc.invokestatic(BoxesRunTime, mname, mdesc)
 
           case Apply(fun @ Select(qual, _), args)
-          if !isMethSymStaticCtor
-          && isAccessorToStaticField(fun.symbol)
-          && qual.tpe.typeSymbol.orElse(fun.symbol.owner).companionClass != NoSymbol =>
+          if !isMethSymStaticCtor && (global synchronized {
+             isAccessorToStaticField(fun.symbol) &&
+             qual.tpe.typeSymbol.orElse(fun.symbol.owner).companionClass != NoSymbol
+          }) =>
 
-                def emitLoadStaticField() {
+                def emitLoadStaticField(): Unit = global synchronized {
                   // bypass the accessor to the companion object and load the static field directly
                   // this bypass is not done:
                   // - if the static intializer for the static field itself
@@ -2176,7 +2180,8 @@ abstract class GenBCode extends BCodeTypes {
           case app @ Apply(fun, args) =>
             val sym = fun.symbol
 
-            if (sym.isLabel) {  // jump to a label
+            val isL = global synchronized { sym.isLabel } // PENDING
+            if (isL) {  // jump to a label
               genLoadLabelArguments(args, labelDef(sym), app.pos)
               bc goTo programPoint(sym)
             } else if (isPrimitive(sym)) { // primitive method call
@@ -2185,10 +2190,11 @@ abstract class GenBCode extends BCodeTypes {
 
                   def genNormalMethodCall(): BType = {
 
-                    val invokeStyle =
+                    val invokeStyle = global synchronized {
                       if (sym.isStaticMember) Static(false)
                       else if (sym.isPrivate || sym.isClassConstructor) Static(true)
                       else Dynamic;
+                    }
 
                     if (invokeStyle.hasInstance) {
                       genLoadQualifier(fun)
@@ -2208,7 +2214,8 @@ abstract class GenBCode extends BCodeTypes {
                         }
                         else {
                           hostClass = qualSym
-                          if (qual.tpe.typeSymbol != qualSym) {
+                          val qtps = global synchronized { qual.tpe.typeSymbol }
+                          if (qtps != qualSym) {
                             log(s"Precisified host class for $sym from ${qual.tpe.typeSymbol.fullName} to ${qualSym.fullName}")
                           }
                         }
@@ -2380,7 +2387,7 @@ abstract class GenBCode extends BCodeTypes {
       }
 
       /** Generate code that loads args into label parameters. */
-      def genLoadLabelArguments(args: List[Tree], lblDef: LabelDef, gotoPos: Position) {
+      def genLoadLabelArguments(args: List[Tree], lblDef: LabelDef, gotoPos: Position): Unit = global synchronized { // PENDING
         assert(args forall { a => !a.hasSymbol || a.hasSymbolWhich( s => !s.isLabel) }, "SI-6089 at: " + gotoPos) // SI-6089
 
         val aps = {
@@ -2409,6 +2416,7 @@ abstract class GenBCode extends BCodeTypes {
 
       }
 
+      /** @can-multi-thread */
       def genLoadArguments(args: List[Tree], btpes: List[BType]) {
         (args zip btpes) foreach { case (arg, btpe) => genLoad(arg, btpe) }
       }
@@ -2454,7 +2462,7 @@ abstract class GenBCode extends BCodeTypes {
       }
 
       /** @can-multi-thread */
-      def genCast(from: BType, to: BType, cast: Boolean) {
+      def genCast(to: BType, cast: Boolean) {
         if(cast) { bc checkCast  to }
         else     { bc isInstance to }
       }
@@ -2481,7 +2489,7 @@ abstract class GenBCode extends BCodeTypes {
           // Optimization for expressions of the form "" + x.  We can avoid the StringBuilder.
           case List(Literal(Constant("")), arg) =>
             genLoad(arg, ObjectReference)
-            genCallMethod(String_valueOf, Static(false))
+            genCallMethod(symString_valueOf, Static(false))
 
           case concatenations =>
             bc.genStartConcat
@@ -2497,6 +2505,7 @@ abstract class GenBCode extends BCodeTypes {
         StringReference
       }
 
+      /** @can-multi-thread */
       def genCallMethod(method: Symbol, style: InvokeStyle, hostClass0: Symbol = null): Unit = global synchronized { // PENDING
 
         val siteSymbol = claszSymbol
