@@ -206,7 +206,7 @@ abstract class GenBCode extends BCodeTypes {
 
         } // end of synchronized
 
-        var mirrorC: SubItem2NonPlain = null
+        var mirrorC: SubItem3 = null
         if(doEmitMirror) {
           mirrorC = mirrorCodeGen.genMirrorClass(claszSymbol, cunit, emitSource)
         }
@@ -216,10 +216,12 @@ abstract class GenBCode extends BCodeTypes {
         pcb.genPlainClass(cd)
         pcb.addInnerClassesASM(pcb.cnode, pcb.innerClassBufferASM)
         assert(cd.symbol == claszSymbol, "Someone messed up BCodePhase.claszSymbol during genPlainClass().")
-        val plainC: SubItem2Plain = SubItem2Plain(plainClassLabel, pcb.thisName, pcb.cnode, outF)
+        val cw = new CClassWriter(extraProc)
+        pcb.cnode.accept(cw)
+        val plainC = SubItem3(plainClassLabel, pcb.thisName, cw.toByteArray, outF)
 
         // -------------- bean info class, if needed --------------
-        var beanC: SubItem2NonPlain = null
+        var beanC: SubItem3 = null
         if (isBeanInfo) {
           BType synchronized { // emitting bean infos is infrequent enough for non-fine-granular locking to be good enough.
             beanC =
@@ -228,32 +230,8 @@ abstract class GenBCode extends BCodeTypes {
                 fieldSymbols(claszSymbol),
                 methodSymbols(cd)
               )
-          }
+          } // end of synchronized
         }
-
-        visit2(Item2(arrivalPos, mirrorC, plainC, beanC))
-      }
-
-      def visit2(item: Item2) {
-        val Item2(arrivalPos, mirror, plain, bean) = item
-
-        // -------------- mirror class, if needed --------------
-        val mirrorC: SubItem3 =
-          if (mirror != null) {
-            SubItem3(mirror.label, mirror.jclassName, mirror.jclass.toByteArray(), mirror.outF)
-          } else null;
-
-        // -------------- "plain" class --------------
-        val cw = new CClassWriter(extraProc)
-        plain.cnode.accept(cw)
-        val plainC =
-          SubItem3(plain.label, plain.jclassName, cw.toByteArray, plain.outF)
-
-        // -------------- bean info class, if needed --------------
-        val beanC: SubItem3 =
-          if (bean != null) {
-            SubItem3(bean.label, bean.jclassName, bean.jclass.toByteArray(), bean.outF)
-          } else null;
 
         q3 put Item3(arrivalPos, mirrorC, plainC, beanC)
       }

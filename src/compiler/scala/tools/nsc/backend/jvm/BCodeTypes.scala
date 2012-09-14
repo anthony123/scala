@@ -3266,7 +3266,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
      *
      *  @can-multi-thread
      */
-    def genMirrorClass(modsym: Symbol, cunit: CompilationUnit, emitSource: Boolean): SubItem2NonPlain = {
+    def genMirrorClass(modsym: Symbol, cunit: CompilationUnit, emitSource: Boolean): SubItem3 = {
       // already tested by invoker: assert(modsym.companionClass == NoSymbol, modsym)
       innerClassBufferASM.clear()
       this.cunit = cunit
@@ -3307,7 +3307,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       addInnerClassesASM(mirrorClass, innerClassBufferASM)
       mirrorClass.visitEnd()
 
-      SubItem2NonPlain(label, mirrorName, mirrorClass, outF)
+      SubItem3(label, mirrorName, mirrorClass.toByteArray(), outF)
     }
 
   } // end of class JMirrorBuilder
@@ -3322,7 +3322,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
      *
      * @must-single-thread
      */
-    def genBeanInfoClass(cls: Symbol, cunit: CompilationUnit, fieldSymbols: List[Symbol], methodSymbols: List[Symbol]): SubItem2NonPlain = {
+    def genBeanInfoClass(cls: Symbol, cunit: CompilationUnit, fieldSymbols: List[Symbol], methodSymbols: List[Symbol]): SubItem3 = {
 
           def javaSimpleName(s: Symbol): String = { s.javaSimpleName.toString }
 
@@ -3427,7 +3427,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       val outF: _root_.scala.tools.nsc.io.AbstractFile = {
         if(needsOutfileForSymbol) getFile(cls, beanInfoName, ".class") else null
       }
-      SubItem2NonPlain("BeanInfo ", beanInfoName, beanInfoClass, outF)
+      SubItem3("BeanInfo ", beanInfoName, beanInfoClass.toByteArray(), outF)
     }
 
   } // end of class JBeanInfoBuilder
