@@ -3435,50 +3435,46 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       (sym.parentSymbols contains AndroidParcelableInterface)
 
     /**
-     * @must-single-thread
+     * @can-multi-thread
      */
     def legacyAddCreatorCode(clinit: asm.MethodVisitor, cnode: asm.tree.ClassNode, thisName: String) {
-      BType synchronized {
+      // this tracks the inner class in innerClassBufferASM, if needed.
+      val androidCreatorType = asmClassType(AndroidCreatorClass)
+      val tdesc_creator = androidCreatorType.getDescriptor
 
-        // this tracks the inner class in innerClassBufferASM, if needed.
-        val androidCreatorType = asmClassType(AndroidCreatorClass)
-        val tdesc_creator = androidCreatorType.getDescriptor
+      cnode.visitField(
+        PublicStaticFinal,
+        "CREATOR",
+        tdesc_creator,
+        null, // no java-generic-signature
+        null  // no initial value
+      ).visitEnd()
 
-        cnode.visitField(
-          PublicStaticFinal,
-          "CREATOR",
-          tdesc_creator,
-          null, // no java-generic-signature
-          null  // no initial value
-        ).visitEnd()
+      val moduleName = (thisName + "$")
 
-        val moduleName = (thisName + "$")
+      // GETSTATIC `moduleName`.MODULE$ : `moduleName`;
+      clinit.visitFieldInsn(
+        asm.Opcodes.GETSTATIC,
+        moduleName,
+        strMODULE_INSTANCE_FIELD,
+        "L" + moduleName + ";"
+      )
 
-        // GETSTATIC `moduleName`.MODULE$ : `moduleName`;
-        clinit.visitFieldInsn(
-          asm.Opcodes.GETSTATIC,
-          moduleName,
-          strMODULE_INSTANCE_FIELD,
-          "L" + moduleName + ";"
-        )
+      // INVOKEVIRTUAL `moduleName`.CREATOR() : android.os.Parcelable$Creator;
+      clinit.visitMethodInsn(
+        asm.Opcodes.INVOKEVIRTUAL,
+        moduleName,
+        "CREATOR",
+        BType.getMethodDescriptor(androidCreatorType, Array.empty[BType])
+      )
 
-        // INVOKEVIRTUAL `moduleName`.CREATOR() : android.os.Parcelable$Creator;
-        clinit.visitMethodInsn(
-          asm.Opcodes.INVOKEVIRTUAL,
-          moduleName,
-          "CREATOR",
-          BType.getMethodDescriptor(androidCreatorType, Array.empty[BType])
-        )
-
-        // PUTSTATIC `thisName`.CREATOR;
-        clinit.visitFieldInsn(
-          asm.Opcodes.PUTSTATIC,
-          thisName,
-          "CREATOR",
-          tdesc_creator
-        )
-
-      }
+      // PUTSTATIC `thisName`.CREATOR;
+      clinit.visitFieldInsn(
+        asm.Opcodes.PUTSTATIC,
+        thisName,
+        "CREATOR",
+        tdesc_creator
+      )
     }
 
   } // end of trait JAndroidBuilder
