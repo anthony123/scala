@@ -124,7 +124,7 @@ abstract class GenBCode extends BCodeTypes {
 
     // Once pipeline-2 starts doing optimizations more threads will be needed.
     val MAX_THREADS = scala.math.min(
-      4,
+      2,
       java.lang.Runtime.getRuntime.availableProcessors
     )
 
@@ -538,6 +538,11 @@ abstract class GenBCode extends BCodeTypes {
 
       /** @can-multi-thread */
       def tpeTK(tree: Tree): BType = { global synchronized toTypeKind(tree.tpe) }
+      def syncJavaSimpleName(sym: Symbol): String  = { global synchronized (sym.javaSimpleName.toString) }
+      def syncIsModule(sym: Symbol):       Boolean = { global synchronized (sym.isModule)       }
+      def syncIsStaticMember(sym: Symbol): Boolean = { global synchronized (sym.isStaticMember) }
+      def syncIsPackage(sym: Symbol):      Boolean = { global synchronized (sym.isPackage)      }
+      def syncIsLabel(sym: Symbol):        Boolean = { global synchronized (sym.isLabel)        }
 
       /** @can-multi-thread */
       def log(msg: => AnyRef) {
@@ -1410,7 +1415,7 @@ abstract class GenBCode extends BCodeTypes {
         generatedType
       }
 
-      def genSynchronized(tree: Apply, expectedType: BType): BType = global synchronized {  // PENDING
+      def genSynchronized(tree: Apply, expectedType: BType): BType = {
         val Apply(fun, args) = tree
         val monitor = makeLocal(ObjectReference, "monitor")
         val monCleanup = new asm.Label
@@ -1833,24 +1838,20 @@ abstract class GenBCode extends BCodeTypes {
             val hostClass = findHostClass(qualifier, sym)
             log(s"Host class of $sym with qual $qualifier (${qualifier.tpe}) is $hostClass")
 
-            global synchronized { // PENDING
-              if (sym.isModule)            { genLoadModule(tree) }
-              else if (sym.isStaticMember) { fieldLoad(sym, hostClass) }
-              else {
-                genLoadQualifier(tree)
-                fieldLoad(sym, hostClass)
-              }
+            if (syncIsModule(sym))            { genLoadModule(tree)       }
+            else if (syncIsStaticMember(sym)) { fieldLoad(sym, hostClass) }
+            else {
+              genLoadQualifier(tree)
+              fieldLoad(sym, hostClass)
             }
 
           case Ident(name) =>
             val sym = tree.symbol
-            global synchronized { // PENDING
-              if (!sym.isPackage) {
-                val tk = symInfoTK(sym)
-                if (sym.isModule) { genLoadModule(tree) }
-                else { load(sym) }
-                generatedType = tk
-              }
+            if (!syncIsPackage(sym)) {
+              val tk = symInfoTK(sym)
+              if (syncIsModule(sym)) { genLoadModule(tree) }
+              else { load(sym) }
+              generatedType = tk
             }
 
           case Literal(value) =>
@@ -1910,11 +1911,11 @@ abstract class GenBCode extends BCodeTypes {
       private def fieldOp(field: Symbol, isLoad: Boolean, hostClass: Symbol = null) {
         // LOAD_FIELD.hostClass , CALL_METHOD.hostClass , and #4283
         val owner      =
-          if(hostClass == null) internalName(field.owner)
+          if(hostClass == null) internalName( global synchronized (field.owner) )
           else                  internalName(hostClass)
-        val fieldJName = field.javaSimpleName.toString
+        val fieldJName = syncJavaSimpleName(field)
         val fieldDescr = symInfoTK(field).getDescriptor
-        val isStatic   = field.isStaticMember
+        val isStatic   = syncIsStaticMember(field)
         val opc =
           if(isLoad) { if (isStatic) asm.Opcodes.GETSTATIC else asm.Opcodes.GETFIELD }
           else       { if (isStatic) asm.Opcodes.PUTSTATIC else asm.Opcodes.PUTFIELD }
@@ -2201,8 +2202,7 @@ abstract class GenBCode extends BCodeTypes {
           case app @ Apply(fun, args) =>
             val sym = fun.symbol
 
-            val isL = global synchronized { sym.isLabel } // PENDING
-            if (isL) {  // jump to a label
+            if (syncIsLabel(sym)) {  // jump to a label
               genLoadLabelArguments(args, labelDef(sym), app.pos)
               bc goTo programPoint(sym)
             } else if (isPrimitive(sym)) { // primitive method call
@@ -2407,15 +2407,17 @@ abstract class GenBCode extends BCodeTypes {
       }
 
       /** Generate code that loads args into label parameters. */
-      def genLoadLabelArguments(args: List[Tree], lblDef: LabelDef, gotoPos: Position): Unit = global synchronized { // PENDING
-        assert(args forall { a => !a.hasSymbol || a.hasSymbolWhich( s => !s.isLabel) }, "SI-6089 at: " + gotoPos) // SI-6089
+      def genLoadLabelArguments(args: List[Tree], lblDef: LabelDef, gotoPos: Position) {
+        ifDebug ( global synchronized {
+          assert(args forall { a => !a.hasSymbol || a.hasSymbolWhich( s => !s.isLabel) }, "SI-6089 at: " + gotoPos) // SI-6089
+        } )
 
         val aps = {
           val params: List[Symbol] = lblDef.params.map(_.symbol)
           assert(args.length == params.length, "Wrong number of arguments in call to label at: " + gotoPos)
 
               def isTrivial(kv: (Tree, Symbol)) = kv match {
-                case (This(_), p) if p.name == nme.THIS     => true
+                case (This(_), p) if p.name == nme.THIS     => true   // TODO confirm whether param.name is thread-reentrant (that's the working assumption).
                 case (arg @ Ident(_), p) if arg.symbol == p => true
                 case _                                      => false
               }
