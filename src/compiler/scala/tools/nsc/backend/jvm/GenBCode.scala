@@ -1510,7 +1510,7 @@ abstract class GenBCode extends BCodeTypes {
        *
        *  @can-multi-thread
        */
-      def genLoadTry(tree: Try): BType = global synchronized { // PENDING
+      def genLoadTry(tree: Try): BType = {
 
         val Try(block, catches, finalizer) = tree
         val kind = tpeTK(tree)
@@ -2594,7 +2594,11 @@ abstract class GenBCode extends BCodeTypes {
       /* If l or r is constant null, returns the other ; otherwise null */
       def ifOneIsNull(l: Tree, r: Tree) = if (isNull(l)) r else if (isNull(r)) l else null
 
-      /** Emit code to compare the two top-most stack values using the 'op' operator. */
+      /**
+       *  Emit code to compare the two top-most stack values using the 'op' operator.
+       *
+       *  @can-multi-thread
+       */
       private def genCJUMP(success: asm.Label, failure: asm.Label, op: TestOp, tk: BType) {
         if(tk.isIntSizedType) { // BOOL, BYTE, CHAR, SHORT, or INT
           bc.emitIF_ICMP(op, success)
@@ -2615,7 +2619,11 @@ abstract class GenBCode extends BCodeTypes {
         bc goTo failure
       }
 
-      /** Emits code to compare (and consume) stack-top and zero using the 'op' operator */
+      /**
+       *  Emits code to compare (and consume) stack-top and zero using the 'op' operator
+       *
+       *  @can-multi-thread
+       */
       private def genCZJUMP(success: asm.Label, failure: asm.Label, op: TestOp, tk: BType) {
         if(tk.isIntSizedType) { // BOOL, BYTE, CHAR, SHORT, or INT
           bc.emitIF(op, success)
@@ -2725,7 +2733,7 @@ abstract class GenBCode extends BCodeTypes {
        * @param l       left-hand-side  of the '=='
        * @param r       right-hand-side of the '=='
        */
-      def genEqEqPrimitive(l: Tree, r: Tree, success: asm.Label, failure: asm.Label) {
+      def genEqEqPrimitive(l: Tree, r: Tree, success: asm.Label, failure: asm.Label): Unit = global synchronized { // PENDING
 
         /** True if the equality comparison is between values that require the use of the rich equality
           * comparator (scala.runtime.Comparator.equals). This is the case when either side of the
