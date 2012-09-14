@@ -721,7 +721,8 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
   var BeanInfoAttr: Symbol = null
 
   /** The Object => String overload. */
-  var String_valueOf: Symbol = null
+  var String_valueOf:   Symbol = null
+  var symObject_equals: Symbol = null
 
   /** From the reference documentation of the Android SDK:
    *  The `Parcelable` interface identifies classes whose instances can be written to and restored from a `Parcel`.
@@ -793,6 +794,8 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
         }
       )
     }
+
+    symObject_equals = Object_equals
 
     androidFieldName = newTermName("CREATOR")
 

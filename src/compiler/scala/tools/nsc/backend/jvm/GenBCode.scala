@@ -124,7 +124,7 @@ abstract class GenBCode extends BCodeTypes {
 
     // Once pipeline-2 starts doing optimizations more threads will be needed.
     val MAX_THREADS = scala.math.min(
-      2,
+      4,
       java.lang.Runtime.getRuntime.availableProcessors
     )
 
@@ -392,7 +392,7 @@ abstract class GenBCode extends BCodeTypes {
      *  so as to release the main thread for a duty it cannot delegate: writing classfiles to disk.
      *  See `drainQ3()`
      */
-    override def apply(cunit: CompilationUnit): Unit = {
+    override def apply(cunit: CompilationUnit) {
 
           def gen(tree: Tree) {
             tree match {
@@ -2345,7 +2345,7 @@ abstract class GenBCode extends BCodeTypes {
       /**
        *  @can-multi-thread
        */
-      def adapt(from: BType, to: BType): Unit = {
+      def adapt(from: BType, to: BType) {
         if (!conforms(from, to) && !(from.isNullType && to.isNothingType)) {
           to match {
             case UNIT => bc drop from
@@ -2444,6 +2444,7 @@ abstract class GenBCode extends BCodeTypes {
         }
       }
 
+      /** @can-multi-thread */
       def genConversion(from: BType, to: BType, cast: Boolean) = {
         if (cast) { bc.emitT2T(from, to) }
         else {
@@ -2452,6 +2453,7 @@ abstract class GenBCode extends BCodeTypes {
         }
       }
 
+      /** @can-multi-thread */
       def genCast(from: BType, to: BType, cast: Boolean) {
         if(cast) { bc checkCast  to }
         else     { bc isInstance to }
@@ -2495,7 +2497,7 @@ abstract class GenBCode extends BCodeTypes {
         StringReference
       }
 
-      def genCallMethod(method: Symbol, style: InvokeStyle, hostClass0: Symbol = null) {
+      def genCallMethod(method: Symbol, style: InvokeStyle, hostClass0: Symbol = null): Unit = global synchronized { // PENDING
 
         val siteSymbol = claszSymbol
         val hostSymbol = if(hostClass0 == null) method.owner else hostClass0;
@@ -2657,8 +2659,10 @@ abstract class GenBCode extends BCodeTypes {
       /**
        * Generate code for conditional expressions.
        * The jump targets success/failure of the test are `then-target` and `else-target` resp.
+       *
+       * @can-multi-thread
        */
-      private def genCond(tree: Tree, success: asm.Label, failure: asm.Label): Unit = global synchronized { // PENDING
+      private def genCond(tree: Tree, success: asm.Label, failure: asm.Label): Unit = {
 
             def genComparisonOp(l: Tree, r: Tree, code: Int) {
               val op: TestOp = testOpForPrimitive(code - scalaPrimitives.ID)
@@ -2732,22 +2736,24 @@ abstract class GenBCode extends BCodeTypes {
        *
        * @param l       left-hand-side  of the '=='
        * @param r       right-hand-side of the '=='
+       *
+       * @can-multi-thread
        */
-      def genEqEqPrimitive(l: Tree, r: Tree, success: asm.Label, failure: asm.Label): Unit = global synchronized { // PENDING
+      def genEqEqPrimitive(l: Tree, r: Tree, success: asm.Label, failure: asm.Label) {
 
         /** True if the equality comparison is between values that require the use of the rich equality
           * comparator (scala.runtime.Comparator.equals). This is the case when either side of the
           * comparison might have a run-time type subtype of java.lang.Number or java.lang.Character.
           * When it is statically known that both sides are equal and subtypes of Number of Character,
           * not using the rich equality is possible (their own equals method will do ok.)*/
-        val mustUseAnyComparator: Boolean = {
+        val mustUseAnyComparator: Boolean = global synchronized {
           val areSameFinals = l.tpe.isFinalType && r.tpe.isFinalType && (l.tpe =:= r.tpe)
 
           !areSameFinals && platform.isMaybeBoxed(l.tpe.typeSymbol) && platform.isMaybeBoxed(r.tpe.typeSymbol)
         }
 
         if (mustUseAnyComparator) {
-          val equalsMethod = {
+          val equalsMethod = global synchronized {
               def default = platform.externalEquals
               platform match {
                 case x: JavaPlatform =>
@@ -2795,7 +2801,7 @@ abstract class GenBCode extends BCodeTypes {
 
             markProgramPoint(lNonNull)
             load(eqEqTempLocal)
-            genCallMethod(Object_equals, Dynamic)
+            genCallMethod(symObject_equals, Dynamic)
             genCZJUMP(success, failure, NE, BOOL)
           }
         }
