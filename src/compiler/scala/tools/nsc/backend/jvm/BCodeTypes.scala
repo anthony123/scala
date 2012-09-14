@@ -1008,25 +1008,34 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
   final def exemplar(csym0: Symbol): Tracked = {
     assert(csym0 != NoSymbol, "NoSymbol can't be tracked")
 
-    val csym = {
-      if(csym0.isJavaDefined && csym0.isModuleClass) csym0.linkedClassOfClass
-      else if(csym0.isModule) csym0.moduleClass
-      else csym0 // we track only module-classes and plain-classes
+    // fast path
+    var opt = symExemplars.get(csym0)
+    if(opt != null) { return opt }
+
+    // slow path
+    var tr: Tracked  = null
+    var csym: Symbol = null
+    global synchronized {
+
+      csym = {
+        if(csym0.isJavaDefined && csym0.isModuleClass) csym0.linkedClassOfClass
+        else if(csym0.isModule) csym0.moduleClass
+        else csym0 // we track only module-classes and plain-classes
+      }
+
+      opt = symExemplars.get(csym)
+      if(opt != null) { return opt }
+
+      val key = brefType(csym.javaBinaryName.toTypeName)
+      assert(key.isNonSpecial || isCompilingStdLib, "Not a class to track: " + csym.fullName)
+
+      tr = buildExemplar(key, csym)
+
     }
 
     assert(!primitiveTypeMap.contains(csym) || isCompilingStdLib, "primitive types not tracked here: " + csym.fullName)
     assert(!phantomTypeMap.contains(csym),   "phantom types not tracked here: " + csym.fullName)
 
-    val opt = symExemplars.get(csym)
-    if(opt != null) {
-      return opt
-    }
-
-    val key = brefType(csym.javaBinaryName.toTypeName)
-    assert(key.isNonSpecial || isCompilingStdLib, "Not a class to track: " + csym.fullName)
-
-    assert(!exemplars.containsKey(key), "Maps `symExemplars` and `exemplars` got out of synch.")
-    val tr = buildExemplar(key, csym)
     symExemplars.put(csym, tr)
     if(csym != csym0) { symExemplars.put(csym0, tr) }
     exemplars.put(tr.c, tr) // tr.c is the hash-consed, internalized, canonical representative for csym's key.
@@ -2482,10 +2491,10 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     /**
      *  Tracks (if needed) the inner class given by `sym`.
      *
-     *  @must-single-thread
+     *  @can-multi-thread
      **/
     final def asmClassType(sym: Symbol): BType = {
-      assert(hasInternalName(sym), "doesn't have internal name: " + sym.fullName)
+      // assert(hasInternalName(sym), "doesn't have internal name: " + sym.fullName)
       val phantOpt = phantomTypeMap.get(sym)
       if(phantOpt.isDefined) {
         return phantOpt.get
@@ -3251,7 +3260,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
      *  @must-single-thread
      */
     def genMirrorClass(modsym: Symbol, cunit: CompilationUnit, emitSource: Boolean): SubItem2NonPlain = {
-      assert(modsym.companionClass == NoSymbol, modsym)
+      // already tested by invoker: assert(modsym.companionClass == NoSymbol, modsym)
       innerClassBufferASM.clear()
       this.cunit = cunit
       val moduleName = internalName(modsym) // + "$"
