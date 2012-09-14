@@ -192,7 +192,7 @@ abstract class GenBCode extends BCodeTypes {
         var outF: _root_.scala.tools.nsc.io.AbstractFile = null
 
         // -------------- mirror class, if needed --------------
-        var mirrorC: SubItem2NonPlain = null
+        var doEmitMirror = false
         BType synchronized {
 
           isBeanInfo      = claszSymbol hasAnnotation BeanInfoAttr
@@ -200,13 +200,15 @@ abstract class GenBCode extends BCodeTypes {
           outF            = if(needsOutfileForSymbol) getFile(claszSymbol, claszSymbol.javaBinaryName.toString, ".class") else null
 
           if (isStaticModule(claszSymbol) && isTopLevelModule(claszSymbol)) {
-            if (claszSymbol.companionClass == NoSymbol) {
-              mirrorC = mirrorCodeGen.genMirrorClass(claszSymbol, cunit, emitSource)
-            } else {
-              log("No mirror class for module with linked class: " + claszSymbol.fullName)
-            }
+            if (claszSymbol.companionClass == NoSymbol) { doEmitMirror = true }
+            else { log("No mirror class for module with linked class: " + claszSymbol.fullName) }
           }
 
+        } // end of synchronized
+
+        var mirrorC: SubItem2NonPlain = null
+        if(doEmitMirror) {
+          mirrorC = mirrorCodeGen.genMirrorClass(claszSymbol, cunit, emitSource)
         }
 
         // -------------- "plain" class --------------

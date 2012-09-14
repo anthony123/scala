@@ -3264,14 +3264,28 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
      *  generated if there is no companion class: if there is, an attempt will
      *  instead be made to add the forwarder methods to the companion class.
      *
-     *  @must-single-thread
+     *  @can-multi-thread
      */
     def genMirrorClass(modsym: Symbol, cunit: CompilationUnit, emitSource: Boolean): SubItem2NonPlain = {
       // already tested by invoker: assert(modsym.companionClass == NoSymbol, modsym)
       innerClassBufferASM.clear()
       this.cunit = cunit
-      val moduleName = internalName(modsym) // + "$"
-      val mirrorName = moduleName.substring(0, moduleName.length() - 1)
+
+      var moduleName: String          = null
+      var mirrorName: String          = null
+      var ssa: Option[AnnotationInfo] = null
+      var label: String               = null
+      var outF: _root_.scala.tools.nsc.io.AbstractFile = null
+
+      BType synchronized {
+
+        moduleName = internalName(modsym) // + "$"
+        mirrorName = moduleName.substring(0, moduleName.length() - 1)
+        ssa        = getAnnotPickle(mirrorName, modsym.companionSymbol)
+        if(needsOutfileForSymbol) { outF = getFile(modsym, mirrorName, ".class") }
+        label = modsym.name.toString
+
+      }
 
       val flags = (asm.Opcodes.ACC_SUPER | asm.Opcodes.ACC_PUBLIC | asm.Opcodes.ACC_FINAL)
       val mirrorClass = createJClass(flags,
@@ -3280,26 +3294,20 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
                                      JAVA_LANG_OBJECT.getInternalName,
                                      EMPTY_STRING_ARRAY)
 
-      if(emitSource) {
-        mirrorClass.visitSource("" + cunit.source,
-                                null /* SourceDebugExtension */)
-      }
+      if(emitSource) { mirrorClass.visitSource("" + cunit.source, null) } /* SourceDebugExtension */
 
-      val ssa = getAnnotPickle(mirrorName, modsym.companionSymbol)
       mirrorClass.visitAttribute(if(ssa.isDefined) pickleMarkerLocal else pickleMarkerForeign)
-      emitAnnotations(mirrorClass, modsym.annotations ++ ssa)
 
-      addForwarders(isRemote(modsym), mirrorClass, mirrorName, modsym)
-
-      trackMemberClasses(modsym)
-      addInnerClassesASM(mirrorClass, innerClassBufferASM)
-
-      mirrorClass.visitEnd()
-      // leaving for later on purpose invoking `toByteArray()` on mirrorClass (pipeline-2 will do that).
-      val outF: _root_.scala.tools.nsc.io.AbstractFile = {
-        if(needsOutfileForSymbol) getFile(modsym, mirrorName, ".class") else null
+      BType synchronized {
+        emitAnnotations(mirrorClass, modsym.annotations ++ ssa)
+        addForwarders(isRemote(modsym), mirrorClass, mirrorName, modsym)
+        trackMemberClasses(modsym)
       }
-      SubItem2NonPlain("" + modsym.name, mirrorName, mirrorClass, outF)
+
+      addInnerClassesASM(mirrorClass, innerClassBufferASM)
+      mirrorClass.visitEnd()
+
+      SubItem2NonPlain(label, mirrorName, mirrorClass, outF)
     }
 
   } // end of class JMirrorBuilder
