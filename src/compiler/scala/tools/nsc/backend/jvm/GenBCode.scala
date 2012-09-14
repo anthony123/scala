@@ -467,6 +467,7 @@ abstract class GenBCode extends BCodeTypes {
        *  (private ones will only be seen while emitting a particular class and thus aren't stored there).
        */
       val seenMethodType = mutable.Map.empty[Symbol, BType]
+      /** @can-multi-thread */
       override def asmMethodType(msym: Symbol): BType = {
         var mtOpt = seenMethodType.get(msym)
         if(mtOpt.isDefined) { return mtOpt.get }
@@ -489,6 +490,7 @@ abstract class GenBCode extends BCodeTypes {
 
       // Similar division of labor as described for `seenMethodType` above.
       val seenParamTKs = mutable.Map.empty[ /* Apply's fun */ Symbol, List[BType]]
+      /** @can-multi-thread */
       def paramTKs(app: Apply): List[BType] = {
         val Apply(fun, _)  = app
         val funSym = fun.symbol
@@ -513,6 +515,7 @@ abstract class GenBCode extends BCodeTypes {
 
       // Similar division of labor as described for `seenMethodType` above.
       val seenSymInfoTK = mutable.Map.empty[Symbol, BType]
+      /** @can-multi-thread */
       def symInfoTK(sym: Symbol): BType = {
         var skOpt = seenSymInfoTK.get(sym)
         if(skOpt.isDefined) { return skOpt.get }
@@ -533,8 +536,10 @@ abstract class GenBCode extends BCodeTypes {
         sk
       }
 
-      def tpeTK(tree: Tree): BType = { toTypeKind(tree.tpe) }
+      /** @can-multi-thread */
+      def tpeTK(tree: Tree): BType = { global synchronized toTypeKind(tree.tpe) }
 
+      /** @can-multi-thread */
       def log(msg: => AnyRef) {
         global synchronized { global.log(msg) }
       }
@@ -604,7 +609,7 @@ abstract class GenBCode extends BCodeTypes {
       private var nxtIdx = -1 // next available index for local-var
       /** Make a fresh local variable, ensuring a unique name.
        *  The invoker must make sure inner classes are tracked for the sym's tpe. */
-      def makeLocal(tk: BType, name: String): Symbol = {
+      def makeLocal(tk: BType, name: String): Symbol = global synchronized {
         val sym = methSymbol.newVariable(cunit.freshTermName(name), NoPosition, Flags.SYNTHETIC) // setInfo tpe
         makeLocal(sym, tk)
         sym
@@ -615,7 +620,9 @@ abstract class GenBCode extends BCodeTypes {
       def makeLocal(sym: Symbol, tk: BType): Local = {
         assert(!locals.contains(sym), "attempt to create duplicate local var.")
         assert(nxtIdx != -1, "not a valid start index")
-        val loc = Local(tk, sym.javaSimpleName.toString, nxtIdx, sym.isSynthetic)
+        val loc = {
+          global synchronized Local(tk, sym.javaSimpleName.toString, nxtIdx, sym.isSynthetic)
+        }
         locals += (sym -> loc)
         assert(tk.getSize > 0, "makeLocal called for a symbol whose type is Unit.")
         nxtIdx += tk.getSize
@@ -736,10 +743,17 @@ abstract class GenBCode extends BCodeTypes {
 
       /** If the selector type has a member with the right name,
        *  it is the host class; otherwise the symbol's owner.
+       *
+       *  @can-multi-thread
        */
-      def findHostClass(selector: Type, sym: Symbol) = selector member sym.name match {
-        case NoSymbol   => log(s"Rejecting $selector as host class for $sym") ; sym.owner
-        case _          => selector.typeSymbol
+      def findHostClass(selTree: Tree, sym: Symbol) = {
+        global synchronized {
+          val selector = selTree.tpe
+          selector member sym.name match {
+            case NoSymbol   => log(s"Rejecting $selector as host class for $sym") ; sym.owner
+            case _          => selector.typeSymbol
+          }
+        }
       }
 
       /* ---------------- top-down traversal invoking ASM Tree API along the way ---------------- */
@@ -1115,9 +1129,7 @@ abstract class GenBCode extends BCodeTypes {
 
                 def emitNormalMethodBody() {
                   val veryFirstProgramPoint = currProgramPoint()
-                  global synchronized {
-                    genLoad(rhs, returnType) // PENDING
-                  }
+                  genLoad(rhs, returnType)
 
                   rhs match {
                     case Block(_, Return(_)) => ()
@@ -1247,12 +1259,14 @@ abstract class GenBCode extends BCodeTypes {
        * Emits code that adds nothing to the operand stack.
        * Two main cases: `tree` is an assignment,
        * otherwise an `adapt()` to UNIT is performed if needed.
+       *
+       * @can-multi-thread
        */
       def genStat(tree: Tree) {
         lineNumber(tree)
         tree match {
           case Assign(lhs @ Select(_, _), rhs) =>
-            val isStatic = lhs.symbol.isStaticMember
+            val isStatic = global synchronized { lhs.symbol.isStaticMember }
             if (!isStatic) { genLoadQualifier(lhs) }
             genLoad(rhs, symInfoTK(lhs.symbol))
             lineNumber(tree)
@@ -1270,6 +1284,7 @@ abstract class GenBCode extends BCodeTypes {
         }
       }
 
+      /** @can-multi-thread */
       def genThrow(expr: Tree): BType = {
         val thrownKind = tpeTK(expr)
         assert(exemplars.get(thrownKind).isSubtypeOf(ThrowableReference))
@@ -1447,6 +1462,7 @@ abstract class GenBCode extends BCodeTypes {
         expectedType
       }
 
+      /** @can-multi-thread */
       def genLoadIf(tree: If, expectedType: BType): BType = {
         val If(condp, thenp, elsep) = tree
 
@@ -1483,7 +1499,7 @@ abstract class GenBCode extends BCodeTypes {
       }
 
       /** TODO documentation */
-      def genLoadTry(tree: Try): BType = {
+      def genLoadTry(tree: Try): BType = global synchronized { // PENDING
 
         val Try(block, catches, finalizer) = tree
         val kind = tpeTK(tree)
@@ -1750,7 +1766,7 @@ abstract class GenBCode extends BCodeTypes {
           case ApplyDynamic(qual, args) => sys.error("No invokedynamic support yet.")
 
           case This(qual) =>
-            val symIsModuleClass = tree.symbol.isModuleClass
+            val symIsModuleClass = global synchronized { tree.symbol.isModuleClass }
             assert(tree.symbol == claszSymbol || symIsModuleClass,
                    "Trying to access the this of another class: " +
                    "tree.symbol = " + tree.symbol + ", class symbol = " + claszSymbol + " compilation unit:"+ cunit)
@@ -1761,7 +1777,10 @@ abstract class GenBCode extends BCodeTypes {
               mnode.visitVarInsn(asm.Opcodes.ALOAD, 0)
               generatedType =
                 if (tree.symbol == ArrayClass) ObjectReference
-                else brefType(thisName) // inner class (if any) for claszSymbol already tracked.
+                else {
+                  // inner class (if any) for claszSymbol already tracked.
+                  global synchronized brefType(thisName)
+                }
             }
 
           case Select(Ident(nme.EMPTY_PACKAGE_NAME), module) =>
@@ -1771,23 +1790,27 @@ abstract class GenBCode extends BCodeTypes {
           case Select(qualifier, selector) =>
             val sym = tree.symbol
             generatedType = symInfoTK(sym)
-            val hostClass = findHostClass(qualifier.tpe, sym)
+            val hostClass = findHostClass(qualifier, sym)
             log(s"Host class of $sym with qual $qualifier (${qualifier.tpe}) is $hostClass")
 
-            if (sym.isModule)            { genLoadModule(tree) }
-            else if (sym.isStaticMember) { fieldLoad(sym, hostClass) }
-            else {
-              genLoadQualifier(tree)
-              fieldLoad(sym, hostClass)
+            global synchronized { // PENDING
+              if (sym.isModule)            { genLoadModule(tree) }
+              else if (sym.isStaticMember) { fieldLoad(sym, hostClass) }
+              else {
+                genLoadQualifier(tree)
+                fieldLoad(sym, hostClass)
+              }
             }
 
           case Ident(name) =>
             val sym = tree.symbol
-            if (!sym.isPackage) {
-              val tk = symInfoTK(sym)
-              if (sym.isModule) { genLoadModule(tree) }
-              else { load(sym) }
-              generatedType = tk
+            global synchronized { // PENDING
+              if (!sym.isPackage) {
+                val tk = symInfoTK(sym)
+                if (sym.isModule) { genLoadModule(tree) }
+                else { load(sym) }
+                generatedType = tk
+              }
             }
 
           case Literal(value) =>
@@ -1862,9 +1885,7 @@ abstract class GenBCode extends BCodeTypes {
       // ---------------- emitting constant values ----------------
 
       /**
-       * For const.tag in {ClazzTag, EnumTag}
-       *   @must-single-thread
-       * Otherwise it's safe to call from multiple threads.
+       *   @can-multi-thread
        **/
       def genConstant(const: Constant) {
         (const.tag: @switch) match {
@@ -1890,23 +1911,25 @@ abstract class GenBCode extends BCodeTypes {
 
           case ClazzTag   =>
             val toPush: BType = {
-              val kind = toTypeKind(const.typeValue)
+              val kind = global synchronized { toTypeKind(const.typeValue) }
               if (kind.isValueType) classLiteral(kind)
               else kind;
             }
             mnode.visitLdcInsn(toPush.toASMType)
 
           case EnumTag   =>
-            val sym       = const.symbolValue
-            val ownerName = internalName(sym.owner)
-            val fieldName = sym.javaSimpleName.toString
-            val fieldDesc = toTypeKind(sym.tpe.underlying).getDescriptor
-            mnode.visitFieldInsn(
-              asm.Opcodes.GETSTATIC,
-              ownerName,
-              fieldName,
-              fieldDesc
-            )
+            global synchronized {
+              val sym       = const.symbolValue
+              val ownerName = internalName(sym.owner)
+              val fieldName = sym.javaSimpleName.toString
+              val fieldDesc = toTypeKind(sym.tpe.underlying).getDescriptor
+              mnode.visitFieldInsn(
+                asm.Opcodes.GETSTATIC,
+                ownerName,
+                fieldName,
+                fieldDesc
+              )
+            }
 
           case _ => abort("Unknown constant value: " + const)
         }
@@ -1920,6 +1943,7 @@ abstract class GenBCode extends BCodeTypes {
         genLoad(lblDf.rhs, expectedType)
       }
 
+      /** @can-multi-thread */
       private def genReturn(r: Return) {
         val Return(expr) = r
         val returnedKind = tpeTK(expr)
@@ -1951,7 +1975,7 @@ abstract class GenBCode extends BCodeTypes {
 
       } // end of genReturn()
 
-      private def genApply(app: Apply, expectedType: BType): BType = {
+      private def genApply(app: Apply, expectedType: BType): BType = global synchronized { // PENDING
         val BoxesRunTime = "scala/runtime/BoxesRunTime"
         var generatedType = expectedType
         lineNumber(app)
@@ -2157,7 +2181,7 @@ abstract class GenBCode extends BCodeTypes {
                     var targetTypeKind: BType  = null
                     fun match {
                       case Select(qual, _) =>
-                        val qualSym = findHostClass(qual.tpe, sym)
+                        val qualSym = findHostClass(qual, sym)
                         if (qualSym == ArrayClass) {
                           targetTypeKind = tpeTK(qual)
                           log(s"Stored target type kind for {$sym.fullName} as $targetTypeKind")
@@ -2284,6 +2308,7 @@ abstract class GenBCode extends BCodeTypes {
         generatedType
       }
 
+      /** @can-multi-thread */
       def genBlock(tree: Block, expectedType: BType) {
         val Block(stats, expr) = tree
         val savedScope = varsInScope
@@ -2321,7 +2346,11 @@ abstract class GenBCode extends BCodeTypes {
         }
       }
 
-      /** Emit code to Load the qualifier of `tree` on top of the stack. */
+      /**
+       *  Emit code to Load the qualifier of `tree` on top of the stack.
+       *
+       *  @can-multi-thread
+       */
       def genLoadQualifier(tree: Tree) {
         lineNumber(tree)
         tree match {
@@ -2364,17 +2393,21 @@ abstract class GenBCode extends BCodeTypes {
         (args zip btpes) foreach { case (arg, btpe) => genLoad(arg, btpe) }
       }
 
+      /** @can-multi-thread */
       def genLoadModule(tree: Tree): BType = {
-        // Working around SI-5604.  Rather than failing the compile when we see a package here, check if there's a package object.
-        val module = (
-          if (!tree.symbol.isPackageClass) tree.symbol
-          else tree.symbol.info.member(nme.PACKAGE) match {
-            case NoSymbol => assert(false, "Cannot use package as value: " + tree) ; NoSymbol
-            case s        => debugwarn("Bug: found package class where package object expected.  Converting.") ; s.moduleClass
-          }
-        )
         lineNumber(tree)
-        genLoadModule(module)
+        var module: Symbol = null
+        global synchronized {
+          // Working around SI-5604.  Rather than failing the compile when we see a package here, check if there's a package object.
+          module = (
+            if (!tree.symbol.isPackageClass) tree.symbol
+            else tree.symbol.info.member(nme.PACKAGE) match {
+              case NoSymbol => assert(false, "Cannot use package as value: " + tree) ; NoSymbol
+              case s        => debugwarn("Bug: found package class where package object expected.  Converting.") ; s.moduleClass
+            }
+          )
+          genLoadModule(module)
+        }
         asmClassType(module)
       }
 
@@ -2597,7 +2630,7 @@ abstract class GenBCode extends BCodeTypes {
        * Generate code for conditional expressions.
        * The jump targets success/failure of the test are `then-target` and `else-target` resp.
        */
-      private def genCond(tree: Tree, success: asm.Label, failure: asm.Label) {
+      private def genCond(tree: Tree, success: asm.Label, failure: asm.Label): Unit = global synchronized { // PENDING
 
             def genComparisonOp(l: Tree, r: Tree, code: Int) {
               val op: TestOp = testOpForPrimitive(code - scalaPrimitives.ID)
