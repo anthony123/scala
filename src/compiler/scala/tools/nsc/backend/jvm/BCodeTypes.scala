@@ -2661,8 +2661,8 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     final def trackMemberClasses(lateInnerClasses: List[Symbol]) {
       for(memberc <- lateInnerClasses) {
         val tracked = exemplar(memberc)
-        assert(tracked.isInnerClass, "saveInnerClassesFor() says this was no inner-class after all: " + memberc.fullName)
         val memberCTK = tracked.c
+        assert(tracked.isInnerClass, "saveInnerClassesFor() says this was no inner-class after all: " + memberc.fullName)
         innerClassBufferASM += memberCTK
       }
     }
@@ -2670,13 +2670,13 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     /**
      * @can-multi-thread
      **/
-    final def addInnerClassesASM(jclass: asm.ClassVisitor) {
+    final def addInnerClassesASM(jclass: asm.ClassVisitor, refedInnerClasses: scala.collection.Set[BType]) {
       // used to detect duplicates.
       val seen = mutable.Map.empty[String, String]
       // result without duplicates, not yet sorted.
       val result = mutable.Set.empty[InnerClassEntry]
 
-      for(s: BType           <- innerClassBufferASM;
+      for(s: BType           <- refedInnerClasses;
           e: InnerClassEntry <- exemplars.get(s).innersChain) {
 
         assert(e.name != null, "saveInnerClassesFor() is broken.") // documentation
@@ -3319,7 +3319,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       }
 
       trackMemberClasses(lateInnerClasses)
-      addInnerClassesASM(mirrorClass)
+      addInnerClassesASM(mirrorClass, innerClassBufferASM)
       mirrorClass.visitEnd()
 
       SubItem3(label, mirrorName, mirrorClass.toByteArray(), outF)
@@ -3434,7 +3434,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       constructor.visitEnd()
 
       trackMemberClasses(getMemberClasses(cls))
-      addInnerClassesASM(beanInfoClass)
+      addInnerClassesASM(beanInfoClass, innerClassBufferASM)
 
       beanInfoClass.visitEnd()
       // leaving for later on purpose (to be done by pipeline-2): invoking `visitEnd()` and `toByteArray()` on beanInfoClass.
