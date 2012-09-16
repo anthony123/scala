@@ -243,7 +243,7 @@
 >     
 >   
 > }
-> anonymous class anonfun$1 extends runtime.AbstractFunction1, Serializable {
+> anonymous class TestSetterInline$$anonfun$1 extends runtime.AbstractFunction1, Serializable {
 >   // fields:
 >   
 >   // methods
@@ -274,7 +274,7 @@
 >   }
 >   Exception handlers: 
 >     
->   def <init>(): anonfun$1 {
+>   def <init>(): TestSetterInline$$anonfun$1 {
 >   locals: 
 >   startBlock: 1
 >   blocks: [1]
@@ -345,8 +345,8 @@
 >     39	THIS(TestSetterInline)
 >     39	CALL_METHOD java.lang.Object.<init> (super())
 >     40	THIS(TestSetterInline)
->     40	NEW REF(anonymous class anonfun$1)
->     40	DUP(REF(anonymous class anonfun$1))
+>     40	NEW REF(anonymous class TestSetterInline$$anonfun$1)
+>     40	DUP(REF(anonymous class TestSetterInline$$anonfun$1))
 >     40	CALL_METHOD TestSetterInline$$anonfun$1.<init> (static-instance)
 >     40	STORE_FIELD variable _postSetHook (dynamic)
 >     40	RETURN(UNIT)
