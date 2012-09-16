@@ -124,7 +124,7 @@ abstract class GenBCode extends BCodeTypes {
 
     // Once pipeline-2 starts doing optimizations more threads will be needed.
     val MAX_THREADS = scala.math.min(
-      2,
+      4,
       java.lang.Runtime.getRuntime.availableProcessors
     )
 
@@ -132,8 +132,6 @@ abstract class GenBCode extends BCodeTypes {
     private val woExitedP1 = new java.util.concurrent.ConcurrentHashMap[Long, Long] // debug
 
     private var bytecodeWriter  : BytecodeWriter   = null
-    private var mirrorCodeGen   : JMirrorBuilder   = null
-    private var beanInfoCodeGen : JBeanInfoBuilder = null
 
     // q1
     case class Item1(arrivalPos: Int, cd: ClassDef, cunit: CompilationUnit) {
@@ -167,6 +165,9 @@ abstract class GenBCode extends BCodeTypes {
      *  @must-single-thread (because it relies on typer).
      */
     class Worker1(needsOutfileForSymbol: Boolean, emitSource: Boolean, emitLines: Boolean, emitVars: Boolean) extends _root_.java.lang.Runnable {
+
+      private var mirrorCodeGen   = new JMirrorBuilder(  needsOutfileForSymbol)
+      private var beanInfoCodeGen = new JBeanInfoBuilder(needsOutfileForSymbol)
 
       def run() {
         val id = java.lang.Thread.currentThread.getId
@@ -214,7 +215,7 @@ abstract class GenBCode extends BCodeTypes {
         // -------------- "plain" class --------------
         val pcb = new PlainClassBuilder(cunit, emitSource, emitLines, emitVars)
         pcb.genPlainClass(cd)
-        pcb.addInnerClassesASM(pcb.cnode, pcb.innerClassBufferASM)
+        pcb.addInnerClassesASM(pcb.cnode)
         assert(cd.symbol == claszSymbol, "Someone messed up BCodePhase.claszSymbol during genPlainClass().")
         val cw = new CClassWriter(extraProc)
         pcb.cnode.accept(cw)
@@ -247,8 +248,6 @@ abstract class GenBCode extends BCodeTypes {
       // initBytecodeWriter invokes fullName, thus we have to run it before the typer-dependent thread is activated.
       bytecodeWriter  = initBytecodeWriter(cleanup.getEntryPoints)
       val needsOutfileForSymbol = bytecodeWriter.isInstanceOf[ClassBytecodeWriter]
-      mirrorCodeGen   = new JMirrorBuilder(  needsOutfileForSymbol)
-      beanInfoCodeGen = new JBeanInfoBuilder(needsOutfileForSymbol)
       // -----------------------
       // Pipeline from q1 to q2.
       // -----------------------

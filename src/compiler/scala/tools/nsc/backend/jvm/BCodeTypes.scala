@@ -2662,13 +2662,13 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     /**
      * @can-multi-thread
      **/
-    final def addInnerClassesASM(jclass: asm.ClassVisitor, refedInnerClasses: collection.Set[BType]) {
+    final def addInnerClassesASM(jclass: asm.ClassVisitor) {
       // used to detect duplicates.
       val seen = mutable.Map.empty[String, String]
       // result without duplicates, not yet sorted.
       val result = mutable.Set.empty[InnerClassEntry]
 
-      for(s: BType           <- refedInnerClasses;
+      for(s: BType           <- innerClassBufferASM;
           e: InnerClassEntry <- exemplars.get(s).innersChain) {
 
         assert(e.name != null, "saveInnerClassesFor() is broken.") // documentation
@@ -3304,7 +3304,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
         trackMemberClasses(modsym)
       }
 
-      addInnerClassesASM(mirrorClass, innerClassBufferASM)
+      addInnerClassesASM(mirrorClass)
       mirrorClass.visitEnd()
 
       SubItem3(label, mirrorName, mirrorClass.toByteArray(), outF)
@@ -3419,7 +3419,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       constructor.visitEnd()
 
       trackMemberClasses(cls)
-      addInnerClassesASM(beanInfoClass, innerClassBufferASM)
+      addInnerClassesASM(beanInfoClass)
 
       beanInfoClass.visitEnd()
       // leaving for later on purpose (to be done by pipeline-2): invoking `visitEnd()` and `toByteArray()` on beanInfoClass.
