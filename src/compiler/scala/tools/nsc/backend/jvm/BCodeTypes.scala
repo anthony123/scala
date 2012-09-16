@@ -45,13 +45,13 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
   /**
    * @must-single-thread
    **/
-  def outputDirectory(sym: Symbol): AbstractFile =
+  private def outputDirectory(sym: Symbol): AbstractFile =
     settings.outputDirs outputDirFor beforeFlatten(sym.sourceFile)
 
   /**
    * @must-single-thread
    **/
-  def getFile(base: AbstractFile, clsName: String, suffix: String): AbstractFile = {
+  private def getFile(base: AbstractFile, clsName: String, suffix: String): AbstractFile = {
     var dir = base
     val pathParts = clsName.split("[./]").toList
     for (part <- pathParts.init) {
@@ -1010,7 +1010,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
    * This method does not add to `innerClassBufferASM`, use `internalName()` or `asmType()` or `toTypeKind()` for that.
    * On the other hand, this method does record the inner-class status of the argument, via `buildExemplar()`.
    *
-   * @can-multi-thread
+   * @must-single-thread
    */
   final def exemplar(csym0: Symbol): Tracked = {
     assert(csym0 != NoSymbol, "NoSymbol can't be tracked")
@@ -2639,38 +2639,30 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     /**
      *  Adds to `innerClassBufferASM` all (direct) member inner classes of `csym`,
      *  thus making sure they get entries in the InnerClasses JVM attribute
-     *  The (direct) member classes returned might otherwise not be mentioned in the class being built.
-     *  Another method (`trackMemberClasses()`) is used to add them to `innerClassBufferASM`.
-     *  Why two methods? This method is not thread-reentrant, while the other one is.
+     *  even if otherwise not mentioned in the class being built.
      *
      *  @must-single-thread
      **/
-    final def getMemberClasses(csym: Symbol): List[Symbol] = {
-      afterErasure {
+    final def trackMemberClasses(csym: Symbol): List[BType] = {
+      val lateInnerClasses = afterErasure {
         for (sym <- List(csym, csym.linkedClassOfClass); memberc <- sym.info.decls.map(innerClassSymbolFor) if memberc.isClass)
         yield memberc
       }
-    }
-
-    /**
-     *  Adds to `innerClassBufferASM` the arguments (which are assumed to be inner classes mentioned in the current class).
-     *  See `getMemberClasses()`.
-     *
-     *  @can-multi-thread
-     **/
-    final def trackMemberClasses(lateInnerClasses: List[Symbol]) {
-      for(memberc <- lateInnerClasses) {
+      // as a precaution, do the following outside the above `afterErasure` otherwise funny internal names might be computed.
+      for(memberc <- lateInnerClasses) yield {
         val tracked = exemplar(memberc)
         val memberCTK = tracked.c
         assert(tracked.isInnerClass, "saveInnerClassesFor() says this was no inner-class after all: " + memberc.fullName)
         innerClassBufferASM += memberCTK
+
+        memberCTK
       }
     }
 
     /**
      * @can-multi-thread
      **/
-    final def addInnerClassesASM(jclass: asm.ClassVisitor, refedInnerClasses: scala.collection.Set[BType]) {
+    final def addInnerClassesASM(jclass: asm.ClassVisitor, refedInnerClasses: collection.Set[BType]) {
       // used to detect duplicates.
       val seen = mutable.Map.empty[String, String]
       // result without duplicates, not yet sorted.
@@ -2708,7 +2700,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
      *
      *  @must-single-thread
      */
-    final def descriptor(t: Type): String = { toTypeKind(t).getDescriptor   }
+    final def descriptor(t: Type):   String = { toTypeKind(t).getDescriptor   }
 
     /**
      *  Tracks (if needed) the inner class given by `sym`.
@@ -3283,22 +3275,17 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       var mirrorName: String          = null
       var ssa: Option[AnnotationInfo] = null
       var label: String               = null
-      var outDir: _root_.scala.tools.nsc.io.AbstractFile = null
+      var outF: _root_.scala.tools.nsc.io.AbstractFile = null
 
       BType synchronized {
 
         moduleName = internalName(modsym) // + "$"
         mirrorName = moduleName.substring(0, moduleName.length() - 1)
         ssa        = getAnnotPickle(mirrorName, modsym.companionSymbol)
-        if(needsOutfileForSymbol) {
-          outDir = outputDirectory(modsym)
-        }
+        if(needsOutfileForSymbol) { outF = getFile(modsym, mirrorName, ".class") }
         label = modsym.name.toString
 
-      } // end of synchronized
-
-      val outF = if(needsOutfileForSymbol) getFile(outDir, mirrorName, ".class") else null
-
+      }
 
       val flags = (asm.Opcodes.ACC_SUPER | asm.Opcodes.ACC_PUBLIC | asm.Opcodes.ACC_FINAL)
       val mirrorClass = createJClass(flags,
@@ -3311,14 +3298,12 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
       mirrorClass.visitAttribute(if(ssa.isDefined) pickleMarkerLocal else pickleMarkerForeign)
 
-      var lateInnerClasses: List[Symbol] = null
       BType synchronized {
         emitAnnotations(mirrorClass, modsym.annotations ++ ssa)
         addForwarders(isRemote(modsym), mirrorClass, mirrorName, modsym)
-        lateInnerClasses = getMemberClasses(modsym)
+        trackMemberClasses(modsym)
       }
 
-      trackMemberClasses(lateInnerClasses)
       addInnerClassesASM(mirrorClass, innerClassBufferASM)
       mirrorClass.visitEnd()
 
@@ -3433,7 +3418,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       constructor.visitMaxs(0, 0) // just to follow protocol, dummy arguments
       constructor.visitEnd()
 
-      trackMemberClasses(getMemberClasses(cls))
+      trackMemberClasses(cls)
       addInnerClassesASM(beanInfoClass, innerClassBufferASM)
 
       beanInfoClass.visitEnd()

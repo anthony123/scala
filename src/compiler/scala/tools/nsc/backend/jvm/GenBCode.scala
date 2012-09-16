@@ -16,7 +16,7 @@ import scala.tools.asm
 /**
  *  Prepare in-memory representations of classfiles using the ASM Tree API, and serialize them to disk.
  *
- *  Two pipelines are at work, each taking work items from a queue dedicated to that pipeline:
+ *  Three pipelines are at work, each taking work items from a queue dedicated to that pipeline:
  *
  *  (There's another pipeline so to speak, the one that populates queue-1 by traversing a CompilationUnit until ClassDefs are found,
  *   but the "interesting" pipelines are the ones described below)
@@ -29,59 +29,76 @@ import scala.tools.asm
  *
  *    (2) The second queue contains items where a ClassDef has been lowered into:
  *          (a) an optional mirror class,
- *          (b) a plain class, and
+ *          (b) a half-baked plain class, and
  *          (c) an optional bean class.
  *
- *        When present, these classes are ready to be written to disk.
- *        That's what pipeline-2 does: it drains queue-2, sending class files to disk in the order given by "arrival position".
+ *        Both the mirror and the bean classes (if any) are ready to be written to disk,
+ *        but that has to wait until the plain class is turned into an ASM Tree.
  *
- *    Pipeline 1
- *    ----------
+ *        Pipeline 1
+ *        ----------
  *
- *    The processing that takes place between queues 1 and 2 relies on typer, and thus these accesses have to be coordinated.
- *    The main thread is dedicated to pipeline-2, because some tools (including the Scala Eclipse IDE)
- *    track file system modifications performed by the main thread only.
+ *        The processing that takes place between queues 1 and 2 relies on typer, and thus has to be performed by a single thread.
+ *        The thread in question is different from the main thread, for reasons that will become apparent below.
+ *        As long as all operations on typer are carried out under a single thread (not necessarily the main thread), everything is fine.
  *
- *    In addition to accessing typer, a worker thread of pipeline-1 can perform operations that rely only on:
- *      - BType:     a typer-independent representation of a JVM-level type,
- *      - Tracked:   a bundle of a BType B, its superclass (as a BType), and B's interfaces (as BTypes).
- *      - exemplars: a concurrent map to obtain the Tracked structure using internal class names as keys.
- *      - the tree-based representation of classfiles provided by the ASM Tree API.
- *    Whenever queries are performed on the above, they are thread-reentrant, because the underlying data structures are immutable.
+ *        Rather than performing all the work involved in lowering a ClassDef,
+ *        pipeline-1 leaves in general for later those operations that don't require typer.
+ *        All the @can-multi-thread operations that pipeline-2 performs can also run during pipeline-1, in fact some of them do.
+ *        In contrast, typer operations can't be performed by pipeline-2.
+ *        pipeline-2 consists of MAX_THREADS worker threads running concurrently.
  *
- *    For example:
- *      - it's possible to determine whether a BType conforms to another without resorting to typer.
- *      - `CClassWriter.getCommonSuperclass()` is thread-reentrant (therefore, it accesses only thread-reentrant functionality).
- *        This is convenient because `MethodNode.visitMaxs()` invokes `getCommonSuperclass()` from different threads.
+ *        Pipeline 2
+ *        ----------
  *
- *    Given that the above queries are thread-reentrant, they can run in pipeline-1, pipeline-2, or in a new pipeline added in between.
+ *        The operations that a worker thread of pipeline-2 can perform are those that rely only on the following abstractions:
+ *          - BType:     a typer-independent representation of a JVM-level type,
+ *          - Tracked:   a bundle of a BType B, its superclass (as a BType), and B's interfaces (as BTypes).
+ *          - exemplars: a concurrent map to obtain the Tracked structure using internal class names as keys.
+ *          - the tree-based representation of classfiles provided by the ASM Tree API.
+ *        For example:
+ *          - it's possible to determine whether a BType conforms to another without resorting to typer.
+ *          - `CClassWriter.getCommonSuperclass()` is thread-reentrant (therefore, it accesses only thread-reentrant functionality).
+ *             This comes handy because in pipelin-2, `MethodNode.visitMaxs()` invokes `getCommonSuperclass()` on different method nodes,
+ *             and each of these activations accesses typer-independent structures (exemplars, Tracked) to compute its answer.
  *
- *    In the future, a pipeline-1 worker could perform intra-method optimizations on the ASM tree
- *    before handing it over to queue-2, including:
- *      - collapsing jump-chains,
- *      - constant propagation,
- *      - arith and logical ops reductions,
- *      - pattern-based simplification aka peephole optimization,
- *      - eliminating unreachable-code, and
- *      - removing unused locals.
- *      See Ch. 8. "Method Analysis" in the ASM User Guide, http://download.forge.objectweb.org/asm/asm4-guide.pdf
+ *        In the future, a pipeline-2 worker could also perform intra-method optimizations on the ASM tree
+ *        before handing it over to queue-3, including:
+ *          - collapsing jump-chains,
+ *          - constant propagation,
+ *          - arith and logical ops reductions,
+ *          - pattern-based simplification aka peephole optimization,
+ *          - eliminating unreachable-code, and
+ *          - removing unused locals.
+ *        See Ch. 8. "Method Analysis" in the ASM User Guide, http://download.forge.objectweb.org/asm/asm4-guide.pdf
  *
- *    Pipeline 2
- *    ----------
+ *    (3) The third queue contains items ready for serialization.
+ *        It's a priority queue that follows the original arrival order,
+ *        so as to emit identical jars on repeated compilation of the same sources.
  *
- *    This pipeline consist of just the main thread, which is the thread that some tools (including the Eclipse IDE)
- *    expect to be the sole performer of file-system modifications.
+ *        Pipeline 3
+ *        ----------
+ *
+ *        This pipeline consist of just the main thread, which is the thread that some tools (including the Eclipse IDE)
+ *        expect to be the sole performer of file-system modifications.
  *
  * ---------------------------------------------------------------------------------------------------------------------
  *
  *    Summing up, the key facts about this phase are:
  *
- *      (i) Two pipelines run in parallel, thus allowing finishing earlier.
+ *      (i) Three pipelines run in parallel, thus allowing finishing earlier.
  *
- *     (ii) Pipeline-1 has MAX_THREADS parallel workers, while pipeline-2 is sequential.
+ *     (ii) Pipelines 1 and 3 are sequential.
+ *          In contrast, pipeline-2 uses task-parallelism (where each of the N workers is limited to invoking ASM and BType operations).
  *
- *    (iii) Both queues are concurrent, because producer(s) and consumer(s) run in different threads.
- *          Queue-2 is s in fact a priority queue.
+ *          All three queues are concurrent:
+ *
+ *    (iii) Queue-1 connects a single producer (BCodePhase) to a single consumer (Worker-1),
+ *          but given they run on different threads, queue-1 has to be concurrent.
+ *
+ *     (iv) Queue-2 is concurrent because concurrent workers of pipeline-2 take items from it.
+ *
+ *      (v) Queue-3 is concurrent (it's in fact a priority queue) because those same concurrent workers add items to it.
  *
  *
  *
@@ -105,9 +122,9 @@ abstract class GenBCode extends BCodeTypes {
     override def description = "Generate bytecode from ASTs"
     override def erasedTypes = true
 
-    // Once pipeline-1 starts doing optimizations more threads will be needed.
+    // Once pipeline-2 starts doing optimizations more threads will be needed.
     val MAX_THREADS = scala.math.min(
-      4,
+      2,
       java.lang.Runtime.getRuntime.availableProcessors
     )
 
@@ -126,25 +143,30 @@ abstract class GenBCode extends BCodeTypes {
     private val q1 = new _root_.java.util.concurrent.LinkedBlockingQueue[Item1]
 
     // q2
-    case class Item2(arrivalPos: Int, mirror: SubItem3, plain: SubItem3, bean: SubItem3) {
+    case class Item2(arrivalPos: Int, mirror: SubItem2NonPlain, plain: SubItem2Plain, bean: SubItem2NonPlain) {
       def isPoison = { arrivalPos == Int.MaxValue }
     }
-    private val i2comparator = new _root_.java.util.Comparator[Item2] {
-      override def compare(a: Item2, b: Item2) = {
+
+    // q3
+    case class Item3(arrivalPos: Int, mirror: SubItem3, plain: SubItem3, bean: SubItem3) {
+      def isPoison = { arrivalPos == Int.MaxValue }
+    }
+    private val i3comparator = new _root_.java.util.Comparator[Item3] {
+      override def compare(a: Item3, b: Item3) = {
         if(a.arrivalPos < b.arrivalPos) -1
         else if(a.arrivalPos == b.arrivalPos) 0
         else 1
       }
     }
-    private val poison2 = Item2(Int.MaxValue, null, null, null)
-    private val q2 = new _root_.java.util.concurrent.PriorityBlockingQueue[Item2](100, i2comparator)
+    private val poison3 = Item3(Int.MaxValue, null, null, null)
+    private val q3 = new _root_.java.util.concurrent.PriorityBlockingQueue[Item3](100, i3comparator)
 
     /**
      *  Pipeline that takes ClassDefs from queue-1, lowers them into an intermediate form, placing them on queue-2
      *
      *  @must-single-thread (because it relies on typer).
      */
-    class Worker(needsOutfileForSymbol: Boolean, emitSource: Boolean, emitLines: Boolean, emitVars: Boolean) extends _root_.java.lang.Runnable {
+    class Worker1(needsOutfileForSymbol: Boolean, emitSource: Boolean, emitLines: Boolean, emitVars: Boolean) extends _root_.java.lang.Runnable {
 
       def run() {
         val id = java.lang.Thread.currentThread.getId
@@ -154,7 +176,7 @@ abstract class GenBCode extends BCodeTypes {
           val item = q1.take
           if(item.isPoison) {
             woExitedP1.put(id, id)
-            q2 put poison2
+            q3 put poison3
             return
           }
           else { visit(item) }
@@ -167,8 +189,7 @@ abstract class GenBCode extends BCodeTypes {
 
         var isBeanInfo      = false
         var plainClassLabel = ""
-        var outFName        = ""
-        var outDir: _root_.scala.tools.nsc.io.AbstractFile = null
+        var outF: _root_.scala.tools.nsc.io.AbstractFile = null
 
         // -------------- mirror class, if needed --------------
         var doEmitMirror = false
@@ -176,11 +197,7 @@ abstract class GenBCode extends BCodeTypes {
 
           isBeanInfo      = claszSymbol hasAnnotation BeanInfoAttr
           plainClassLabel = claszSymbol.name.toString
-          if(needsOutfileForSymbol) {
-            outFName = claszSymbol.javaBinaryName.toString
-            outDir   = outputDirectory(claszSymbol)
-          }
-          // PENDING whenever getFile is called, actually only outputDirectory(sym) requires locking.
+          outF            = if(needsOutfileForSymbol) getFile(claszSymbol, claszSymbol.javaBinaryName.toString, ".class") else null
 
           if (isStaticModule(claszSymbol) && isTopLevelModule(claszSymbol)) {
             if (claszSymbol.companionClass == NoSymbol) { doEmitMirror = true }
@@ -188,8 +205,6 @@ abstract class GenBCode extends BCodeTypes {
           }
 
         } // end of synchronized
-
-        val outF = if(needsOutfileForSymbol) getFile(outDir, outFName, ".class") else null
 
         var mirrorC: SubItem3 = null
         if(doEmitMirror) {
@@ -208,7 +223,7 @@ abstract class GenBCode extends BCodeTypes {
         // -------------- bean info class, if needed --------------
         var beanC: SubItem3 = null
         if (isBeanInfo) {
-          BType synchronized { // PENDING make synchronized fine-granular in `genBeanInfoClass()`
+          BType synchronized { // emitting bean infos is infrequent enough for non-fine-granular locking to be good enough.
             beanC =
               beanInfoCodeGen.genBeanInfoClass(
                 claszSymbol, cunit,
@@ -218,7 +233,7 @@ abstract class GenBCode extends BCodeTypes {
           } // end of synchronized
         }
 
-        q2 put Item2(arrivalPos, mirrorC, plainC, beanC)
+        q3 put Item3(arrivalPos, mirrorC, plainC, beanC)
       }
 
     }
@@ -244,7 +259,7 @@ abstract class GenBCode extends BCodeTypes {
       val emitVars   = debugLevel >= 3
 
       val workersP1 = for(i <- 1 to MAX_THREADS) yield {
-        val w = new Worker(needsOutfileForSymbol, emitSource, emitLines, emitVars)
+        val w = new Worker1(needsOutfileForSymbol, emitSource, emitLines, emitVars)
         val t = new _root_.java.lang.Thread(w)
         t.start()
         t
@@ -257,10 +272,10 @@ abstract class GenBCode extends BCodeTypes {
       // -------------------------------------------------------
       // Pipeline that writes classfile representations to disk.
       // -------------------------------------------------------
-      drainQ2()
+      drainQ3()
       // we're done
       assert(q1.isEmpty, "Some ClassDefs remained in the first queue: "   + q1.toString)
-      assert(q2.isEmpty, "Some classfiles weren't written to disk: "      + q2.toString)
+      assert(q3.isEmpty, "Some classfiles weren't written to disk: "      + q3.toString)
       // assert(exec.isTerminated, "Some workers just keep working.")
 
       for(t <- workersP1) { assert(woExitedP1.containsKey(t.getId)) } // debug
@@ -271,7 +286,7 @@ abstract class GenBCode extends BCodeTypes {
       clearBCodeTypes()
     }
 
-    private def drainQ2() {
+    private def drainQ3() {
 
           def sendToDisk(cfr: SubItem3) {
             if(cfr != null){
@@ -285,10 +300,10 @@ abstract class GenBCode extends BCodeTypes {
       // `expected` denotes the arrivalPos whose Item3 should be serialized next
       var expected = 0
       // `followers` contains items that arrived too soon, they're parked waiting for `expected` to be polled from queue-3
-      val followers = new java.util.PriorityQueue[Item2](100, i2comparator)
+      val followers = new java.util.PriorityQueue[Item3](100, i3comparator)
 
       while (moreComing) {
-        val incoming = q2.take
+        val incoming = q3.take
         if(incoming.isPoison) {
           remainingWorkers -= 1
           moreComing = (remainingWorkers != 0)
@@ -296,7 +311,7 @@ abstract class GenBCode extends BCodeTypes {
           followers.add(incoming)
         }
         assert(
-          if(!moreComing) { q2.isEmpty && followers.isEmpty } else true,
+          if(!moreComing) { q3.isEmpty && followers.isEmpty } else true,
           "These queues can be tricky sometimes."
         )
         while(!followers.isEmpty && followers.peek.arrivalPos == expected) {
@@ -313,7 +328,8 @@ abstract class GenBCode extends BCodeTypes {
 
     /**
      *  Apply BCode phase to a compilation unit: enqueue each contained ClassDef in queue-1,
-     *  so as to release the main thread for a duty it cannot delegate: writing classfiles to disk. See `drainQ2()`
+     *  so as to release the main thread for a duty it cannot delegate: writing classfiles to disk.
+     *  See `drainQ3()`
      */
     override def apply(cunit: CompilationUnit) {
 
@@ -342,7 +358,6 @@ abstract class GenBCode extends BCodeTypes {
       // current class
       var cnode: asm.tree.ClassNode  = null
       var thisName: String           = null // the internal name of the class being emitted
-
       private var claszSymbol: Symbol        = null
       private var isCZParcelable             = false
       private var isCZStaticModule           = false
@@ -441,25 +456,23 @@ abstract class GenBCode extends BCodeTypes {
       def syncIsLabel(sym: Symbol):        Boolean = { BType synchronized (sym.isLabel)        }
 
       /** @can-multi-thread */
-      def log(msg: => AnyRef) { BType synchronized { global.log(msg) } }
+      def log(msg: => AnyRef) {
+        BType synchronized { global.log(msg) }
+      }
 
       /* ---------------- Part 1 of program points, ie Labels in the ASM world ---------------- */
 
       /**
-       *  A jump is represented as an Apply node whose symbol denotes a LabelDef, the target of the jump.
-       *  The `jumpDest` map is used to:
-       *    (a) find the asm.Label for the target, given an Apply node's symbol;
-       *    (b) anchor an asm.Label in the instruction stream, given a LabelDef node.
-       *  In other words, (a) is necessary when visiting a jump-source, and (b) when visiting a jump-target.
-       *  A related map is `labelDef`: it has the same keys as `jumpDest` but its values are LabelDef nodes not asm.Labels.
-       *
+       *  A jump node is represented as an Apply whose symbol denotes a LabelDef, the jump target.
+       *  The `locLabel` map is used to find the asm.Label to use as destination (upon visiting a jump),
+       *  and to associate an asm.Label with a LabelDef (upon visiting a jump destination).
        */
-      private var jumpDest: immutable.Map[ /* LabelDef */ Symbol, asm.Label ] = null
+      private var locLabel: immutable.Map[ /* LabelDef */ Symbol, asm.Label ] = null
       def programPoint(labelSym: Symbol): asm.Label = {
         assert(labelSym.isLabel, "trying to map a non-label symbol to an asm.Label, at: " + labelSym.pos)
-        jumpDest.getOrElse(labelSym, {
+        locLabel.getOrElse(labelSym, {
           val pp = new asm.Label
-          jumpDest += (labelSym -> pp)
+          locLabel += (labelSym -> pp)
           pp
         })
       }
@@ -469,12 +482,12 @@ abstract class GenBCode extends BCodeTypes {
        *    (a) in the try-clause of a try-with-finally expression
        *    (b) in a synchronized block.
        *  Each of the constructs above establishes a "cleanup block" to execute upon
-       *  both normal-exit, early-return, and abrupt-termination of the instructions it encloses.
+       *  both normal-exit and abrupt-termination of the instructions it encloses.
        *
        *  The `cleanups` LIFO queue represents the nesting of active (for the current program point)
-       *  pending cleanups. For each such cleanup an asm.Label indicates the start of its cleanup-block.
+       *  pending cleanups. For each such cleanup an asm.Label indicating the start of its cleanup-block.
        *  At any given time during traversal of the method body,
-       *  the head of `cleanups` denotes the cleanup-block for the closest enclosing try-with-finally or synchronized-expression.
+       *  the head of `cleanups` indicates the closest enclosing try-with-finally or synchronized-expression.
        *
        *  `cleanups` is used:
        *
@@ -490,7 +503,7 @@ abstract class GenBCode extends BCodeTypes {
        *        See `genLoadTry()` and `genSynchronized()`
        *
        *  The code thus emitted for jumps and targets covers the early-return case.
-       *  The case of abrupt (ie exceptional) termination is covered by exception handlers
+       *  The case of abrupt, exceptional, termination is covered by exception handlers
        *  emitted for that purpose as described in `genLoadTry()` and `genSynchronized()`.
        */
       var cleanups: List[asm.Label] = Nil
@@ -552,25 +565,27 @@ abstract class GenBCode extends BCodeTypes {
        *  The semantics of try-with-finally and synchronized-expr require their cleanup code
        *  to be present in three forms in the emitted bytecode:
        *    (a) as normal-exit code, reached via fall-through from the last program point being protected,
-       *    (b) as code reached upon early-return from an enclosed return statement.
+       *    (b) the early-return case, described under `cleanups` above.
        *        The only difference between (a) and (b) is their next program-point:
        *          the former must continue with fall-through while
-       *          the latter must continue to the next early-return cleanup (if any, otherwise return from the method)..
+       *          the later must continue to the next early-return cleanup.
        *        Otherwise they are identical.
-       *    (c) as exception-handler, reached via exceptional control flow,
-       *        which rethrows the caught exception once it's done with the cleanup code.
+       *    (c) as exception-handler, reached via exceptional control flow.
        *
-       *  A particular cleanup may in general contain LabelDefs. Care is needed when duplicating such jump-targets,
-       *  so as to preserve agreement wit the (also duplicated) jump-sources.
-       *  This is achieved based on the bookkeeping provided by two maps:
+       *  The cleanup code may in general contain LabelDefs.
+       *  As a result, when emitting duplicate code for the same cleanup AST, a distinction has to be made
+       *  as to the jump-targets:
+       *    (1) a jump emitted as part of the (a) version of a cleanup AST must target the (a) version of the LabelDef,
+       *    (2) similary for (b) and for (c).
+       *
+       *  The two maps below provide the required bookkeeping:
        *    - `labelDefsAtOrUnder` lists all LabelDefs enclosed by a given Tree node (the key)
-       *    - `labelDef` provides the LabelDef node whose symbol is used as key.
-       *       As a sidenote, a related map is `jumpDest`: it has the same keys as `labelDef` but its values are asm.Labels not LabelDef nodes.
+       *    - `labelDef` provides the LabelDef whose symbol is used as key.
        *
-       *  Details in `emitFinalizer()`, which is invoked from `genLoadTry()` and `genSynchronized()`.
+       *  Further details in `emitFinalizer()`, which is invoked from `genLoadTry()` and `genSynchronized()`.
        */
-      var labelDefsAtOrUnder: scala.collection.Map[Tree, List[LabelDef]] = null
-      var labelDef: scala.collection.Map[Symbol, LabelDef] = null// (LabelDef-sym -> LabelDef)
+      var labelDefsAtOrUnder: collection.Map[Tree, List[LabelDef]] = null
+      var labelDef: collection.Map[Symbol, LabelDef] = null// (LabelDef-sym -> LabelDef)
 
       // bookkeeping the scopes of non-synthetic local vars, to emit debug info (`emitVars`).
       var varsInScope: List[Pair[Symbol, asm.Label]] = null // (local-var-sym -> start-of-scope)
@@ -618,7 +633,7 @@ abstract class GenBCode extends BCodeTypes {
       // on entering a method
       private def resetMethodBookkeeping(dd: DefDef) {
         locals.clear()
-        jumpDest = immutable.Map.empty[ /* LabelDef */ Symbol, asm.Label ]
+        locLabel = immutable.Map.empty[ /* LabelDef */ Symbol, asm.Label ]
         // populate labelDefsAtOrUnder
         val ldf = new LabelDefsFinder
         ldf.traverse(dd.rhs)
@@ -687,7 +702,6 @@ abstract class GenBCode extends BCodeTypes {
 
         var hasStaticCtor           = false
         var optSerial: Option[Long] = None
-        var lateInnerClasses: List[Symbol] = null
 
         BType synchronized {
 
@@ -700,12 +714,11 @@ abstract class GenBCode extends BCodeTypes {
           optSerial = serialVUID(claszSymbol)
 
           addClassFields()
-          lateInnerClasses = getMemberClasses(claszSymbol)
+          trackMemberClasses(claszSymbol)
 
         } // end of synchronized
 
         initJClass(cnode)
-        trackMemberClasses(lateInnerClasses)
 
         if(!hasStaticCtor) {
           // but needs one ...
@@ -1609,9 +1622,9 @@ abstract class GenBCode extends BCodeTypes {
       private def emitFinalizer(finalizer: Tree, tmp: Symbol, isDuplicate: Boolean) {
         var saved: immutable.Map[ /* LabelDef */ Symbol, asm.Label ] = null
         if(isDuplicate) {
-          saved = jumpDest
+          saved = locLabel
           for(ldef <- labelDefsAtOrUnder(finalizer)) {
-            jumpDest -= ldef.symbol
+            locLabel -= ldef.symbol
           }
         }
         // when duplicating, the above guarantees new asm.Labels are used for LabelDefs contained in the finalizer (their vars are reused, that's ok)
@@ -1619,7 +1632,7 @@ abstract class GenBCode extends BCodeTypes {
         genLoad(finalizer, UNIT)
         if(tmp != null) { load(tmp)  }
         if(isDuplicate) {
-          jumpDest = saved
+          locLabel = saved
         }
       }
 
@@ -2172,7 +2185,7 @@ abstract class GenBCode extends BCodeTypes {
         var elmKind: BType       = null
         var generatedType: BType = null
         BType synchronized {
-          elmKind       = toTypeKind(tpt.tpe) // using toTypeKind and not tpeTK because we're under BType synchronized.
+          elmKind       = tpeTK(tpt)
           generatedType = arrayOf(elmKind)
         }
 
