@@ -10,7 +10,7 @@
 
 package scala
 
-import language.implicitConversions
+import scala.language.implicitConversions
 
 /** `Boolean` (equivalent to Java's `boolean` primitive type) is a
  *  subtype of [[scala.AnyVal]]. Instances of `Boolean` are not
@@ -135,5 +135,12 @@ object Boolean extends AnyValCompanion {
    */
   override def toString = "object scala.Boolean"
 
+
+  /** A highly reusable empty array, useful for avoiding
+   *  allocations when you need one.
+   *
+   *  @return     a constant 0-length Array[Boolean]
+   */
+  final val emptyArray = new Array[Boolean](0)
 }
 

@@ -496,7 +496,6 @@ trait Namers extends MethodSynthesis {
             // for Java code importing Scala objects
             if (!nme.isModuleName(from) || isValid(nme.stripModuleSuffix(from))) {
               typer.TyperErrorGen.NotAMemberError(tree, expr, from)
-              typer.infer.setError(tree)
             }
           }
           // Setting the position at the import means that if there is
@@ -638,7 +637,7 @@ trait Namers extends MethodSynthesis {
           MaxParametersCaseClassError(tree)
 
         val m = ensureCompanionObject(tree, caseModuleDef)
-        m.moduleClass.addAttachment(new ClassForCaseCompanionAttachment(tree))
+        m.moduleClass.updateAttachment(new ClassForCaseCompanionAttachment(tree))
       }
       val hasDefault = impl.body exists {
         case DefDef(_, nme.CONSTRUCTOR, _, vparamss, _, _)  => mexists(vparamss)(_.mods.hasDefault)
@@ -646,7 +645,7 @@ trait Namers extends MethodSynthesis {
       }
       if (hasDefault) {
         val m = ensureCompanionObject(tree)
-        m.addAttachment(new ConstructorDefaultsAttachment(tree, null))
+        m.updateAttachment(new ConstructorDefaultsAttachment(tree, null))
       }
       val owner = tree.symbol.owner
       if (settings.lint.value && owner.isPackageObjectClass && !mods.isImplicit) {
@@ -1173,7 +1172,7 @@ trait Namers extends MethodSynthesis {
               // symbol will be re-entered in the scope but the default parameter will not.
               val att = meth.attachments.get[DefaultsOfLocalMethodAttachment] match {
                 case Some(att) => att.defaultGetters += default
-                case None => meth.addAttachment(new DefaultsOfLocalMethodAttachment(default))
+                case None => meth.updateAttachment(new DefaultsOfLocalMethodAttachment(default))
               }
             }
           } else if (baseHasDefault) {

@@ -10,7 +10,7 @@
 
 package scala
 
-import language.implicitConversions
+import scala.language.implicitConversions
 
 /** `Byte`, a 8-bit signed integer (equivalent to Java's `byte` primitive type) is a
  *  subtype of [[scala.AnyVal]]. Instances of `Byte` are not
@@ -625,6 +625,14 @@ object Byte extends AnyValCompanion {
    */
   override def toString = "object scala.Byte"
 
+
+  /** A highly reusable empty array, useful for avoiding
+   *  allocations when you need one.
+   *
+   *  @return     a constant 0-length Array[Byte]
+   */
+  final val emptyArray = new Array[Byte](0)
+  
   /** Language mandated coercions from Byte to "wider" types.
    */
   implicit def byte2short(x: Byte): Short = x.toShort

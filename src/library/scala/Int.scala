@@ -10,7 +10,7 @@
 
 package scala
 
-import language.implicitConversions
+import scala.language.implicitConversions
 
 /** `Int`, a 32-bit signed integer (equivalent to Java's `int` primitive type) is a
  *  subtype of [[scala.AnyVal]]. Instances of `Int` are not
@@ -625,6 +625,14 @@ object Int extends AnyValCompanion {
    */
   override def toString = "object scala.Int"
 
+
+  /** A highly reusable empty array, useful for avoiding
+   *  allocations when you need one.
+   *
+   *  @return     a constant 0-length Array[Int]
+   */
+  final val emptyArray = new Array[Int](0)
+  
   /** Language mandated coercions from Int to "wider" types.
    */
   implicit def int2long(x: Int): Long = x.toLong

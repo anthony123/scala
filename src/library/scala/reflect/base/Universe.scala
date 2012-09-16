@@ -8,7 +8,7 @@ abstract class Universe extends Symbols
                            with Names
                            with Trees
                            with Constants
-                           with AnnotationInfos
+                           with Annotations
                            with Positions
                            with Exprs
                            with TypeTags
@@ -46,7 +46,7 @@ abstract class Universe extends Symbols
    *    def macroImpl[T](c: Context) = {
    *      ...
    *      // T here is just a type parameter, so the tree produced by reify won't be of much use in a macro expansion
-   *      // however, if T were annotated with c.AbsTypeTag (which would declare an implicit parameter for macroImpl)
+   *      // however, if T were annotated with c.WeakTypeTag (which would declare an implicit parameter for macroImpl)
    *      // then reification would substitute T with the TypeTree that was used in a TypeApply of this particular macro invocation
    *      val factory = c.reify{ new Queryable[T] }
    *      ...
@@ -61,6 +61,7 @@ abstract class Universe extends Symbols
    *    * Since reified trees can be compiled outside of the scope they've been created in,
    *      special measures are taken to ensure that all members accessed in the reifee remain visible
    */
-  // implementation is magically hardwired to `scala.reflect.reify.Taggers`
+  // implementation is hardwired to `scala.reflect.reify.Taggers`
+  // using the mechanism implemented in `scala.tools.reflect.FastTrack`
   def reify[T](expr: T): Expr[T] = ??? // macro
 }

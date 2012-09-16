@@ -12,7 +12,7 @@ import symtab._
 import Flags._
 
 abstract class Erasure extends AddInterfaces
-                          with reflect.internal.transform.Erasure
+                          with scala.reflect.internal.transform.Erasure
                           with typechecker.Analyzer
                           with TypingTransformers
                           with ast.TreeDSL
@@ -1082,7 +1082,7 @@ abstract class Erasure extends AddInterfaces
                 // println("inject derived: "+arg+" "+tpt.tpe)
                 val List(arg) = args
                 val attachment = new TypeRefAttachment(tree.tpe.asInstanceOf[TypeRef])
-                InjectDerivedValue(arg) addAttachment attachment
+                InjectDerivedValue(arg) updateAttachment attachment
               case _ =>
                 preEraseNormalApply(tree)
             }

@@ -13,10 +13,9 @@ package scala.tools.nsc
 package typechecker
 
 import scala.collection.mutable
-import scala.reflect.internal.util.BatchSourceFile
+import scala.reflect.internal.util.{ BatchSourceFile, Statistics }
 import mutable.ListBuffer
 import symtab.Flags._
-import reflect.internal.util.Statistics
 
 // Suggestion check whether we can do without priming scopes with symbols of outer scopes,
 // like the IDE does.
@@ -779,7 +778,7 @@ trait Typers extends Modes with Adaptations with Tags {
             var raw = featureDesc + " " + req + " be enabled\n" +
               "by making the implicit value language." + featureName + " visible."
             if (!(currentRun.reportedFeature contains featureTrait))
-              raw += "\nThis can be achieved by adding the import clause 'import language." + featureName + "'\n" +
+              raw += "\nThis can be achieved by adding the import clause 'import scala.language." + featureName + "'\n" +
                 "or by setting the compiler option -language:" + featureName + ".\n" +
                 "See the Scala docs for value scala.language." + featureName + " for a discussion\n" +
                 "why the feature " + req + " be explicitly enabled."
@@ -1405,14 +1404,15 @@ trait Typers extends Modes with Adaptations with Tags {
             unit.error(clazz.pos, "value class needs to have exactly one public val parameter")
         }
       }
-      body foreach {
-        case md: ModuleDef =>
-          unit.error(md.pos, "value class may not have nested module definitions")
-        case cd: ClassDef =>
-          unit.error(cd.pos, "value class may not have nested class definitions")
-        case md: DefDef if md.symbol.isConstructor && !md.symbol.isPrimaryConstructor =>
-          unit.error(md.pos, "value class may not have secondary constructors")
-        case _ =>
+
+      def valueClassMayNotHave(at: Tree, what: String) = unit.error(at.pos, s"value class may not have $what")
+      body.foreach {
+        case dd: DefDef if dd.symbol.isAuxiliaryConstructor => valueClassMayNotHave(dd, "secondary constructors")
+        case t => t.foreach {
+          case md: ModuleDef => valueClassMayNotHave(md, "nested module definitions")
+          case cd: ClassDef  => valueClassMayNotHave(cd, "nested class definitions")
+          case _             =>
+        }
       }
       for (tparam <- clazz.typeParams)
         if (tparam hasAnnotation definitions.SpecializedClass)
@@ -2482,7 +2482,7 @@ trait Typers extends Modes with Adaptations with Tags {
           match_ setType B1.tpe
 
           // the default uses applyOrElse's first parameter since the scrut's type has been widened
-          val body = methodBodyTyper.virtualizedMatch(match_ addAttachment DefaultOverrideMatchAttachment(REF(default) APPLY (REF(x))), mode, B1.tpe)
+          val body = methodBodyTyper.virtualizedMatch(match_ updateAttachment DefaultOverrideMatchAttachment(REF(default) APPLY (REF(x))), mode, B1.tpe)
 
           DefDef(methodSym, body)
         }
@@ -2500,7 +2500,7 @@ trait Typers extends Modes with Adaptations with Tags {
           methodSym setInfoAndEnter MethodType(paramSyms, BooleanClass.tpe)
 
           val match_ = methodBodyTyper.typedMatch(gen.mkUnchecked(selector), casesTrue, mode, BooleanClass.tpe)
-          val body   = methodBodyTyper.virtualizedMatch(match_ addAttachment DefaultOverrideMatchAttachment(FALSE_typed), mode, BooleanClass.tpe)
+          val body   = methodBodyTyper.virtualizedMatch(match_ updateAttachment DefaultOverrideMatchAttachment(FALSE_typed), mode, BooleanClass.tpe)
 
           DefDef(methodSym, body)
         }
@@ -2622,7 +2622,7 @@ trait Typers extends Modes with Adaptations with Tags {
         // todo. investigate whether something can be done about this
         val att = templ.attachments.get[CompoundTypeTreeOriginalAttachment].getOrElse(CompoundTypeTreeOriginalAttachment(Nil, Nil))
         templ.removeAttachment[CompoundTypeTreeOriginalAttachment]
-        templ addAttachment att.copy(stats = stats1)
+        templ updateAttachment att.copy(stats = stats1)
         for (stat <- stats1 if stat.isDef) {
           val member = stat.symbol
           if (!(context.owner.ancestors forall
@@ -4085,7 +4085,7 @@ trait Typers extends Modes with Adaptations with Tags {
             if ( opt.virtPatmat && !isPastTyper
               && thenp1.tpe.annotations.isEmpty && elsep1.tpe.annotations.isEmpty // annotated types need to be lubbed regardless (at least, continations break if you by pass them like this)
               && thenTp =:= elseTp
-               ) (thenp1.tpe, false) // use unpacked type
+               ) (thenp1.tpe.deconst, false) // use unpacked type. Important to deconst, as is done in ptOrLub, otherwise `if (???) 0 else 0` evaluates to 0 (SI-6331)
             // TODO: skolemize (lub of packed types) when that no longer crashes on files/pos/t4070b.scala
             else ptOrLub(thenp1.tpe :: elsep1.tpe :: Nil, pt)
 
@@ -4947,7 +4947,7 @@ trait Typers extends Modes with Adaptations with Tags {
           //Console.println("Owner: " + context.enclClass.owner + " " + context.enclClass.owner.id)
           val self = refinedType(parents1 map (_.tpe), context.enclClass.owner, decls, templ.pos)
           newTyper(context.make(templ, self.typeSymbol, decls)).typedRefinement(templ)
-          templ addAttachment CompoundTypeTreeOriginalAttachment(parents1, Nil) // stats are set elsewhere
+          templ updateAttachment CompoundTypeTreeOriginalAttachment(parents1, Nil) // stats are set elsewhere
           tree setType self
         }
       }
@@ -5557,8 +5557,8 @@ trait Typers extends Modes with Adaptations with Tags {
 }
 
 object TypersStats {
-  import reflect.internal.TypesStats._
-  import reflect.internal.BaseTypeSeqsStats._
+  import scala.reflect.internal.TypesStats._
+  import scala.reflect.internal.BaseTypeSeqsStats._
   val typedIdentCount     = Statistics.newCounter("#typechecked identifiers")
   val typedSelectCount    = Statistics.newCounter("#typechecked selections")
   val typedApplyCount     = Statistics.newCounter("#typechecked applications")

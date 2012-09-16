@@ -10,7 +10,7 @@
 
 package scala
 
-import language.implicitConversions
+import scala.language.implicitConversions
 
 /** `Double`, a 64-bit IEEE-754 floating point number (equivalent to Java's `double` primitive type) is a
  *  subtype of [[scala.AnyVal]]. Instances of `Double` are not
@@ -400,5 +400,13 @@ object Double extends AnyValCompanion {
   /** The String representation of the scala.Double companion object.
    */
   override def toString = "object scala.Double"
+
+
+  /** A highly reusable empty array, useful for avoiding
+   *  allocations when you need one.
+   *
+   *  @return     a constant 0-length Array[Double]
+   */
+  final val emptyArray = new Array[Double](0)
 }
 

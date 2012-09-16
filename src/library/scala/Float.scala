@@ -10,7 +10,7 @@
 
 package scala
 
-import language.implicitConversions
+import scala.language.implicitConversions
 
 /** `Float`, a 32-bit IEEE-754 floating point number (equivalent to Java's `float` primitive type) is a
  *  subtype of [[scala.AnyVal]]. Instances of `Float` are not
@@ -401,6 +401,14 @@ object Float extends AnyValCompanion {
    */
   override def toString = "object scala.Float"
 
+
+  /** A highly reusable empty array, useful for avoiding
+   *  allocations when you need one.
+   *
+   *  @return     a constant 0-length Array[Float]
+   */
+  final val emptyArray = new Array[Float](0)
+  
   /** Language mandated coercions from Float to "wider" types.
    */
   implicit def float2double(x: Float): Double = x.toDouble

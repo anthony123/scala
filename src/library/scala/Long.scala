@@ -10,7 +10,7 @@
 
 package scala
 
-import language.implicitConversions
+import scala.language.implicitConversions
 
 /** `Long`, a 64-bit signed integer (equivalent to Java's `long` primitive type) is a
  *  subtype of [[scala.AnyVal]]. Instances of `Long` are not
@@ -625,6 +625,14 @@ object Long extends AnyValCompanion {
    */
   override def toString = "object scala.Long"
 
+
+  /** A highly reusable empty array, useful for avoiding
+   *  allocations when you need one.
+   *
+   *  @return     a constant 0-length Array[Long]
+   */
+  final val emptyArray = new Array[Long](0)
+  
   /** Language mandated coercions from Long to "wider" types.
    */
   implicit def long2float(x: Long): Float = x.toFloat
