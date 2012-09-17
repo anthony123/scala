@@ -202,7 +202,7 @@ abstract class GenBCode extends BCodeTypes {
         // -------------- bean info class, if needed --------------
         var beanC: SubItem3 = null
         if (isBeanInfo) {
-          BType synchronized { // PENDING make synchronized fine-granular in `genBeanInfoClass()`
+          BType synchronized { // TODO PENDING make synchronized fine-granular in `genBeanInfoClass()`
             beanC =
               beanInfoCodeGen.genBeanInfoClass(
                 claszSymbol, cunit,
@@ -309,17 +309,18 @@ abstract class GenBCode extends BCodeTypes {
      */
     override def apply(cunit: CompilationUnit) {
 
-          def gen(tree: Tree) {
+          def sendToWorker(tree: Tree) {
             tree match {
               case EmptyTree            => ()
-              case PackageDef(_, stats) => stats foreach gen
+              case PackageDef(_, stats) => stats foreach sendToWorker
               case cd: ClassDef         =>
                 q1 put Item1(arrivalPos, cd, cunit)
                 arrivalPos += 1
             }
           }
 
-      gen(cunit.body)
+      sendToWorker(cunit.body)
+      _root_.java.lang.Thread.`yield`()
     }
 
     final class PlainClassBuilder(cunit: CompilationUnit, emitSource: Boolean, emitLines: Boolean, emitVars: Boolean)
@@ -589,16 +590,13 @@ abstract class GenBCode extends BCodeTypes {
       }
       def lineNumber(tree: Tree) {
         if(!emitLines || !tree.pos.isDefined) return;
-        val nr = tree.pos.line
+        val nr = tree.pos.line // TODO PENDING BType synchronized {  }
         if(nr != lastEmittedLineNr) {
           lastEmittedLineNr = nr
           lastInsn match {
             case lnn: asm.tree.LineNumberNode =>
-              if(lnn.line != nr) {
-                // "overwrite" previous landmark as no instructions have been emitted for it
-                mnode.instructions.remove(lnn)
-                mnode.visitLineNumber(nr, currProgramPoint())
-              } // otherwise do nothing.
+              // overwrite previous landmark as no instructions have been emitted for it
+              lnn.line = nr
             case _ =>
               mnode.visitLineNumber(nr, currProgramPoint())
           }
@@ -642,13 +640,13 @@ abstract class GenBCode extends BCodeTypes {
        *  @can-multi-thread
        */
       def findHostClass(selTree: Tree, sym: Symbol) = {
+        val selector = selTree.tpe
         BType synchronized {
-          val selector = selTree.tpe
           selector member sym.name match {
-            case NoSymbol   => log(s"Rejecting $selector as host class for $sym") ; sym.owner
+            case NoSymbol   => sym.owner
             case _          => selector.typeSymbol
           }
-        }
+        } // end of synchronized
       }
 
       /* ---------------- top-down traversal invoking ASM Tree API along the way ---------------- */
