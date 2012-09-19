@@ -10,6 +10,7 @@ import scala.tools.asm
 import scala.annotation.switch
 import scala.collection.{ immutable, mutable }
 import scala.tools.nsc.io.AbstractFile
+import java.util.concurrent.locks.ReentrantLock
 
 /**
  *  Utilities to mediate between types as represented in Scala ASTs and ASM trees.
@@ -18,6 +19,10 @@ import scala.tools.nsc.io.AbstractFile
  *
  */
 abstract class BCodeTypes extends SubComponent with BytecodeWriters {
+
+  final val bcodeLock = new _root_.java.util.concurrent.locks.ReentrantLock()
+  final def acquire() { bcodeLock.lock()   }
+  final def release() { bcodeLock.unlock() }
 
   import global._
 
@@ -656,9 +661,14 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
    * Creates a TypeName and the BType token for it.
    * This method does not add to `innerClassBufferASM`, use `internalName()` or `asmType()` or `toTypeKind()` for that.
    *
-   * @must-single-thread
+   * @can-multi-thread
    **/
-  def brefType(iname: String): BType = { brefType(newTypeName(iname.toCharArray(), 0, iname.length())) }
+  def brefType(iname: String): BType = {
+    acquire()
+      val tn = newTypeName(iname.toCharArray(), 0, iname.length())
+    release()
+    brefType(tn)
+  }
 
   /**
    * Creates a BType token for the TypeName received as argument.
@@ -1020,26 +1030,22 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     if(opt != null) { return opt }
 
     // slow path
-    var tr: Tracked  = null
-    var csym: Symbol = null
-
-    BType synchronized {
-
-      csym = {
+    acquire()
+      val csym = {
         if(csym0.isJavaDefined && csym0.isModuleClass) csym0.linkedClassOfClass
         else if(csym0.isModule) csym0.moduleClass
         else csym0 // we track only module-classes and plain-classes
       }
+    release()
 
       opt = symExemplars.get(csym)
       if(opt != null) { return opt }
 
+    acquire()
       val key = brefType(csym.javaBinaryName.toTypeName)
       assert(key.isNonSpecial || isCompilingStdLib, "Not a class to track: " + csym.fullName)
-
-      tr = buildExemplar(key, csym)
-
-    } // end of synchronized
+      val tr = buildExemplar(key, csym)
+    release()
 
     assert(!primitiveTypeMap.contains(csym) || isCompilingStdLib, "primitive types not tracked here: " + csym.fullName)
     assert(!phantomTypeMap.contains(csym),   "phantom types not tracked here: " + csym.fullName)
@@ -1152,7 +1158,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
   /* the type of 1-dimensional arrays of `elem` type.
    *
-   * @must-single-thread
+   * @can-multi-thread
    **/
   final def arrayOf(elem: BType): BType = {
     assert(!(elem.isUnitType), "The element type of an array can't be: " + elem)
@@ -2151,8 +2157,11 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
   /**
    * @must-single-thread
    **/
-  def isStaticModule(sym: Symbol): Boolean = {
-    sym.isModuleClass && !sym.isImplClass && !sym.isLifted
+  def syncIStaticModule(sym: Symbol): Boolean = {
+    acquire()
+      val b = sym.isModuleClass && !sym.isImplClass && !sym.isLifted
+    release()
+    b
   }
 
   // -----------------------------------------------------------------------------------------
@@ -2487,7 +2496,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     /**
      *  Tracks (if needed) the inner class given by `sym`.
      *
-     *  @must-single-thread
+     *  @can-multi-thread
      **/
     final def internalName(sym: Symbol): String = { asmClassType(sym, innerClassBufferASM).getInternalName }
 
@@ -2553,14 +2562,14 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     /**
      *  Tracks (if needed) the inner class given by `t`.
      *
-     *  @must-single-thread
+     *  @can-multi-thread
      */
     final def descriptor(t: Type): String = { toTypeKind(t, innerClassBufferASM).getDescriptor }
 
     /**
      *  Tracks (if needed) the inner class given by `sym`.
      *
-     *  @must-single-thread
+     *  @can-multi-thread
      */
     final def descriptor(sym: Symbol): String = { asmClassType(sym, innerClassBufferASM).getDescriptor }
 
@@ -2661,7 +2670,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     /**
      * For arg a LiteralAnnotArg(constt) with const.tag in {ClazzTag, EnumTag}
      * as well as for arg a NestedAnnotArg
-     *   @must-single-thread
+     *   @can-multi-thread
      * Otherwise it's safe to call from multiple threads.
      **/
     def emitArgument(av:   asm.AnnotationVisitor,
@@ -2679,7 +2688,9 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
               case ClazzTag   => av.visit(name, toTypeKind(const.typeValue, innerClassBufferASM).toASMType)
               case EnumTag =>
                 val edesc  = descriptor(const.tpe) // the class descriptor of the enumeration class.
-                val evalue = const.symbolValue.name.toString // value the actual enumeration value.
+                acquire()
+                  val evalue = const.symbolValue.name.toString // value the actual enumeration value.
+                release()
                 av.visitEnum(name, edesc, evalue)
             }
           }
@@ -2712,28 +2723,35 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     /** Whether an annotation should be emitted as a Java annotation
      *   .initialize: if 'annot' is read from pickle, atp might be un-initialized
      *
-     * @must-single-thread
+     * @can-multi-thread
      */
-    private def shouldEmitAnnotation(annot: AnnotationInfo) =
-      annot.symbol.initialize.isJavaDefined &&
-      annot.matches(definitions.ClassfileAnnotationClass) &&
-      annot.args.isEmpty &&
-      !annot.matches(definitions.DeprecatedAttr)
+    private def shouldEmitAnnotation(annot: AnnotationInfo) = {
+      acquire()
+      val b = annot.symbol.initialize.isJavaDefined &&
+        annot.matches(definitions.ClassfileAnnotationClass) &&
+        annot.args.isEmpty &&
+        !annot.matches(definitions.DeprecatedAttr)
+      release()
+      b
+    }
 
     /**
      * In general,
-     *   @must-single-thread
+     *   @can-multi-thread
      * but not  necessarily always.
      */
     def emitAssocs(av: asm.AnnotationVisitor, assocs: List[(Name, ClassfileAnnotArg)]) {
       for ((name, value) <- assocs) {
-        emitArgument(av, name.toString(), value)
+        acquire()
+          val str = name.toString()
+        release()
+        emitArgument(av, str, value)
       }
       av.visitEnd()
     }
 
     /**
-     * @must-single-thread
+     * @can-multi-thread
      */
     def emitAnnotations(cw: asm.ClassVisitor, annotations: List[AnnotationInfo]) {
       for(annot <- annotations; if shouldEmitAnnotation(annot)) {
@@ -2745,7 +2763,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     }
 
     /**
-     * @must-single-thread
+     * @can-multi-thread
      */
     def emitAnnotations(mw: asm.MethodVisitor, annotations: List[AnnotationInfo]) {
       for(annot <- annotations; if shouldEmitAnnotation(annot)) {
@@ -2757,7 +2775,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     }
 
     /**
-     * @must-single-thread
+     * @can-multi-thread
      */
     def emitAnnotations(fw: asm.FieldVisitor, annotations: List[AnnotationInfo]) {
       for(annot <- annotations; if shouldEmitAnnotation(annot)) {
@@ -2769,7 +2787,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     }
 
     /**
-     * @must-single-thread
+     * @can-multi-thread
      */
     def emitParamAnnotations(jmethod: asm.MethodVisitor, pannotss: List[List[AnnotationInfo]]) {
       val annotationss = pannotss map (_ filter shouldEmitAnnotation)
@@ -3124,21 +3142,15 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       innerClassBufferASM.clear()
       this.cunit = cunit
 
-      var moduleName: String          = null
-      var mirrorName: String          = null
-      var ssa: Option[AnnotationInfo] = null
-      var label: String               = null
+      val moduleName = internalName(modsym) // + "$"
+      val mirrorName = moduleName.substring(0, moduleName.length() - 1)
+
       var outF: _root_.scala.tools.nsc.io.AbstractFile = null
-
-      BType synchronized {
-
-        moduleName = internalName(modsym) // + "$"
-        mirrorName = moduleName.substring(0, moduleName.length() - 1)
-        ssa        = getAnnotPickle(mirrorName, modsym.companionSymbol)
+      acquire()
+        val ssa = getAnnotPickle(mirrorName, modsym.companionSymbol)
         if(needsOutfileForSymbol) { outF = getFile(modsym, mirrorName, ".class") }
-        label = modsym.name.toString
-
-      }
+        val label = modsym.name.toString
+      release()
 
       val flags = (asm.Opcodes.ACC_SUPER | asm.Opcodes.ACC_PUBLIC | asm.Opcodes.ACC_FINAL)
       val mirrorClass = createJClass(flags,
@@ -3151,11 +3163,11 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
       mirrorClass.visitAttribute(if(ssa.isDefined) pickleMarkerLocal else pickleMarkerForeign)
 
-      BType synchronized {
+      acquire()
         emitAnnotations(mirrorClass, modsym.annotations ++ ssa)
         addForwarders(isRemote(modsym), mirrorClass, mirrorName, modsym)
         trackMemberClasses(modsym)
-      }
+      release()
 
       addInnerClassesASM(mirrorClass)
       mirrorClass.visitEnd()
@@ -3407,7 +3419,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
    *  Returns the BType for the given type.
    *  Tracks (if needed) the inner class given by `t`.
    *
-   * @must-single-thread
+   * @can-multi-thread
    **/
   final def toTypeKind(t: Type, innerClassBufferASM: mutable.Set[BType]): BType = {
 
@@ -3421,27 +3433,30 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
           if(sym0 == definitions.NullClass)    return RT_NULL;
           if(sym0 == definitions.NothingClass) return RT_NOTHING;
 
-          // Working around SI-5604.  Rather than failing the compile when we see
-          // a package here, check if there's a package object.
-          val sym = (
-            if (!sym0.isPackageClass) sym0
-            else sym0.info.member(nme.PACKAGE) match {
-              case NoSymbol => assert(false, "Cannot use package as value: " + sym0.fullName) ; NoSymbol
-              case s        => debugwarn("Bug: found package class where package object expected.  Converting.") ; s.moduleClass
-            }
-          )
+          acquire()
+            // Working around SI-5604.  Rather than failing the compile when we see
+            // a package here, check if there's a package object.
+            val sym = (
+              if (!sym0.isPackageClass) sym0
+              else sym0.info.member(nme.PACKAGE) match {
+                case NoSymbol => assert(false, "Cannot use package as value: " + sym0.fullName) ; NoSymbol
+                case s        => debugwarn("Bug: found package class where package object expected.  Converting.") ; s.moduleClass
+              }
+            )
 
-          // Can't call .toInterface (at this phase) or we trip an assertion.
-          // See PackratParser#grow for a method which fails with an apparent mismatch
-          // between "object PackratParsers$class" and "trait PackratParsers"
-          if (sym.isImplClass) {
-            // pos/spec-List.scala is the sole failure if we don't check for NoSymbol
-            val traitSym = sym.owner.info.decl(tpnme.interfaceName(sym.name))
-            if (traitSym != NoSymbol) {
-              // this tracks the inner class in innerClassBufferASM, if needed.
-              return asmClassType(traitSym, innerClassBufferASM)
+            // Can't call .toInterface (at this phase) or we trip an assertion.
+            // See PackratParser#grow for a method which fails with an apparent mismatch
+            // between "object PackratParsers$class" and "trait PackratParsers"
+            if (sym.isImplClass) {
+              // pos/spec-List.scala is the sole failure if we don't check for NoSymbol
+              val traitSym = sym.owner.info.decl(tpnme.interfaceName(sym.name))
+              if (traitSym != NoSymbol) {
+                // this tracks the inner class in innerClassBufferASM, if needed.
+                release()
+                return asmClassType(traitSym, innerClassBufferASM)
+              }
             }
-          }
+          release()
 
           assert(hasInternalName(sym), "Invoked for a symbol lacking JVM internal name: " + sym.fullName)
           assert(!phantomTypeMap.contains(sym), "phantom types not supposed to reach here.")
@@ -3470,7 +3485,9 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
                 case definitions.NothingClass => RT_NOTHING
                 case _ if sym.isClass         => newReference(sym)
                 case _ =>
-                  assert(sym.isType, sym) // it must be compiling Array[a]
+                  acquire()
+                    assert(sym.isType, sym) // it must be compiling Array[a]
+                  release()
                   ObjectReference
               }
           }
@@ -3479,7 +3496,10 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     import definitions.ArrayClass
 
     // Call to .normalize fixes #3003 (follow type aliases). Otherwise, primitiveOrArrayOrRefType() would return ObjectReference.
-    t.normalize match {
+    acquire()
+      val nrmlzed = t.normalize
+    release()
+    nrmlzed match {
 
       case ThisType(sym) =>
         if(sym == ArrayClass) ObjectReference
@@ -3487,7 +3507,11 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
       case SingleType(_, sym) => primitiveOrRefType(sym)
 
-      case _: ConstantType    => toTypeKind(t.underlying, innerClassBufferASM)
+      case _: ConstantType    =>
+        acquire()
+          val u = t.underlying
+        release()
+        toTypeKind(u, innerClassBufferASM)
 
       case TypeRef(_, sym, args)    =>
         if(sym == ArrayClass) arrayOf(toTypeKind(args.head, innerClassBufferASM))
@@ -3514,19 +3538,20 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
   } // end of method toTypeKind()
 
   /**
-   * @must-single-thread
+   * @can-multi-thread
    */
   def asmMethodType(msym: Symbol, innerClassBufferASM: mutable.Set[BType]): BType = {
-    BType synchronized {
+    acquire()
       assert(msym.isMethod, "not a method-symbol: " + msym)
-      val resT: BType =
+      val returnT: BType =
         if (msym.isClassConstructor || msym.isConstructor) BType.VOID_TYPE
         else toTypeKind(msym.tpe.resultType, innerClassBufferASM);
-      BType.getMethodType(
-        resT,
+      val mt = BType.getMethodType(
+        returnT,
         mkArray(toTypeKind(msym.tpe.paramTypes, innerClassBufferASM))
       )
-    }
+    release()
+    mt
   }
 
 }
