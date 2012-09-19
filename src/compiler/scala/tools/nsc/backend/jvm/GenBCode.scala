@@ -652,11 +652,11 @@ abstract class GenBCode extends BCodeTypes {
        */
       def findHostClass(selTree: Tree, sym: Symbol): Symbol = {
         acquire()
-        val selector = selTree.tpe
-        val hostClass = selector.member(sym.name) match {
-          case NoSymbol   => sym.owner
-          case _          => selector.typeSymbol
-        }
+          val selector = selTree.tpe
+          val hostClass = selector.member(sym.name) match {
+            case NoSymbol   => sym.owner
+            case _          => selector.typeSymbol
+          }
         release()
         hostClass
       }
@@ -2357,7 +2357,7 @@ abstract class GenBCode extends BCodeTypes {
       }
 
       /** @can-multi-thread */
-      def genCallMethod(method: Symbol, style: InvokeStyle, hostClass0: Symbol = null): Unit = {
+      def genCallMethod(method: Symbol, style: InvokeStyle, hostClass0: Symbol = null) {
 
         acquire()
 
@@ -2368,12 +2368,8 @@ abstract class GenBCode extends BCodeTypes {
           hostSymbol.info ; methodOwner.info
 
               def isInterfaceCall(sym: Symbol) = {
-                acquire()
-                  val b = (    sym.isInterface && methodOwner != definitions.ObjectClass
-                            || sym.isJavaDefined && sym.isNonBottomSubClass(definitions.ClassfileAnnotationClass)
-                          )
-                release()
-                b
+                 sym.isInterface   && methodOwner != definitions.ObjectClass ||
+                 sym.isJavaDefined && sym.isNonBottomSubClass(definitions.ClassfileAnnotationClass)
               }
 
               def isAccessibleFrom(target: Symbol, site: Symbol): Boolean = {
@@ -2391,42 +2387,42 @@ abstract class GenBCode extends BCodeTypes {
             || hostSymbol.isBottomClass
           )
 
-        release()
+          val receiver = if (useMethodOwner) methodOwner else hostSymbol
+          val jowner   = internalName(receiver)
+          val jname    = syncJavaSimpleName(method)
+          val jtype    = getMethodType(method).getDescriptor
 
-        val receiver = if (useMethodOwner) methodOwner else hostSymbol
-        val jowner   = internalName(receiver)
-        val jname    = syncJavaSimpleName(method)
-        val jtype    = getMethodType(method).getDescriptor
-
-            def initModule() {
-              // we initialize the MODULE$ field immediately after the super ctor
-              if (syncIStaticModule(siteSymbol) && !isModuleInitialized &&
-                  jMethodName == INSTANCE_CONSTRUCTOR_NAME &&
-                  jname == INSTANCE_CONSTRUCTOR_NAME) {
-                isModuleInitialized = true
-                mnode.visitVarInsn(asm.Opcodes.ALOAD, 0)
-                mnode.visitFieldInsn(
-                  asm.Opcodes.PUTSTATIC,
-                  thisName,
-                  strMODULE_INSTANCE_FIELD,
-                  "L" + thisName + ";"
-                )
+              def initModule() {
+                // we initialize the MODULE$ field immediately after the super ctor
+                if (syncIStaticModule(siteSymbol) && !isModuleInitialized &&
+                    jMethodName == INSTANCE_CONSTRUCTOR_NAME &&
+                    jname == INSTANCE_CONSTRUCTOR_NAME) {
+                  isModuleInitialized = true
+                  mnode.visitVarInsn(asm.Opcodes.ALOAD, 0)
+                  mnode.visitFieldInsn(
+                    asm.Opcodes.PUTSTATIC,
+                    thisName,
+                    strMODULE_INSTANCE_FIELD,
+                    "L" + thisName + ";"
+                  )
+                }
               }
-            }
 
-        if(style.isStatic) {
-          if(style.hasInstance) { bc.invokespecial  (jowner, jname, jtype) }
-          else                  { bc.invokestatic   (jowner, jname, jtype) }
-        }
-        else if(style.isDynamic) {
-          if(isInterfaceCall(receiver)) { bc.invokeinterface(jowner, jname, jtype) }
-          else                          { bc.invokevirtual  (jowner, jname, jtype) }
-        }
-        else {
-          assert(style.isSuper, "An unknown InvokeStyle: " + style)
-          bc.invokespecial(jowner, jname, jtype)
-          initModule()
-        }
+          if(style.isStatic) {
+            if(style.hasInstance) { bc.invokespecial  (jowner, jname, jtype) }
+            else                  { bc.invokestatic   (jowner, jname, jtype) }
+          }
+          else if(style.isDynamic) {
+            if(isInterfaceCall(receiver)) { bc.invokeinterface(jowner, jname, jtype) }
+            else                          { bc.invokevirtual  (jowner, jname, jtype) }
+          }
+          else {
+            assert(style.isSuper, "An unknown InvokeStyle: " + style)
+            bc.invokespecial(jowner, jname, jtype)
+            initModule()
+          }
+
+        release()
 
       } // end of genCallMethod()
 

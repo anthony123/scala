@@ -969,8 +969,8 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
   /** @must-single-thread */
   final def isDeprecated(sym: Symbol): Boolean = { sym.annotations exists (_ matches definitions.DeprecatedAttr) }
 
-  /** @must-single-thread */
-  final def hasInternalName(sym: Symbol) = { sym.isClass || (sym.isModule && !sym.isMethod) }
+  /** @can-multi-thread */
+  final def hasInternalName(sym: Symbol) = { acquire; val b = (sym.isClass || (sym.isModule && !sym.isMethod)); release(); b }
 
   /** @must-single-thread */
   def getSuperInterfaces(csym: Symbol): List[Symbol] = {
@@ -1038,8 +1038,8 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       }
     release()
 
-      opt = symExemplars.get(csym)
-      if(opt != null) { return opt }
+    opt = symExemplars.get(csym)
+    if(opt != null) { return opt }
 
     acquire()
       val key = brefType(csym.javaBinaryName.toTypeName)
@@ -2670,7 +2670,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     /**
      * For arg a LiteralAnnotArg(constt) with const.tag in {ClazzTag, EnumTag}
      * as well as for arg a NestedAnnotArg
-     *   @can-multi-thread
+     *   @must-single-thread
      * Otherwise it's safe to call from multiple threads.
      **/
     def emitArgument(av:   asm.AnnotationVisitor,
@@ -2723,7 +2723,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     /** Whether an annotation should be emitted as a Java annotation
      *   .initialize: if 'annot' is read from pickle, atp might be un-initialized
      *
-     * @can-multi-thread
+     * @must-single-thread
      */
     private def shouldEmitAnnotation(annot: AnnotationInfo) = {
       acquire()
@@ -2737,7 +2737,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
     /**
      * In general,
-     *   @can-multi-thread
+     *   @must-single-thread
      * but not  necessarily always.
      */
     def emitAssocs(av: asm.AnnotationVisitor, assocs: List[(Name, ClassfileAnnotArg)]) {
@@ -2751,7 +2751,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     }
 
     /**
-     * @can-multi-thread
+     * @must-single-thread
      */
     def emitAnnotations(cw: asm.ClassVisitor, annotations: List[AnnotationInfo]) {
       for(annot <- annotations; if shouldEmitAnnotation(annot)) {
@@ -2763,7 +2763,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     }
 
     /**
-     * @can-multi-thread
+     * @must-single-thread
      */
     def emitAnnotations(mw: asm.MethodVisitor, annotations: List[AnnotationInfo]) {
       for(annot <- annotations; if shouldEmitAnnotation(annot)) {
@@ -2775,7 +2775,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     }
 
     /**
-     * @can-multi-thread
+     * @must-single-thread
      */
     def emitAnnotations(fw: asm.FieldVisitor, annotations: List[AnnotationInfo]) {
       for(annot <- annotations; if shouldEmitAnnotation(annot)) {
@@ -2787,7 +2787,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     }
 
     /**
-     * @can-multi-thread
+     * @must-single-thread
      */
     def emitParamAnnotations(jmethod: asm.MethodVisitor, pannotss: List[List[AnnotationInfo]]) {
       val annotationss = pannotss map (_ filter shouldEmitAnnotation)
@@ -3456,9 +3456,12 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
                 return asmClassType(traitSym, innerClassBufferASM)
               }
             }
+
+            // notice the assert condition involves typer operations (as opposed to just the message).
+            assert(hasInternalName(sym), "Invoked for a symbol lacking JVM internal name: " + sym.fullName)
+
           release()
 
-          assert(hasInternalName(sym), "Invoked for a symbol lacking JVM internal name: " + sym.fullName)
           assert(!phantomTypeMap.contains(sym), "phantom types not supposed to reach here.")
 
           val tracked = exemplar(sym)
@@ -3471,7 +3474,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
         }
 
         def primitiveOrRefType(sym: Symbol): BType = {
-          assert(sym != definitions.ArrayClass, "Use primitiveOrArrayOrRefType() instead.")
+          // assert(sym != definitions.ArrayClass, "Use primitiveOrArrayOrRefType() instead.")
 
           primitiveTypeMap.getOrElse(sym, newReference(sym))
         }
