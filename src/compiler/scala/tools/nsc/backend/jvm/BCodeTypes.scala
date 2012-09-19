@@ -3517,14 +3517,16 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
    * @must-single-thread
    */
   def asmMethodType(msym: Symbol, innerClassBufferASM: mutable.Set[BType]): BType = {
-    assert(msym.isMethod, "not a method-symbol: " + msym)
-    val resT: BType =
-      if (msym.isClassConstructor || msym.isConstructor) BType.VOID_TYPE
-      else toTypeKind(msym.tpe.resultType, innerClassBufferASM);
-    BType.getMethodType(
-      resT,
-      mkArray(toTypeKind(msym.tpe.paramTypes, innerClassBufferASM))
-    )
+    BType synchronized {
+      assert(msym.isMethod, "not a method-symbol: " + msym)
+      val resT: BType =
+        if (msym.isClassConstructor || msym.isConstructor) BType.VOID_TYPE
+        else toTypeKind(msym.tpe.resultType, innerClassBufferASM);
+      BType.getMethodType(
+        resT,
+        mkArray(toTypeKind(msym.tpe.paramTypes, innerClassBufferASM))
+      )
+    }
   }
 
 }

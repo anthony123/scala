@@ -159,6 +159,7 @@ abstract class GenBCode extends BCodeTypes {
       @volatile var innerClassBufferASM: mutable.Set[BType] = null
       @volatile var sym: Symbol = null
     }
+
     final class HostClassMailBox extends SymMailBox(1) {
       @volatile var tree: Tree   = null
       @volatile var sym:  Symbol = null
@@ -173,6 +174,7 @@ abstract class GenBCode extends BCodeTypes {
       @volatile var isSiteStatic   = false
       @volatile var isIfaceCall    = false
     }
+
     final class SymFlagMailBox extends BMailBox(1) {
       @volatile var flag: Int    = 0
       @volatile var sym:  Symbol = null
@@ -184,7 +186,7 @@ abstract class GenBCode extends BCodeTypes {
     val tpeQuestions     = new _root_.java.util.concurrent.ConcurrentLinkedQueue[BTypeMailBox]
     val hostQuestions    = new _root_.java.util.concurrent.ConcurrentLinkedQueue[HostClassMailBox]
     val rcvQuestions     = new _root_.java.util.concurrent.ConcurrentLinkedQueue[ReceiverMailBox]
-    val symflagQuestions = new _root_.java.util.concurrent.ConcurrentLinkedQueue[SymFlagMailBox]
+    val flagQuestions = new _root_.java.util.concurrent.ConcurrentLinkedQueue[SymFlagMailBox]
     val jsnQuestions     = new _root_.java.util.concurrent.ConcurrentLinkedQueue[JSNMailBox]
 
     final class TheTyperThread extends java.lang.Thread("bcode-typer") {
@@ -199,12 +201,12 @@ abstract class GenBCode extends BCodeTypes {
         assert(tpeQuestions     isEmpty)
         assert(hostQuestions    isEmpty)
         assert(rcvQuestions     isEmpty)
-        assert(symflagQuestions isEmpty)
+        assert(flagQuestions    isEmpty)
         assert(jsnQuestions     isEmpty)
       }
 
       def answerQuestionRound() {
-        val allEmpty = (tpeQuestions.isEmpty && hostQuestions.isEmpty && rcvQuestions.isEmpty && symflagQuestions.isEmpty && jsnQuestions.isEmpty)
+        val allEmpty = (tpeQuestions.isEmpty && hostQuestions.isEmpty && rcvQuestions.isEmpty && flagQuestions.isEmpty && jsnQuestions.isEmpty)
         if(allEmpty) { return }
 
         BType synchronized {
@@ -296,13 +298,16 @@ abstract class GenBCode extends BCodeTypes {
       def drainSymFlagQs() {
         var symflagQ: SymFlagMailBox = null
         do {
-          symflagQ = symflagQuestions.poll
+          symflagQ = flagQuestions.poll
           if(symflagQ != null) {
             val b = (symflagQ.flag: @switch) match {
               case 0 => symflagQ.sym.isPackage
               case 1 => symflagQ.sym.isModule
               case 2 => symflagQ.sym.isStaticMember
               case 3 => symflagQ.sym.isLabel
+              case 4 => definitions.isGetClass(symflagQ.sym)
+              case 5 => symflagQ.sym.isStaticConstructor
+              case 6 => symflagQ.sym.isSynthetic
             }
             symflagQ.put(b)
           }
@@ -522,12 +527,16 @@ abstract class GenBCode extends BCodeTypes {
       with    BCPickles
       with    BCJGenSigGen {
 
+      // BType-returning
       private val mb_treetpe = new TreeTpeMailBox
       private val mb_mt      = new MethodTypeMailBox
       private val mb_symInfo = new SymInfoMailBox
+      // Symbol-returning
       private val mb_host    = new HostClassMailBox
       private val mb_rcv     = new ReceiverMailBox
+      // Boolean-returning
       private val mb_symflag = new SymFlagMailBox
+      // String-returning
       private val mb_jsn     = new JSNMailBox
       // innerClassBufferASM remains valid for all uses over the lifetime of this PlainClassBuilder's instance.
       assert(innerClassBufferASM != null)
@@ -580,13 +589,13 @@ abstract class GenBCode extends BCodeTypes {
         var rest = lst; while(rest.nonEmpty) { trackMentionedInners(rest.head); rest = rest.tail }
       }
 
-      /** @must-single-thread */
+      /** @can-multi-thread */
       def getMethodType(msym: Symbol): BType = { // TODO PENDING USE PROTOCOL INSTEAD
         var mt: BType = cacheMethodType.get(msym)
         if(mt != null) {
-          trackMentionedInners(mt) // this tracks mentioned inner classes (in innerClassBufferASM)
+          trackMentionedInners(mt)
         } else {
-          mt = asmMethodType(msym, innerClassBufferASM) // this tracks mentioned inner classes (in innerClassBufferASM)
+          mt = asmMethodType(msym, innerClassBufferASM)
           cacheMethodType.put(msym, mt)
         }
 
@@ -636,7 +645,7 @@ abstract class GenBCode extends BCodeTypes {
       private def syncSymFlag(sym: Symbol, flag: Int): Boolean = {
         mb_symflag.flag = flag
         mb_symflag.sym  = sym
-        symflagQuestions.add(mb_symflag)
+        flagQuestions.add(mb_symflag)
         mb_symflag.take
       }
 
@@ -644,6 +653,9 @@ abstract class GenBCode extends BCodeTypes {
       def syncIsModule(sym: Symbol):       Boolean = { syncSymFlag(sym, 1) }
       def syncIsStaticMember(sym: Symbol): Boolean = { syncSymFlag(sym, 2) }
       def syncIsLabel(sym: Symbol):        Boolean = { syncSymFlag(sym, 3) }
+      def syncIsGetClass(sym: Symbol):     Boolean = { syncSymFlag(sym, 4) }
+      def syncIsStaticCtor(sym: Symbol):   Boolean = { syncSymFlag(sym, 5) }
+      def syncIsSynthetic(sym: Symbol):    Boolean = { syncSymFlag(sym, 6) }
 
       def syncJavaSimpleName(sym: Symbol): String  = {
         mb_jsn.sym  = sym
@@ -1180,16 +1192,18 @@ abstract class GenBCode extends BCodeTypes {
         var isAbstractMethod = false
         var flags: Int       = 0
 
+        // the only method whose implementation is not emitted: getClass()
+        if(syncIsGetClass(dd.symbol)) { return }
+
+        jMethodName         = syncJavaSimpleName(methSymbol)
+        returnType          = getMethodType(dd.symbol).getReturnType
+        isMethSymStaticCtor = syncIsStaticCtor(methSymbol)
+
+        // add method-local vars for params
+        nxtIdx = if (syncIsStaticMember(methSymbol)) 0 else 1;
+
         BType synchronized {
 
-          // the only method whose implementation is not emitted: getClass()
-          if(definitions.isGetClass(dd.symbol)) { return }
-          jMethodName = methSymbol.javaSimpleName.toString
-          returnType  = getMethodType(dd.symbol).getReturnType
-          isMethSymStaticCtor = methSymbol.isStaticConstructor
-
-          // add method-local vars for params
-          nxtIdx = if (methSymbol.isStaticMember) 0 else 1;
           for (p <- params) { makeLocal(p.symbol) }
           // debug assert((params.map(p => locals(p.symbol).tk)) == asmMethodType(methSymbol).getArgumentTypes.toList, "debug")
 
