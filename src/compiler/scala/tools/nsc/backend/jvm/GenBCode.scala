@@ -379,7 +379,7 @@ abstract class GenBCode extends BCodeTypes {
       }
 
       /** @can-multi-thread */
-      def getMethodType(msym: Symbol): BType = { // TODO PENDING USE PROTOCOL INSTEAD
+      def getMethodType(msym: Symbol): BType = {
         var mt: BType = cacheMethodType.get(msym)
         if(mt != null) {
           trackMentionedInners(mt)
@@ -1076,19 +1076,19 @@ abstract class GenBCode extends BCodeTypes {
         var insnModB: asm.tree.AbstractInsnNode = null
         // call object's private ctor from static ctor
         if (isCZStaticModule) {
-          acquire()
 
-            // NEW `moduleName`
+          acquire()
             val className = internalName(methSymbol.enclClass)
-            insnModA      = new asm.tree.TypeInsnNode(asm.Opcodes.NEW, className)
-            // INVOKESPECIAL <init>
             val callee = methSymbol.enclClass.primaryConstructor
             val jname  = callee.javaSimpleName.toString
             val jowner = internalName(callee.owner)
-            val jtype  = getMethodType(callee).getDescriptor
-            insnModB   = new asm.tree.MethodInsnNode(asm.Opcodes.INVOKESPECIAL, jowner, jname, jtype)
-
           release()
+
+          // NEW `moduleName`
+          insnModA      = new asm.tree.TypeInsnNode(asm.Opcodes.NEW, className)
+          // INVOKESPECIAL <init>
+          val jtype  = getMethodType(callee).getDescriptor
+          insnModB   = new asm.tree.MethodInsnNode(asm.Opcodes.INVOKESPECIAL, jowner, jname, jtype)
         }
 
         var insnParcA: asm.tree.AbstractInsnNode = null
@@ -1096,27 +1096,28 @@ abstract class GenBCode extends BCodeTypes {
         // android creator code
         if(isCZParcelable) {
 
-          acquire()
+          // add a static field ("CREATOR") to this class to cache android.os.Parcelable$Creator
+          val andrFieldDescr = asmClassType(AndroidCreatorClass, innerClassBufferASM).getDescriptor
+          cnode.visitField(
+            asm.Opcodes.ACC_STATIC | asm.Opcodes.ACC_FINAL,
+            "CREATOR",
+            andrFieldDescr,
+            null,
+            null
+          )
 
-            // add a static field ("CREATOR") to this class to cache android.os.Parcelable$Creator
-            val andrFieldDescr = asmClassType(AndroidCreatorClass, innerClassBufferASM).getDescriptor
-            cnode.visitField(
-              asm.Opcodes.ACC_STATIC | asm.Opcodes.ACC_FINAL,
-              "CREATOR",
-              andrFieldDescr,
-              null,
-              null
-            )
-            // INVOKESTATIC CREATOR(): android.os.Parcelable$Creator; -- TODO where does this Android method come from?
+          acquire()
             val callee = definitions.getMember(claszSymbol.companionModule, androidFieldName)
             val jowner = internalName(callee.owner)
             val jname  = callee.javaSimpleName.toString
             val jtype  = getMethodType(callee).getDescriptor
-            insnParcA  = new asm.tree.MethodInsnNode(asm.Opcodes.INVOKESTATIC, jowner, jname, jtype)
-            // PUTSTATIC `thisName`.CREATOR;
-            insnParcB  = new asm.tree.FieldInsnNode(asm.Opcodes.PUTSTATIC, thisName, "CREATOR", andrFieldDescr)
-
           release()
+
+          // INVOKESTATIC CREATOR(): android.os.Parcelable$Creator; -- TODO where does this Android method come from?
+          insnParcA  = new asm.tree.MethodInsnNode(asm.Opcodes.INVOKESTATIC, jowner, jname, jtype)
+          // PUTSTATIC `thisName`.CREATOR;
+          insnParcB  = new asm.tree.FieldInsnNode(asm.Opcodes.PUTSTATIC, thisName, "CREATOR", andrFieldDescr)
+
         }
 
         // insert a few instructions for initialization before each return instruction
@@ -2387,42 +2388,46 @@ abstract class GenBCode extends BCodeTypes {
             || hostSymbol.isBottomClass
           )
 
-          val receiver = if (useMethodOwner) methodOwner else hostSymbol
-          val jowner   = internalName(receiver)
-          val jname    = syncJavaSimpleName(method)
-          val jtype    = getMethodType(method).getDescriptor
+          val receiver    = if (useMethodOwner) methodOwner else hostSymbol
+          val isIfaceCall = (style.isDynamic && isInterfaceCall(receiver))
 
-              def initModule() {
-                // we initialize the MODULE$ field immediately after the super ctor
-                if (syncIStaticModule(siteSymbol) && !isModuleInitialized &&
-                    jMethodName == INSTANCE_CONSTRUCTOR_NAME &&
-                    jname == INSTANCE_CONSTRUCTOR_NAME) {
-                  isModuleInitialized = true
-                  mnode.visitVarInsn(asm.Opcodes.ALOAD, 0)
-                  mnode.visitFieldInsn(
-                    asm.Opcodes.PUTSTATIC,
-                    thisName,
-                    strMODULE_INSTANCE_FIELD,
-                    "L" + thisName + ";"
-                  )
-                }
-              }
-
-          if(style.isStatic) {
-            if(style.hasInstance) { bc.invokespecial  (jowner, jname, jtype) }
-            else                  { bc.invokestatic   (jowner, jname, jtype) }
-          }
-          else if(style.isDynamic) {
-            if(isInterfaceCall(receiver)) { bc.invokeinterface(jowner, jname, jtype) }
-            else                          { bc.invokevirtual  (jowner, jname, jtype) }
-          }
-          else {
-            assert(style.isSuper, "An unknown InvokeStyle: " + style)
-            bc.invokespecial(jowner, jname, jtype)
-            initModule()
-          }
 
         release()
+
+        val jowner   = internalName(receiver)
+        val jname    = syncJavaSimpleName(method)
+        val jtype    = getMethodType(method).getDescriptor
+
+            def initModule() {
+              // we initialize the MODULE$ field immediately after the super ctor
+              if (!isModuleInitialized &&
+                  jMethodName == INSTANCE_CONSTRUCTOR_NAME &&
+                  jname == INSTANCE_CONSTRUCTOR_NAME &&
+                  syncIStaticModule(siteSymbol)) {
+                isModuleInitialized = true
+                mnode.visitVarInsn(asm.Opcodes.ALOAD, 0)
+                mnode.visitFieldInsn(
+                  asm.Opcodes.PUTSTATIC,
+                  thisName,
+                  strMODULE_INSTANCE_FIELD,
+                  "L" + thisName + ";"
+                )
+              }
+            }
+
+        if(style.isStatic) {
+          if(style.hasInstance) { bc.invokespecial  (jowner, jname, jtype) }
+          else                  { bc.invokestatic   (jowner, jname, jtype) }
+        }
+        else if(style.isDynamic) {
+          if(isIfaceCall) { bc.invokeinterface(jowner, jname, jtype) }
+          else            { bc.invokevirtual  (jowner, jname, jtype) }
+        }
+        else {
+          assert(style.isSuper, "An unknown InvokeStyle: " + style)
+          bc.invokespecial(jowner, jname, jtype)
+          initModule()
+        }
 
       } // end of genCallMethod()
 

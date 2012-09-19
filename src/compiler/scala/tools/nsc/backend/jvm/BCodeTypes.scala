@@ -66,10 +66,14 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
   }
 
   /**
-   * @must-single-thread
+   * @can-multi-thread
    **/
-  def getFile(sym: Symbol, clsName: String, suffix: String): AbstractFile =
-    getFile(outputDirectory(sym), clsName, suffix)
+  def getFile(sym: Symbol, clsName: String, suffix: String): AbstractFile = {
+    acquire()
+      val outDir = outputDirectory(sym)
+    release()
+    getFile(outDir, clsName, suffix)
+  }
 
   object BType {
 
@@ -3144,11 +3148,10 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
 
       val moduleName = internalName(modsym) // + "$"
       val mirrorName = moduleName.substring(0, moduleName.length() - 1)
+      val outF = if(needsOutfileForSymbol) getFile(modsym, mirrorName, ".class") else null
 
-      var outF: _root_.scala.tools.nsc.io.AbstractFile = null
       acquire()
         val ssa = getAnnotPickle(mirrorName, modsym.companionSymbol)
-        if(needsOutfileForSymbol) { outF = getFile(modsym, mirrorName, ".class") }
         val label = modsym.name.toString
       release()
 
@@ -3289,9 +3292,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
       beanInfoClass.visitEnd()
       // leaving for later on purpose (to be done by pipeline-2): invoking `visitEnd()` and `toByteArray()` on beanInfoClass.
 
-      val outF: _root_.scala.tools.nsc.io.AbstractFile = {
-        if(needsOutfileForSymbol) getFile(cls, beanInfoName, ".class") else null
-      }
+      val outF = if(needsOutfileForSymbol) getFile(cls, beanInfoName, ".class") else null
       SubItem3("BeanInfo ", beanInfoName, beanInfoClass.toByteArray(), outF)
     }
 
