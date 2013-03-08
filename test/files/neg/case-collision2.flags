@@ -1,1 +1,1 @@
--neo:GenBCode -Xfatal-warnings
+-Ynooptimize -neo:GenBCode -Xfatal-warnings
