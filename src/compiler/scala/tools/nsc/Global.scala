@@ -1366,10 +1366,6 @@ class Global(var currentSettings: Settings, var reporter: Reporter)
       _unitbufSize += 1 // counting as they're added so size is cheap
       compiledFiles += unit.source.file.path
     }
-    private def checkQuestionableSettings(unit: CompilationUnit) {
-      checkDeprecatedSettings(unit)
-      checkConflictingSettings(unit)
-    }
     private def checkDeprecatedSettings(unit: CompilationUnit) {
       // issue warnings for any usage of deprecated settings
       settings.userSetSettings filter (_.isDeprecated) foreach { s =>
@@ -1377,38 +1373,8 @@ class Global(var currentSettings: Settings, var reporter: Reporter)
       }
       if (settings.target.value.contains("jvm-1.5")) {
         unit.deprecationWarning(NoPosition, settings.target.name + ":" + settings.target.value + " is deprecated: use target for Java 1.6 or above.")
-    }
-    }
-    private def checkConflictingSettings(unit: CompilationUnit) {
-
-          def complain(msg: String) { unit.error(NoPosition, msg) }
-
-      // ------------ ICode and GenBCode exclude each other
-      //              To ease the transition, ICode is given preference whenever a compiler flag (indirectly) asks for it.
-
-      val c1 = settings.isICodeAskedFor
-      val c2 = settings.isBCodeAskedFor && settings.neo.isSetByUser
-      if(c1 && c2) {
-
-        var whyICode: List[String] = Nil
-
-        if (settings.optimise.isSetByUser) {
-          whyICode ::= settings.optimise.name
-        } else {
-          whyICode :::= settings.optimiseSettings.filter(_.value).map(s => s.name)
-        }
-
-        if (settings.writeICode.isSetByUser) { whyICode ::= settings.writeICode.name }
-        if (settings.neo.value == "GenASM")  { whyICode ::= settings.neo.toString }
-
-        complain(
-          s"Settings ${whyICode.mkString(" , ")} (requesting the GenASM backend) and " +
-          s"${settings.neo.toString} (requesting the GenBCode backend) are contradictory."
-        )
-
       }
-
-    } // end of method checkConflictingSettings()
+    }
 
     /* An iterator returning all the units being compiled in this run */
     /* !!! Note: changing this to unitbuf.toList.iterator breaks a bunch
@@ -1514,7 +1480,7 @@ class Global(var currentSettings: Settings, var reporter: Reporter)
 
       // nothing to compile, but we should still report use of deprecated options
       if (sources.isEmpty) {
-        checkQuestionableSettings(newCompilationUnit(""))
+        checkDeprecatedSettings(newCompilationUnit(""))
         reportCompileErrors()
         return
       }
@@ -1542,7 +1508,7 @@ class Global(var currentSettings: Settings, var reporter: Reporter)
       val startTime = currentTime
 
       reporter.reset()
-      checkQuestionableSettings(unitbuf.head)
+      checkDeprecatedSettings(unitbuf.head)
       globalPhase = fromPhase
 
      while (globalPhase.hasNext && !reporter.hasErrors) {

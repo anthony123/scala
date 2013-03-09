@@ -1,0 +1,6 @@
+
+>> Origins tag 'boop' logged 65 calls from 3 distinguished sources.
+
+     50   Test$.dlgt$27b8b23$1(origins-delegating.scala:16)
+     10   Test$.dlgt$27b8b22$1(origins-delegating.scala:15)
+      5   Test$.dlgt$27b8b21$1(origins-delegating.scala:14)

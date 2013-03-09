@@ -205,6 +205,10 @@ trait ScalaSettings extends AbsScalaSettings
   val neo         = ChoiceSetting ("-neo", "choice of bytecode emitter", "Choice of bytecode emitter.",
                                    List("GenASM", "GenBCode", "o1"),
                                    "GenBCode") // TODO once merged into trunk "GenASM" should be the default
+  val closureConv = ChoiceSetting ("-closurify", "closure desugaring", "Bytecode-level representation of anonymous closures.",
+                                   List("traditional", "delegating", "MH"),
+                                   "delegating") // TODO once merged into trunk "traditional" should be the default
+
   // Feature extensions
   val XmacroSettings          = MultiStringSetting("-Xmacro-settings", "option", "Custom settings for macros.")
 
@@ -230,9 +234,10 @@ trait ScalaSettings extends AbsScalaSettings
 
   /**
    * Helper utilities for use by checkConflictingSettings()
+   * To ease the transition, ICode is given preference whenever a compiler flag asks for it, directly or indirectly.
    */
   def isBCodeActive   = !isICodeAskedFor
-  def isBCodeAskedFor = (neo.value != "GenASM")
+  // def isBCodeAskedFor = (neo.value != "GenASM")
   def isICodeAskedFor = { (neo.value == "GenASM") || optimiseSettings.exists(_.value) || writeICode.isSetByUser }
 
   /**
@@ -244,7 +249,27 @@ trait ScalaSettings extends AbsScalaSettings
    *              Implies GenBCode code emitter. For details on individual transforms see `BCodeCleanser.cleanseClass()`
    *
    * */
-  def neoLevel: Int           = { if(neo.value.startsWith("o")) neo.value.substring(1).toInt else 0 }
+  def neoLevel: Int           = { if(neo.value.startsWith("o") && isBCodeActive ) neo.value.substring(1).toInt else 0 }
   def isIntraMethodOptimizOn  = (neoLevel >= 1)
+
+  /**
+   *  Appraches to lower anonymous closures:
+   *
+   *    case "traditional"  => Good ol' dedicated inner class for each closure.
+   *                           Available under GenASM (the only option there), and also with GenBCode but only up to -neo:o1.
+   *
+   *    case "delegating"   => aka "Late-Closure-Classes" ie their creation is postponed (instead of UnCurry during GenBCode)
+   *                           thus lowering the working set during compilation.
+   *                           Allows closure-related optimizations (actually all optimization levels are supported).
+   *
+   *    case "MH" => A JSR 292 MethodHandle instance with bound arguments for captured environment (aka "partial application")
+   *                 is given as constructor-argument to a *standard* closure-class
+   *                 (thus doing away with the need for as many individual classes as closure definitions).
+   *                 Allows all optimization levels, -target must be jvm-1.7 or higher, and the backend must be GenBCode.
+   *
+   * */
+  def isClosureConvTraditional = (closureConv.value == "traditional") || !isBCodeActive
+  def isClosureConvDelegating  = (closureConv.value == "delegating")  &&  isBCodeActive
+  def isClosureConvMH          = (closureConv.value == "MH")          &&  isBCodeActive
 
 }
