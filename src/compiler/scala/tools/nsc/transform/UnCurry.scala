@@ -64,12 +64,8 @@ abstract class UnCurry extends InfoTransform
    *  That information is used by GenBCode to build on the spot an AbstractFunctionX subclass + instantiation,
    *  see `PlainClassBuilder.genLateClosure()`
    *
-   *  Why Set[Int] and not Set[Symbol] A set-of-symbol-ids provides the same information at a fraction of the GC cost.
-   *  Caveats:
-   *    - the Symbols will stay reachable (eg Trees point to them)
-   *    - Set specialized for ints is actually what we're after
    * */
-  val closureDelegates = mutable.Set.empty[Int]
+  val closureDelegates = mutable.Set.empty[Symbol]
 
   var convertedTraditional = 0
   var convertedModern      = 0
@@ -395,7 +391,7 @@ abstract class UnCurry extends InfoTransform
 
       val callDisguisedAsClosure = gen.mkAsInstanceOf(fakeCallsite, closureType, wrapInApply = false)
 
-      closureDelegates += hoistedMethodDef.symbol.id
+      closureDelegates += hoistedMethodDef.symbol
 
       localTyper.typedPos(fun.pos) {
         Block(
