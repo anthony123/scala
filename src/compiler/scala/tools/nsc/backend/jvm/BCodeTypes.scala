@@ -985,6 +985,7 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
   def clearBCodeTypes() {
     symExemplars.clear()
     exemplars.clear()
+    clearBCodeOpt()
   }
 
   val BOXED_UNIT    = brefType("java/lang/Void")
@@ -3882,6 +3883,8 @@ abstract class BCodeTypes extends SubComponent with BytecodeWriters {
     asmBoxTo.values   foreach { mnat: MethodNameAndType => BType.getMethodType(mnat.mdesc) }
     asmUnboxTo.values foreach { mnat: MethodNameAndType => BType.getMethodType(mnat.mdesc) }
   }
+
+  def clearBCodeOpt()
 
   /**
    *  Represents a lattice element in the type-flow lattice.
