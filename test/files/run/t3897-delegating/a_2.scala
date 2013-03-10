@@ -3,12 +3,16 @@ object Test {
     clazz.getDeclaredFields.toList 
      . filterNot (_.getName contains "bitmap$")
      . map (f => (f.getName, f.getGenericType))
+     . map (_.toString)
+     .sorted
      . foreach (println)
   )
   def f2(clazz: Class[_]) = (
     clazz.getDeclaredMethods.toList 
      . filterNot (_.getName contains "bitmap$")
      . map (f => (f.getName, f.getGenericReturnType))
+     . map (_.toString)
+     .sorted
      . foreach (println)
   )
 

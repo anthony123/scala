@@ -1,1 +1,1 @@
--closurify:delegating
+-Ynooptimise -closurify:delegating

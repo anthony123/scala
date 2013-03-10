@@ -1,1 +1,1 @@
--closurify:delegating -no-specialization
+-Ynooptimise -closurify:delegating -no-specialization
