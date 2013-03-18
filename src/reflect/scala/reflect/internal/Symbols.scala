@@ -3417,12 +3417,15 @@ trait Symbols extends api.Symbols { self: SymbolTable =>
     private val s = new IntSet
 
     def apply(sym: Symbol): Boolean = { s.apply(sym.id) }
+    def contains(sym: Symbol): Boolean = { s.apply(sym.id) }
 
     def +=(sym: Symbol) { s insert (sym.id) }
     def -=(sym: Symbol) { s -=     (sym.id) }
 
     def ++=(syms: Iterable[Symbol])   { syms foreach += }
     def --=(syms: Iterable[Symbol])   { syms foreach -= }
+
+    def clear() { s.clear() }
   }
 
   object SetOfSymIds {
