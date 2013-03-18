@@ -1097,7 +1097,7 @@ abstract class Mixin extends InfoTransform with ast.TreeDSL {
               else if (needsInitFlag(sym))
                 mkCheckedAccessor(clazz, accessedRef, fieldOffset(sym), sym.pos, sym)
               else
-                gen.mkCheckInit(accessedRef)
+                accessedRef
             })
           }
           else if (sym.isModule && !(sym hasFlag LIFTED | BRIDGE)) {
