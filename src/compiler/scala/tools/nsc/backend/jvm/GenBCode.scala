@@ -311,8 +311,10 @@ abstract class GenBCode extends BCodeOptInter {
         // because minimizeDClosureFields() takes care of that, also coping with dclosures having more than one owner.
         if(isInliningRun) {
           val essential = new EssentialCleanser(plainC)
-          val lccsToSquashOuterPointer = if(doesInliningAndNoMore) item.lateClosures else Nil;
-          essential.codeFixups(lccsToSquashOuterPointer)
+          essential.codeFixupDCE()
+          if(doesInliningAndNoMore) {
+            essential.codeFixupSquashLCC(lateClosures)
+          }
         }
 
         // ----------- hand over to pipeline-2
@@ -418,17 +420,21 @@ abstract class GenBCode extends BCodeOptInter {
 
         if(isOptimizRun) {
           val cleanser = new BCodeCleanser(cnode, isInterClosureOptimizOn)
-          // outer-elimination shouldn't be skipped under -o1 , ie it's squashOuter() we're after.
-          // under -o0 `squashOuter()` is invoked in the else-branch below
-          // under -o2 `squashOuter()` runs before inlining, ie in `Worker1.visit()`
-          // under -o3 or higher, rather than `squashOuter()`, the more powerful `minimizeDClosureFields()` is run instead
-          val lccsToSquashOuterPointer = if(doesLevelO1AndNoMore) item.lateClosures else Nil;
-          cleanser.codeFixups(lccsToSquashOuterPointer)
+          cleanser.codeFixupDCE()
+          if(doesLevelO1AndNoMore) {
+            // outer-elimination shouldn't be skipped under -o1 , ie it's squashOuter() we're after.
+            // under -o0 `squashOuter()` is invoked in the else-branch below
+            // under -o2 `squashOuter()` runs before inlining, ie in `Worker1.visit()`
+            // under -o3 or higher, rather than `squashOuter()`, the more powerful `minimizeDClosureFields()` is run instead
+            cleanser.codeFixupSquashLCC(item.lateClosures)
+          }
           cleanser.cleanseClass()
         }
         else {
+          // the minimal fixups needed, even for unoptimized runs.
           val essential = new EssentialCleanser(cnode)
-          essential.codeFixups(item.lateClosures)    // the minimal fixups needed, even for unoptimized runs.
+          essential.codeFixupDCE()
+          essential.codeFixupSquashLCC(item.lateClosures)
         }
 
         refreshInnerClasses(cnode)

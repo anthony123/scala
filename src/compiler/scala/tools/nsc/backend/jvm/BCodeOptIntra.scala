@@ -319,7 +319,7 @@ abstract class BCodeOptIntra extends BCodeOptCommon {
     }
 
     /**
-     *  (1) Removes dead code, and (2) elide redundant outer-fields for Late-Closure-Classes.
+     *  Removes dead code.
      *
      *  When writing classfiles with "optimization level zero" (ie -neo:GenBCode)
      *  the very least we want to do is remove dead code beforehand,
@@ -332,8 +332,7 @@ abstract class BCodeOptIntra extends BCodeOptCommon {
      *  thus `cleanseMethod()` also gets rid of those.
      *
      * */
-    final def codeFixups(lccsToSquashOuterPointer: List[ClassNode]) {
-      // 1 of 2
+    final def codeFixupDCE() {
       val iter = cnode.methods.iterator()
       while(iter.hasNext) {
         val mnode = iter.next()
@@ -342,7 +341,13 @@ abstract class BCodeOptIntra extends BCodeOptCommon {
           cleanseMethod(cnode.name, mnode) // remove unreachable code
         }
       }
-      // 2 of 2
+    }
+
+    /**
+     *  Elide redundant outer-fields for Late-Closure-Classes.
+     *
+     * */
+    final def codeFixupSquashLCC(lccsToSquashOuterPointer: List[ClassNode]) {
       if(!cnode.isStaticModule && lccsToSquashOuterPointer.nonEmpty) {
         val sq = new LCCOuterSquasher
         sq.squashOuterForLCC(lccsToSquashOuterPointer)
