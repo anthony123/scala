@@ -1635,27 +1635,27 @@ abstract class GenBCode extends BCodeOptInter {
        *
        *    (a) `return` statement:
        *
-       *        First, the value to return (if any is evaluated).
+       *        First, the value to return (if any) is evaluated.
        *        Afterwards, all enclosing finally-blocks are run, from innermost to outermost.
        *        Only then the return value (if any) is returned.
        *
        *        Some terminology:
        *          (a.1) Executing a return statement that is protected
        *                by one or more finally-blocks is called "early return"
-       *          (a.2) the chain of code sections (one for each enclosing finally-block) to execute
-       *                upon early returns is called "cleanup chain"
+       *          (a.2) the chain of code sections (a code section for each enclosing finally-block)
+       *                to run upon early returns is termed "the cleanup chain"
        *
        *        As an additional spin, consider a return statement in a finally-block.
        *        In this case, the value to return depends on how control arrived at that statement:
-       *        in case it arrived via a previous return, the value to return
-       *        is given by that previously run statement.
+       *        in case it arrived via a previous return, that previous return enjoys priority:
+       *        the value to return is given by that statement.
        *
        *    (b) A finally-block protects both the try-clause and the catch-clauses.
        *
        *           Sidenote:
        *             A try-clause may contain an empty block. On CLR, a finally-block has special semantics
        *             regarding Abort interruptions; but on the JVM it's safe to elide an exception-handler
-       *             that protects an "empty" range ("empty" as containing NOPs only,
+       *             that protects an "empty" range ("empty" as in "containing NOPs only",
        *             see `asm.optimiz.DanglingExcHandlers` and SI-6720).
        *
        *        This means a finally-block indicates instructions that can be reached:
@@ -1664,9 +1664,9 @@ abstract class GenBCode extends BCodeOptInter {
        *          (b.2) Upon early-return initiated in the try-clause or a catch-clause
        *                In this case, the next-program-point is the enclosing cleanup section (if any), otherwise return.
        *          (b.3) Upon abrupt termination (due to unhandled exception) of the try-clause or a catch-clause
-       *                In this case, the unhandled exception must be re-thrown after runnint the finally-block.
+       *                In this case, the unhandled exception must be re-thrown after running the finally-block.
        *
-       *    (c) finally-blocks are implicit to `synchronized` (a finally-block that just releases the lock)
+       *    (c) finally-blocks are implicit to `synchronized` (a finally-block is added to just release the lock)
        *        that's why `genSynchronized()` too emits cleanup-sections.
        *
        *  A number of code patterns can be emitted to realize the intended semantics.
@@ -1818,13 +1818,13 @@ abstract class GenBCode extends BCodeOptInter {
          *              Given that control arrives to a cleanup section only upon early RETURN,
          *              the value to return (if any) is always available. Therefore, a further RETURN
          *              found in a cleanup section is always ignored (a warning is displayed, @see `genReturn()`).
-         *              In order for `genReturn()` to know whether the return stament is enclosed in a cleanup section,
+         *              In order for `genReturn()` to know whether the return statement is enclosed in a cleanup section,
          *              the variable `insideCleanupBlock` is used.
          * ------
          */
 
         // this is not "postHandlers" either.
-        // `shouldEmitCleanup` can be set, yet this try expression lack a finally-clause.
+        // `shouldEmitCleanup` can be set, and at the same time this try expression may lack a finally-clause.
         // In other words, all combinations of (hasFinally, shouldEmitCleanup) are valid.
         if(hasFinally && shouldEmitCleanup) {
           val savedInsideCleanup = insideCleanupBlock
@@ -1837,7 +1837,7 @@ abstract class GenBCode extends BCodeOptInter {
         }
 
         /* ------ (4) finally-clause-for-normal-nonEarlyReturn-exit
-         *            Reached upon normal, non-early-return termination of (1) or one of the EHs in (2).
+         *            Reached upon normal, non-early-return termination of (1) or of an EH in (2).
          *            Protected only by whatever protects the whole try-catch-finally expression.
          * TODO explain what happens upon RETURN contained in (4)
          * ------
