@@ -308,8 +308,8 @@ abstract class GenBCode extends BCodeOptInter {
         // ----------- dead-code is removed before the inliner can see it.
         // ----------- squashOuter() cannot run after inliner (it relies on dclosures having a single owner)
         // however, under -o3 or higher it's not necessary to squash them here (sequentially)
-        // because minimizeDClosureFields() takes care of that
-        if(doesInliningAndNoMore) {
+        // because minimizeDClosureFields() takes care of that, also coping with dclosures having more than one owner.
+        if(isInliningRun) {
           val essential = new EssentialCleanser(plainC)
           essential.codeFixups(lateClosures)
         }
