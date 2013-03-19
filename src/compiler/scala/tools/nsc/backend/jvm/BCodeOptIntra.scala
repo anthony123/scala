@@ -355,6 +355,17 @@ abstract class BCodeOptIntra extends BCodeOptCommon {
     }
 
     /**
+     *  Empty Stack on Try Entry.
+     *
+     *  TODO documentation
+     *
+     * */
+    final def codeFixupESOTE(esote: immutable.Map[LabelNode, LabelNode]) {
+      if(esote == null) { return }
+
+    }
+
+    /**
      *  Initially all endpoints of dclosures owned by `cnode` are instance methods
      *  (unless `cnode` is an implementation-class derived from a trait,
      *  in which case all of its methods including dclosure-endpoints are static).

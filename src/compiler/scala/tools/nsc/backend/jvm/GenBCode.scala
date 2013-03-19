@@ -143,13 +143,14 @@ abstract class GenBCode extends BCodeOptInter {
                      mirror:       asm.tree.ClassNode,
                      plain:        asm.tree.ClassNode,
                      bean:         asm.tree.ClassNode,
-                     lateClosures: List[asm.tree.ClassNode],
+                     lateClosures:      List[asm.tree.ClassNode],
                      dClosureEndpoints: Iterable[DClosureEndpoint],
+                     esote:        immutable.Map[LabelNode, LabelNode],
                      outFolder:    _root_.scala.tools.nsc.io.AbstractFile) {
       def isPoison = { arrivalPos == Int.MaxValue }
     }
 
-    private val poison2 = Item2(Int.MaxValue, null, null, null, null, null, null)
+    private val poison2 = Item2(Int.MaxValue, null, null, null, null, null, null, null)
     private val q2 = new _root_.java.util.concurrent.LinkedBlockingQueue[Item2]
 
     /* ---------------- q3 ---------------- */
@@ -309,9 +310,12 @@ abstract class GenBCode extends BCodeOptInter {
         // ----------- squashOuter() cannot run after inliner (it relies on dclosures having a single owner)
         // however, under -o3 or higher it's not necessary to squash them here (sequentially)
         // because minimizeDClosureFields() takes care of that, also coping with dclosures having more than one owner.
+        var esote = pcb.esote
         if(isInliningRun) {
           val essential = new EssentialCleanser(plainC)
           essential.codeFixupDCE()
+          essential.codeFixupESOTE(esote)
+          esote = null
           if(doesInliningAndNoMore) {
             essential.codeFixupSquashLCC(lateClosures)
           }
@@ -323,6 +327,7 @@ abstract class GenBCode extends BCodeOptInter {
           Item2(arrivalPos + lateClosuresCount,
                 mirrorC, plainC, beanC,
                 lateClosures, dClosureEndpoints,
+                esote,
                 outF)
         lateClosuresCount += lateClosures.size
 
@@ -421,6 +426,7 @@ abstract class GenBCode extends BCodeOptInter {
         if(isOptimizRun) {
           val cleanser = new BCodeCleanser(cnode, isInterClosureOptimizOn)
           cleanser.codeFixupDCE()
+          cleanser.codeFixupESOTE(item.esote)
           if(doesLevelO1AndNoMore) {
             // outer-elimination shouldn't be skipped under -o1 , ie it's squashOuter() we're after.
             // under -o0 `squashOuter()` is invoked in the else-branch below
@@ -434,6 +440,7 @@ abstract class GenBCode extends BCodeOptInter {
           // the minimal fixups needed, even for unoptimized runs.
           val essential = new EssentialCleanser(cnode)
           essential.codeFixupDCE()
+          essential.codeFixupESOTE(item.esote)
           essential.codeFixupSquashLCC(item.lateClosures)
         }
 
@@ -461,7 +468,7 @@ abstract class GenBCode extends BCodeOptInter {
               cw.toByteArray
             }
 
-        val Item2(arrivalPos, mirror, plain, bean, lateClosures, _, outFolder) = item
+        val Item2(arrivalPos, mirror, plain, bean, lateClosures, _, _, outFolder) = item
 
         // TODO aren't mirror.outFolder , plain.outFolder , and bean.outFolder one and the same? Remove duplicity.
 
@@ -795,7 +802,7 @@ abstract class GenBCode extends BCodeOptInter {
        *
        *  Map `esote` uses a LabelNode for program-point (a) as key, mapping to (b) which is also a LabelNode.
        * */
-      var esote = mutable.Map.empty[LabelNode, LabelNode]
+      var esote = immutable.Map.empty[LabelNode, LabelNode]
 
       /**
        *  A program point may be lexically nested (at some depth)
@@ -1001,7 +1008,7 @@ abstract class GenBCode extends BCodeOptInter {
       def genPlainClass(cd: ClassDef) {
         assert(cnode == null, "GenBCode detected nested methods.")
         innerClassBufferASM.clear()
-        esote = mutable.Map.empty[LabelNode, LabelNode]
+        esote = immutable.Map.empty[LabelNode, LabelNode]
 
         claszSymbol       = cd.symbol
         isCZParcelable    = isAndroidParcelableClass(claszSymbol)
@@ -1874,7 +1881,7 @@ abstract class GenBCode extends BCodeOptInter {
           emitFinalizer(finalizer, tmp, false) // the only invocation of emitFinalizer with `isDuplicate == false`
         }
 
-        esote.put(startTryBody.info.asInstanceOf[LabelNode], postHandlers.info.asInstanceOf[LabelNode])
+        esote += Pair(startTryBody.info.asInstanceOf[LabelNode], postHandlers.info.asInstanceOf[LabelNode])
 
         kind
       } // end of genLoadTry()
