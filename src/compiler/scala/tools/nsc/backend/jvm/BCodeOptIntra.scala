@@ -332,7 +332,7 @@ abstract class BCodeOptIntra extends BCodeOptCommon {
      *  thus `cleanseMethod()` also gets rid of those.
      *
      * */
-    final def codeFixups(lateClosures: List[ClassNode]) {
+    final def codeFixups(lccsToSquashOuterPointer: List[ClassNode]) {
       // 1 of 2
       val iter = cnode.methods.iterator()
       while(iter.hasNext) {
@@ -343,9 +343,9 @@ abstract class BCodeOptIntra extends BCodeOptCommon {
         }
       }
       // 2 of 2
-      if(!cnode.isStaticModule && lateClosures.nonEmpty) {
+      if(!cnode.isStaticModule && lccsToSquashOuterPointer.nonEmpty) {
         val sq = new LCCOuterSquasher
-        sq.squashOuterForLCC(lateClosures)
+        sq.squashOuterForLCC(lccsToSquashOuterPointer)
       }
     }
 
