@@ -311,7 +311,8 @@ abstract class GenBCode extends BCodeOptInter {
         // because minimizeDClosureFields() takes care of that, also coping with dclosures having more than one owner.
         if(isInliningRun) {
           val essential = new EssentialCleanser(plainC)
-          essential.codeFixups(lateClosures)
+          val lccsToSquashOuterPointer = if(doesInliningAndNoMore) item.lateClosures else Nil;
+          essential.codeFixups(lccsToSquashOuterPointer)
         }
 
         // ----------- hand over to pipeline-2
