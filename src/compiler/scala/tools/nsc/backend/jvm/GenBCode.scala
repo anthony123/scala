@@ -13,7 +13,7 @@ import scala.tools.nsc.symtab._
 import scala.annotation.switch
 
 import scala.tools.asm
-import asm.tree.{FieldNode, MethodInsnNode, MethodNode}
+import asm.tree.{LabelNode, FieldNode, MethodInsnNode, MethodNode}
 
 /**
  *  Prepare in-memory representations of classfiles using the ASM Tree API, and serialize them to disk.
@@ -776,6 +776,21 @@ abstract class GenBCode extends BCodeOptInter {
       }
 
       /**
+       *  In order to guarantee "Empty Stack on Try Entry" ("esote" for short)
+       *  a rewriting (performed in `EssentialCleanser.codeFixups()`) is needed.
+       *  (That rewirting must be done before optimization on bytecode starts)
+       *
+       *  That rewriting needs information on:
+       *    (a) start of the protected region of a try-block
+       *    (b) program-point where control-flow joins
+       *        (after exiting the protected try-clause and the exception handlers for it if any,
+       *         this is the program point where "incompatible stack height" would happen if ESOTE were not assured.)
+       *
+       *  Map `esote` uses a LabelNode for program-point (a) as key, mapping to (b) which is also a LabelNode.
+       * */
+      var esote = mutable.Map.empty[LabelNode, LabelNode]
+
+      /**
        *  A program point may be lexically nested (at some depth)
        *    (a) in the try-clause of a try-with-finally expression
        *    (b) in a synchronized block.
@@ -923,15 +938,18 @@ abstract class GenBCode extends BCodeOptInter {
       private def resetMethodBookkeeping(dd: DefDef) {
         locals.clear()
         jumpDest = immutable.Map.empty[ /* LabelDef */ Symbol, asm.Label ]
+
         // populate labelDefsAtOrUnder
         val ldf = new LabelDefsFinder
         ldf.traverse(dd.rhs)
         labelDefsAtOrUnder = ldf.result.withDefaultValue(Nil)
         labelDef = labelDefsAtOrUnder(dd.rhs).map(ld => (ld.symbol -> ld)).toMap
+
         // check previous invocation of genDefDef exited as many varsInScope as it entered.
         assert(varsInScope == null, "Unbalanced entering/exiting of GenBCode's genBlock().")
         // check previous invocation of genDefDef unregistered as many cleanups as it registered.
         assert(cleanups == Nil, "Previous invocation of genDefDef didn't unregister as many cleanups as it registered.")
+
         isModuleInitialized = false
         earlyReturnVar      = null
         shouldEmitCleanup   = false
@@ -976,6 +994,7 @@ abstract class GenBCode extends BCodeOptInter {
       def genPlainClass(cd: ClassDef) {
         assert(cnode == null, "GenBCode detected nested methods.")
         innerClassBufferASM.clear()
+        esote = mutable.Map.empty[LabelNode, LabelNode]
 
         claszSymbol       = cd.symbol
         isCZParcelable    = isAndroidParcelableClass(claszSymbol)
@@ -1847,6 +1866,8 @@ abstract class GenBCode extends BCodeOptInter {
         if(hasFinally) {
           emitFinalizer(finalizer, tmp, false) // the only invocation of emitFinalizer with `isDuplicate == false`
         }
+
+        esote.put(startTryBody.info.asInstanceOf[LabelNode], postHandlers.info.asInstanceOf[LabelNode])
 
         kind
       } // end of genLoadTry()
