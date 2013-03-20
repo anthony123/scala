@@ -145,7 +145,7 @@ abstract class GenBCode extends BCodeOptInter {
                      bean:         asm.tree.ClassNode,
                      lateClosures:      List[asm.tree.ClassNode],
                      dClosureEndpoints: Iterable[DClosureEndpoint],
-                     esote:        immutable.Map[LabelNode, LabelNode],
+                     esote:        immutable.Map[LabelNode, TryExitInfo],
                      outFolder:    _root_.scala.tools.nsc.io.AbstractFile) {
       def isPoison = { arrivalPos == Int.MaxValue }
     }
@@ -802,7 +802,7 @@ abstract class GenBCode extends BCodeOptInter {
        *
        *  Map `esote` uses a LabelNode for program-point (a) as key, mapping to (b) which is also a LabelNode.
        * */
-      var esote = immutable.Map.empty[LabelNode, LabelNode]
+      var esote = immutable.Map.empty[LabelNode, TryExitInfo]
 
       /**
        *  A program point may be lexically nested (at some depth)
@@ -1008,7 +1008,7 @@ abstract class GenBCode extends BCodeOptInter {
       def genPlainClass(cd: ClassDef) {
         assert(cnode == null, "GenBCode detected nested methods.")
         innerClassBufferASM.clear()
-        esote = immutable.Map.empty[LabelNode, LabelNode]
+        esote = immutable.Map.empty[LabelNode, TryExitInfo]
 
         claszSymbol       = cd.symbol
         isCZParcelable    = isAndroidParcelableClass(claszSymbol)
@@ -1744,6 +1744,9 @@ abstract class GenBCode extends BCodeOptInter {
          *         (in case a finally-block is present); or
          *     (b) the program point right after the try-catch
          *         (in case there's no finally-block).
+         *  In case the try-expression evaluates to something other than UNIT or NOTHING,
+         *  such value is stack top at program point `postHandlers`
+         *  (either because the try-clause, or one of the exception handlers, loaded it onto the operand stack).
          * */
         val postHandlers = new asm.Label
 
@@ -1773,7 +1776,13 @@ abstract class GenBCode extends BCodeOptInter {
          * ------
          */
 
-        val startTryBody = currProgramPoint()
+        // By virtue of `new asm.Label` (as opposed to `currProgramPoint()`) we make sure the associated LabelNode
+        // is not visible to other instructions (ie none may jump into it) thus we can freely insert
+        // right before `startTryBody` STOREs to guarantee "Empty Stack on Try Entry"
+        // (followed by LOADs to restore the stack contents as appropriate). See `EssentialCleanser.codeFixupESOTE()`
+        val startTryBody = new asm.Label
+        mnode visitLabel startTryBody
+
         registerCleanup(finCleanup)
         genLoad(block, kind)
         unregisterCleanup(finCleanup)
@@ -1837,7 +1846,7 @@ abstract class GenBCode extends BCodeOptInter {
           protect(startTryBody, finalHandler, finalHandler, null)
           val Local(eTK, _, eIdx, _) = locals(makeLocal(ThrowableReference, "exc"))
           bc.store(eIdx, eTK)
-          emitFinalizer(finalizer, null, true)
+          emitFinalizer(finalizer, null, isDuplicate = true)
           bc.load(eIdx, eTK)
           emit(asm.Opcodes.ATHROW)
         }
@@ -1864,7 +1873,7 @@ abstract class GenBCode extends BCodeOptInter {
           insideCleanupBlock = true
           markProgramPoint(finCleanup)
           // regarding return value, the protocol is: in place of a `return-stmt`, a sequence of `adapt, store, jump` are inserted.
-          emitFinalizer(finalizer, null, false)
+          emitFinalizer(finalizer, null, isDuplicate = false)
           pendingCleanups()
           insideCleanupBlock = savedInsideCleanup
         }
@@ -1878,10 +1887,19 @@ abstract class GenBCode extends BCodeOptInter {
 
         markProgramPoint(postHandlers)
         if(hasFinally) {
-          emitFinalizer(finalizer, tmp, false) // the only invocation of emitFinalizer with `isDuplicate == false`
+          emitFinalizer(finalizer, tmp, isDuplicate = false) // the only invocation of emitFinalizer with `isDuplicate == false`
         }
 
-        esote += Pair(startTryBody.info.asInstanceOf[LabelNode], postHandlers.info.asInstanceOf[LabelNode])
+        if(catches.nonEmpty) {
+          esote +=
+            Pair(
+              startTryBody.info.asInstanceOf[LabelNode],
+              TryExitInfo(
+                postHandlers.info.asInstanceOf[LabelNode],
+                kind
+              )
+            )
+        }
 
         kind
       } // end of genLoadTry()
