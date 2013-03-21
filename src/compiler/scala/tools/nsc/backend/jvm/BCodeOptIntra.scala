@@ -425,9 +425,9 @@ abstract class BCodeOptIntra extends BCodeOptCommon {
       val worklist = mutable.Queue.empty[AbstractInsnNode]
 
           def schedule(i: AbstractInsnNode, st: AStack) {
-            val prev = state.getOrElse(i, null)
-            if(prev != null) {
-              assert(st == prev)
+            val prevState = state.getOrElse(i, null)
+            if(prevState != null) {
+              assert(st == prevState, s"Abstract states differ: ${prevState.toString} vs. ${st.toString}")
             } else {
               state(i) = st
               if(!worklist.contains(i)) {
@@ -438,7 +438,9 @@ abstract class BCodeOptIntra extends BCodeOptCommon {
 
       schedule(stream.getFirst, Nil)
       for(tcb <- JListWrapper(mnode.tryCatchBlocks)) {
-        schedule(tcb.handler, ObjectReference :: Nil)
+        if(!input.contains(tcb.start)) {
+          schedule(tcb.handler, ObjectReference :: Nil)
+        }
       }
 
       while(worklist.nonEmpty) {
@@ -516,7 +518,8 @@ abstract class BCodeOptIntra extends BCodeOptCommon {
                 case POP2 => if(pop().getSize == 1) { pop() }
 
                 case DUP =>
-                  val v = pop(); assert(v.getSize == 1)
+                  val v = pop();
+                  assert(v.getSize == 1, "DUP found operating on value of JVM computational size != 1")
                   push(v); push(v)
                 case DUP_X1 =>
                   val v1 = pop()
@@ -684,12 +687,14 @@ abstract class BCodeOptIntra extends BCodeOptCommon {
 
           val exitInfo = input.getOrElse(currInsn, null)
           if(exitInfo != null) {
+
+            val startTryBody = currInsn.asInstanceOf[LabelNode]
+
             if(currState.nonEmpty) {
 
-              val startTryBody = currInsn.asInstanceOf[LabelNode]
               val TryExitInfo(postHandlers, evalsTo) = exitInfo
 
-              // ------ (1 of 3) save try-value if any
+              // ------ (1 of 4) save try-value if any
               val hasResult = (evalsTo != UNIT)
               var resultIdx = -1
               if(hasResult) {
@@ -699,7 +704,7 @@ abstract class BCodeOptIntra extends BCodeOptCommon {
                 mnode.maxLocals += evalsTo.getSize
               }
 
-              // ------ (2 of 3) insert stores: the head of currState represents stack top
+              // ------ (2 of 4) insert stores: the head of currState represents stack top
               for(bt <- currState) {
                 val idx   = mnode.maxLocals
                 val store = new VarInsnNode(bt.getOpcode(Opcodes.ISTORE), idx)
@@ -710,14 +715,22 @@ abstract class BCodeOptIntra extends BCodeOptCommon {
               }
               currState = Nil
 
-              // ------ (3 of 3) restore try-value if any
+              // ------ (3 of 4) restore try-value if any
               if(hasResult) {
                 val storeResult = new VarInsnNode(evalsTo.getOpcode(Opcodes.ISTORE), resultIdx)
                 stream.insert(postHandlers, storeResult)
               }
 
             }
-            input.remove(currInsn)
+
+            /* now that startTryBody has been visited (possibly adding stack-restoration instructions), postHandlers can be scheduled */
+            for(tcb <- JListWrapper(mnode.tryCatchBlocks)) {
+              if(tcb.start eq startTryBody) {
+                schedule(tcb.handler, ObjectReference :: Nil)
+              }
+            }
+
+            input.remove(startTryBody)
             if(input.isEmpty) { return }
           }
 
@@ -726,7 +739,7 @@ abstract class BCodeOptIntra extends BCodeOptCommon {
         }
       }
 
-      assert(input.isEmpty)
+      assert(input.isEmpty, "Not all startTryBody were visited.")
     }
 
     /**
