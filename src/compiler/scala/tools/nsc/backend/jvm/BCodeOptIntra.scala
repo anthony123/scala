@@ -367,23 +367,33 @@ abstract class BCodeOptIntra extends BCodeOptCommon {
     }
 
     /**
-     *  Empty Stack on Try Entry.
+     * Motivation
+     * ----------
      *
-     *  TODO documentation
+     * In Scala `try` is an expression, whose translation into bytecode may find a non-empty operand stack on try-entry.
+     * By "try-entry" is meant the start of the instruction range protected by the exception-handlers of the try-expr.
      *
-     * */
-    final def codeFixupESOTE(esote: immutable.Map[LabelNode, TryExitInfo]) {
-      if(esote == null) { return }
-      val iter = cnode.methods.iterator()
-      while(iter.hasNext) {
-        val mnode = iter.next()
-        if(Util.hasBytecodeInstructions(mnode)) {
-          codeFixupESOTE(mnode, esote)
-        }
-      }
-    }
-
-    /**
+     * In case:
+     *
+     *   (a) the try-expr involves one or more catch-clauses with type other than Nothing,
+     *
+     * the straightforward lowering performed by GenBCode's `genLoadTry()` will lead to a VerifyError provided an additional condition holds:
+     *
+     *   (b) non-empty operand stack on try-entry
+     *
+     * The VerifyError (again, assuming a naive lowering) is of the "Inconsistent Stack Heights" variety,
+     * and refers to the program point where the following joins:
+     *
+     *   (c) normal exit from the protected range
+     *
+     *   (d) normal exit from an exception handler (an EH that protects the protected range)
+     *
+     * Related discussion: https://groups.google.com/d/msg/scala-internals/VkEL7wOVQpE/aSiNnF3ym-cJ
+     *
+     *
+     * Rewriting
+     * ---------
+     *
      * In `PlainClassBuilder.genLoadTry()` the protected range for each exception handler is demarcated.
      * The LabelNode denoting range-start is the same for all such protected ranges, it's `startTryBody`.
      * To recap, `genLoadTry` emits:
@@ -408,8 +418,10 @@ abstract class BCodeOptIntra extends BCodeOptCommon {
      *  BTW, we can't splice any stack-changing instructions before `postHandlers` because
      *  it's in general the target of jumps (from the end of try-body, from the end of each exception-handler).
      *
+     *  @return true iff anything was changed
+     *
      * */
-    private def codeFixupESOTE(mnode: MethodNode, esote: immutable.Map[LabelNode, TryExitInfo]) {
+    final def codeFixupESOTE(mnode: MethodNode, esote: immutable.Map[LabelNode, TryExitInfo]): Boolean = {
       val stream = mnode.instructions
       val input  = mutable.Map.empty[AbstractInsnNode, TryExitInfo]
       for(
@@ -418,7 +430,7 @@ abstract class BCodeOptIntra extends BCodeOptCommon {
       ) {
         input.put(startTryBody, texit)
       }
-      if(input.isEmpty) { return }
+      if(input.isEmpty) { return false }
 
       type AStack  = List[BType]
       val state    = mutable.Map.empty[AbstractInsnNode, AStack]
@@ -731,7 +743,7 @@ abstract class BCodeOptIntra extends BCodeOptCommon {
             }
 
             input.remove(startTryBody)
-            if(input.isEmpty) { return }
+            if(input.isEmpty) { return true }
           }
 
           advanceProgramState()
@@ -739,7 +751,10 @@ abstract class BCodeOptIntra extends BCodeOptCommon {
         }
       }
 
+      // actually this should be unreachable
       assert(input.isEmpty, "Not all startTryBody were visited.")
+
+      true
     }
 
     /**
@@ -1538,6 +1553,26 @@ abstract class BCodeOptIntra extends BCodeOptCommon {
     val jumpReducer         = new asm.optimiz.JumpReducer
     val nullnessPropagator  = new asm.optimiz.NullnessPropagator
     val constantFolder      = new asm.optimiz.ConstantFolder
+
+    /**
+     *  Empty Stack on Try Entry.
+     *
+     *  @see the other method called `codeFixupESOTE()` , ie the one taking a MethodNode argument.
+     *
+     * */
+    final def codeFixupESOTE(esote: immutable.Map[LabelNode, TryExitInfo]) {
+      if(esote == null) { return }
+      val iter = cnode.methods.iterator()
+      while(iter.hasNext) {
+        val mnode = iter.next()
+        if(Util.hasBytecodeInstructions(mnode)) {
+          val changed = codeFixupESOTE(mnode, esote)
+          if(changed) {
+            elimRedundantCode(cnode.name, mnode)
+          }
+        }
+      }
+    }
 
     //--------------------------------------------------------------------
     // First optimization pack

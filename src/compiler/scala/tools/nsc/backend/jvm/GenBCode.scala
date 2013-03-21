@@ -312,12 +312,12 @@ abstract class GenBCode extends BCodeOptInter {
         // because minimizeDClosureFields() takes care of that, also coping with dclosures having more than one owner.
         var esote = pcb.esote
         if(isInliningRun) {
-          val essential = new EssentialCleanser(plainC)
-          essential.codeFixupDCE()
-          essential.codeFixupESOTE(esote)
+          val qcleanser = new QuickCleanser(plainC)
+          qcleanser.codeFixupDCE()
+          qcleanser.codeFixupESOTE(esote)
           esote = null
           if(doesInliningAndNoMore) {
-            essential.codeFixupSquashLCC(lateClosures)
+            qcleanser.codeFixupSquashLCC(lateClosures)
           }
         }
 
@@ -438,10 +438,10 @@ abstract class GenBCode extends BCodeOptInter {
         }
         else {
           // the minimal fixups needed, even for unoptimized runs.
-          val essential = new EssentialCleanser(cnode)
-          essential.codeFixupDCE()
-          essential.codeFixupESOTE(item.esote)
-          essential.codeFixupSquashLCC(item.lateClosures)
+          val qcleanser = new QuickCleanser(cnode)
+          qcleanser.codeFixupDCE()
+          qcleanser.codeFixupESOTE(item.esote)
+          qcleanser.codeFixupSquashLCC(item.lateClosures)
         }
 
         refreshInnerClasses(cnode)
@@ -1779,7 +1779,7 @@ abstract class GenBCode extends BCodeOptInter {
         // By virtue of `new asm.Label` (as opposed to `currProgramPoint()`) we make sure the associated LabelNode
         // is not visible to other instructions (ie none may jump into it) thus we can freely insert
         // right before `startTryBody` STOREs to guarantee "Empty Stack on Try Entry"
-        // (followed by LOADs to restore the stack contents as appropriate). See `EssentialCleanser.codeFixupESOTE()`
+        // (followed by LOADs to restore the stack contents as appropriate). See `QuickCleanserCleanser.codeFixupESOTE()`
         val startTryBody = new asm.Label
         mnode visitLabel startTryBody
 
