@@ -636,14 +636,7 @@ abstract class UnCurry extends InfoTransform
           case ret @ Return(_) if (isNonLocalReturn(ret)) =>
             super.transform(ret)
 
-          case Try(_, Nil, _) =>
-            // try-finally does not need lifting: lifting is needed only for try-catch
-            // expressions that are evaluated in a context where the stack might not be empty.
-            // `finally` does not attempt to continue evaluation after an exception, so the fact
-            // that values on the stack are 'lost' does not matter
-            super.transform(tree)
-
-          case Try(block, catches, finalizer) =>
+          case _: Try =>
             super.transform(tree)
 
           case CaseDef(pat, guard, body) =>

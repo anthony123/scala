@@ -455,6 +455,8 @@ abstract class BCodeOptIntra extends BCodeOptCommon {
         }
       }
 
+      var changed = false
+
       while(worklist.nonEmpty) {
 
         var currInsn  = worklist.dequeue()
@@ -704,9 +706,10 @@ abstract class BCodeOptIntra extends BCodeOptCommon {
 
             if(currState.nonEmpty) {
 
+              changed = true
               val TryExitInfo(postHandlers, evalsTo) = exitInfo
 
-              // ------ (1 of 4) save try-value if any
+              // ------ (1 of 3) save try-value if any
               val hasResult = (evalsTo != UNIT)
               var resultIdx = -1
               if(hasResult) {
@@ -716,7 +719,7 @@ abstract class BCodeOptIntra extends BCodeOptCommon {
                 mnode.maxLocals += evalsTo.getSize
               }
 
-              // ------ (2 of 4) insert stores: the head of currState represents stack top
+              // ------ (2 of 3) insert stores: the head of currState represents stack top
               for(bt <- currState) {
                 val idx   = mnode.maxLocals
                 val store = new VarInsnNode(bt.getOpcode(Opcodes.ISTORE), idx)
@@ -727,7 +730,7 @@ abstract class BCodeOptIntra extends BCodeOptCommon {
               }
               currState = Nil
 
-              // ------ (3 of 4) restore try-value if any
+              // ------ (3 of 3) restore try-value if any
               if(hasResult) {
                 val storeResult = new VarInsnNode(evalsTo.getOpcode(Opcodes.ISTORE), resultIdx)
                 stream.insert(postHandlers, storeResult)
@@ -743,7 +746,7 @@ abstract class BCodeOptIntra extends BCodeOptCommon {
             }
 
             input.remove(startTryBody)
-            if(input.isEmpty) { return true }
+            if(input.isEmpty) { return changed }
           }
 
           advanceProgramState()
@@ -754,7 +757,7 @@ abstract class BCodeOptIntra extends BCodeOptCommon {
       // actually this should be unreachable
       assert(input.isEmpty, "Not all startTryBody were visited.")
 
-      true
+      changed
     }
 
     /**
