@@ -441,8 +441,6 @@ abstract class BCodeOptIntra extends BCodeOptCommon {
         schedule(tcb.handler, ObjectReference :: Nil)
       }
 
-      val txtBefore = Util.textify(mnode)
-
       while(worklist.nonEmpty) {
 
         var currInsn  = worklist.dequeue()
@@ -688,10 +686,6 @@ abstract class BCodeOptIntra extends BCodeOptCommon {
           if(exitInfo != null) {
             if(currState.nonEmpty) {
 
-              println("-----------------------------")
-              println("Before")
-              println(txtBefore)
-
               val startTryBody = currInsn.asInstanceOf[LabelNode]
               val TryExitInfo(postHandlers, evalsTo) = exitInfo
 
@@ -714,20 +708,13 @@ abstract class BCodeOptIntra extends BCodeOptCommon {
                 stream.insert(postHandlers, load)
                 mnode.maxLocals += bt.getSize
               }
+              currState = Nil
 
               // ------ (3 of 3) restore try-value if any
               if(hasResult) {
                 val storeResult = new VarInsnNode(evalsTo.getOpcode(Opcodes.ISTORE), resultIdx)
                 stream.insert(postHandlers, storeResult)
               }
-
-              val txtAfter = Util.textify(mnode)
-
-              println("-----------------------------")
-              println("After")
-              println(txtAfter)
-              println()
-              println()
 
             }
             input.remove(currInsn)

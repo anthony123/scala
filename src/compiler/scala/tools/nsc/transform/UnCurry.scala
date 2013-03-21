@@ -671,8 +671,7 @@ abstract class UnCurry extends InfoTransform
             super.transform(tree)
 
           case Try(block, catches, finalizer) =>
-            if (needTryLift) transform(liftTree(tree))
-            else super.transform(tree)
+            super.transform(tree)
 
           case CaseDef(pat, guard, body) =>
             val pat1 = withInPattern(value = true)(transform(pat))

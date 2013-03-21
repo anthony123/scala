@@ -1890,7 +1890,10 @@ abstract class GenBCode extends BCodeOptInter {
           emitFinalizer(finalizer, tmp, isDuplicate = false) // the only invocation of emitFinalizer with `isDuplicate == false`
         }
 
-        if(catches.nonEmpty) {
+        val hasControlFlowJoinPointWhereTryBodyAndEHClausesMerge = {
+          catches.nonEmpty && catches.exists(c => c.tpe.typeSymbolDirect ne NothingClass)
+        }
+        if(hasControlFlowJoinPointWhereTryBodyAndEHClausesMerge) {
           esote +=
             Pair(
               startTryBody.info.asInstanceOf[LabelNode],
