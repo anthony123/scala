@@ -1387,7 +1387,7 @@ class Global(var currentSettings: Settings, var reporter: Reporter)
       }
       if (settings.target.value.contains("jvm-1.5")) {
         unit.deprecationWarning(NoPosition, settings.target.name + ":" + settings.target.value + " is deprecated: use target for Java 1.6 or above.")
-    }
+      }
     }
     private def checkConflictingSettings(unit: CompilationUnit) {
 

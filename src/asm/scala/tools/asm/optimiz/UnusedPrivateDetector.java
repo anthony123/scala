@@ -21,12 +21,12 @@ import scala.tools.asm.tree.MethodInsnNode;
 import scala.tools.asm.tree.FieldInsnNode;
 
 /**
- *  This class transformer detects usages of private members of the ClassNode to transform()
+ *  This class walker detects usages of private members of the ClassNode to transform()
  *  (private members includes fields, methods, or constructors; be they static or instance).
  *  Those usages are detected by visiting the class' public and protected methods and constructors
  *  as well as any private methods or constructors transitively reachable.
  *
- *  Those private members for which no usages are found are elided,
+ *  Those private members for which no usages are found can be elided,
  *  but that decision is left to the invoker.
  *
  *  If elided, any code using, say, reflection or invokedynamic or a methodhandle constant
@@ -36,7 +36,7 @@ import scala.tools.asm.tree.FieldInsnNode;
  *  are elided as any other. It's recommended not to run this transformer on classes extending those interfaces.
  *  This transformer does not check that on its own.
  *
- *  It's best to run this transformer after constant propagation has run
+ *  It's best to run this walker after constant propagation has run
  *  (ie after redundant usages of private members have been replaced by constants).
  *
  *  @author  Miguel Garcia, http://lamp.epfl.ch/~magarcia/ScalaCompilerCornerReloaded/
@@ -50,8 +50,8 @@ public class UnusedPrivateDetector implements Opcodes {
     public Set<MethodNode> elidableInstanceMethods = new HashSet<MethodNode>();
 
     /**
-     * @return whether any private field, methods, or constructors was elided.
-     *         In the affirmative case, those elided members can be found in the fields of this class.
+     * @return whether any private field, methods, or constructors is available for elision.
+     *         In the affirmative case, candidates for elision can be found in the fields of this class.
      */
     public boolean transform(ClassNode cnode) {
 
@@ -78,7 +78,7 @@ public class UnusedPrivateDetector implements Opcodes {
 
         while(!toVisit.isEmpty()) {
 
-            if(nothingElided()) {
+            if(nothingToElide()) {
                 return false;
             }
 
@@ -122,10 +122,10 @@ public class UnusedPrivateDetector implements Opcodes {
             }
         }
 
-        return !nothingElided();
+        return !nothingToElide();
     }
 
-    private boolean nothingElided() {
+    private boolean nothingToElide() {
 
         return (
             elidableStaticFields.isEmpty()   &&
