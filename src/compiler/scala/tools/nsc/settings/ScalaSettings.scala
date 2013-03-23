@@ -248,19 +248,19 @@ trait ScalaSettings extends AbsScalaSettings
    *    case 1 => Intra-method optimizations only, ie no inlining, no closure optimizations.
    *              Implies GenBCode code emitter. For details on individual transforms see `BCodeCleanser.cleanseClass()`
    *
-   *    case 2 => Method inlining and closure stack-allocation, without "advanced" closure optimization.
-   *              For details on individual transforms see `WholeProgramAnalysis.inlining()`
+   *    case 2 => Closure optimization: minimization of closure state, of closure allocation, closure caching.
+   *              For details see shakeAndMinimizeClosures()  minimizeDClosureAllocations()
    *
-   *    case 3 => "Advanced" closure optimization: minimization of closure state, of closure allocation, closure caching.
-   *               For details see shakeAndMinimizeClosures()  minimizeDClosureAllocations()
+   *    case 3 => Method inlining and closure stack-allocation.
+   *              For details on individual transforms see `WholeProgramAnalysis.inlining()`
    *
    *    case 4 => Rewiring of final methods of traits to directly target them using invokestatic rather than invokeinterface.
    *
    * */
   def neoLevel: Int           = { if(neo.value.startsWith("o") && isBCodeActive) neo.value.substring(1).toInt else 0 }
   def isIntraMethodOptimizOn  = (neoLevel >= 1)
-  def isInterBasicOptimizOn   = (neoLevel >= 2)
-  def isInterClosureOptimizOn = (neoLevel >= 3)
+  def isInterClosureOptimizOn = (neoLevel >= 2)
+  def isInterBasicOptimizOn   = (neoLevel >= 3)
   def isInterTraitOptimizOn   = (neoLevel >= 4)
 
   /**

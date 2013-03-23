@@ -112,9 +112,9 @@ abstract class GenBCode extends BCodeOptInter {
     override def description = "Generate bytecode from ASTs"
     override def erasedTypes = true
 
-    val isOptimizRun  = settings.isIntraMethodOptimizOn
-    val isInliningRun = settings.isInterBasicOptimizOn
-    val doesInliningAndNoMore = isInliningRun && !settings.isInterClosureOptimizOn
+    val isOptimizRun    = settings.isIntraMethodOptimizOn
+    val isClosureOptRun = settings.isInterClosureOptimizOn
+    val isInliningRun   = settings.isInterBasicOptimizOn
 
     // number of woker threads for pipeline-2 (the pipeline in charge of most optimizations except inlining).
     val MAX_THREADS = scala.math.min(
@@ -189,7 +189,7 @@ abstract class GenBCode extends BCodeOptInter {
     class Worker1(needsOutFolder: Boolean) extends _root_.java.lang.Runnable {
 
       val isDebugRun            = settings.debug.value
-      val mustPopulateCodeRepo  = isInliningRun || isDebugRun
+      val mustPopulateCodeRepo  = isClosureOptRun || isDebugRun
 
       val caseInsensitively = mutable.Map.empty[String, Symbol]
       var lateClosuresCount = 0
@@ -297,19 +297,16 @@ abstract class GenBCode extends BCodeOptInter {
           val masterBT = lookupRefBType(plainC.name) // this is the "master class" responsible for "its" dclosures
           dClosureEndpoints = pcb.closuresForDelegates.values
           assert(lateClosures.size == dClosureEndpoints.size)
-          if(isInliningRun) {
+          if(isClosureOptRun) {
             populateDClosureMaps(plainC, masterBT, dClosureEndpoints)
             dClosureEndpoints = null // otherwise Worker2 populateDClosureMaps() again
-          } else {
-            // let Worker2 `populateDClosureMaps()`, thus out of the critical path. Rest assured it's not needed before then.
           }
         }
 
         // ----------- dead-code is removed before the inliner can see it.
-        // ----------- squashOuter() cannot run after inliner (it relies on dclosures having a single owner)
-        // however, under -o3 or higher it's not necessary to squash them here (sequentially)
-        // because minimizeDClosureFields() takes care of that
-        if(doesInliningAndNoMore) {
+        // ----------- squashOuter() can't run after inliner (it relies on dclosures having a single owner)
+        // ----------- but minimizeDClosureFields() takes care of all that squashOuter() can do and more.
+        if(isInliningRun) {
           val essential = new EssentialCleanser(plainC)
           essential.codeFixupDCE()
           essential.codeFixupSquashLCC(lateClosures)
@@ -374,7 +371,6 @@ abstract class GenBCode extends BCodeOptInter {
     class Worker2 extends _root_.java.lang.Runnable {
 
       val isInterClosureOptimizOn = settings.isInterClosureOptimizOn
-      val doesLevelO1AndNoMore    = isOptimizRun && !isInliningRun
 
       def run() {
         val id = java.lang.Thread.currentThread.getId
@@ -506,7 +502,7 @@ abstract class GenBCode extends BCodeOptInter {
       beanInfoCodeGen = new JBeanInfoBuilder
 
       val needsOutfileForSymbol = bytecodeWriter.isInstanceOf[ClassBytecodeWriter]
-      if(isInliningRun) {
+      if(isClosureOptRun) {
         wholeProgramThenWriteToDisk(needsOutfileForSymbol)
       } else {
         buildAndSendToDiskInParallel(needsOutfileForSymbol)
@@ -555,12 +551,14 @@ abstract class GenBCode extends BCodeOptInter {
      *
      */
     private def wholeProgramThenWriteToDisk(needsOutFolder: Boolean) {
-      assert(isInliningRun)
+      assert(isClosureOptRun || isInliningRun)
 
       // sequentially
       feedPipeline1()
       (new Worker1(needsOutFolder)).run()
-      (new WholeProgramAnalysis).optimize()
+      if(isInliningRun) {
+        (new WholeProgramAnalysis).optimize()
+      }
 
       // optimize different groups of ClassNodes in parallel, once done with each group queue its ClassNodes for disk serialization.
       spawnPipeline2()
@@ -706,6 +704,8 @@ abstract class GenBCode extends BCodeOptInter {
       var cnode: asm.tree.ClassNode  = null
       var thisName: String           = null // the internal name of the class being emitted
       var lateClosures: List[asm.tree.ClassNode] = Nil
+
+      val isInterBasicOptimizOn = settings.isInterBasicOptimizOn
 
       /**
        *  `closuresForDelegates` serves two purposes:
@@ -3375,7 +3375,7 @@ abstract class GenBCode extends BCodeOptInter {
           initModule()
         }
 
-        if(settings.isInterBasicOptimizOn) {
+        if(isInterBasicOptimizOn) {
 
           /**
            * Gather data for "method inlining".

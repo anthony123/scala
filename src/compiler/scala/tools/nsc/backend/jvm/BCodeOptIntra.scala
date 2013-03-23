@@ -1304,13 +1304,11 @@ abstract class BCodeOptIntra extends BCodeOptCommon {
       // (1) intra-method
       intraMethodFixpoints(full = true)
 
-      val dcloptim =
-        if(isInterClosureOptimizOn && isMasterClass(bt)) { new DClosureOptimizerImpl(cnode) }
-        else null
+      if(isInterClosureOptimizOn && isMasterClass(bt)) {
 
-      if(dcloptim != null) {
-
+        val dcloptim  = new DClosureOptimizerImpl(cnode)
         var keepGoing = false
+
         do {
 
             // (2) intra-class, useful for master classes, but can by applied to any class.
