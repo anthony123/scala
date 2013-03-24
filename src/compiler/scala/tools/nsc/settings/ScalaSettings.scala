@@ -259,8 +259,8 @@ trait ScalaSettings extends AbsScalaSettings
    * */
   def neoLevel: Int           = { if(neo.value.startsWith("o") && isBCodeActive) neo.value.substring(1).toInt else 0 }
   def isIntraMethodOptimizOn  = (neoLevel >= 1)
-  def isInterClosureOptimizOn = (neoLevel >= 2)
-  def isInterBasicOptimizOn   = (neoLevel >= 3)
+  def isClosureOptRun         = (neoLevel >= 2)
+  def isInliningRun           = (neoLevel >= 3)
   def isInterTraitOptimizOn   = (neoLevel >= 4)
 
   /**

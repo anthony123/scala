@@ -1230,7 +1230,7 @@ abstract class BCodeOptIntra extends BCodeOptCommon {
    *
    *  The entry point is `cleanseClass()`.
    */
-  final class BCodeCleanser(cnode: asm.tree.ClassNode, isInterClosureOptimizOn: Boolean) extends QuickCleanser(cnode) with BCodeCleanserIface {
+  final class BCodeCleanser(cnode: asm.tree.ClassNode, isClosureOptRun: Boolean) extends QuickCleanser(cnode) with BCodeCleanserIface {
 
     val unboxElider           = new asm.optimiz.UnBoxElider
     val lvCompacter           = new asm.optimiz.LocalVarCompact
@@ -1304,7 +1304,7 @@ abstract class BCodeOptIntra extends BCodeOptCommon {
       // (1) intra-method
       intraMethodFixpoints(full = true)
 
-      if(isInterClosureOptimizOn && isMasterClass(bt)) {
+      if(isClosureOptRun && isMasterClass(bt)) {
 
         val dcloptim  = new DClosureOptimizerImpl(cnode)
         var keepGoing = false

@@ -113,8 +113,8 @@ abstract class GenBCode extends BCodeOptInter {
     override def erasedTypes = true
 
     val isOptimizRun    = settings.isIntraMethodOptimizOn
-    val isClosureOptRun = settings.isInterClosureOptimizOn
-    val isInliningRun   = settings.isInterBasicOptimizOn
+    val isClosureOptRun = settings.isClosureOptRun
+    val isInliningRun   = settings.isInliningRun
 
     // number of woker threads for pipeline-2 (the pipeline in charge of most optimizations except inlining).
     val MAX_THREADS = scala.math.min(
@@ -370,7 +370,7 @@ abstract class GenBCode extends BCodeOptInter {
      */
     class Worker2 extends _root_.java.lang.Runnable {
 
-      val isInterClosureOptimizOn = settings.isInterClosureOptimizOn
+      val isClosureOptRun = settings.isClosureOptRun
 
       def run() {
         val id = java.lang.Thread.currentThread.getId
@@ -413,7 +413,7 @@ abstract class GenBCode extends BCodeOptInter {
         }
 
         if(isOptimizRun) {
-          val cleanser = new BCodeCleanser(cnode, isInterClosureOptimizOn)
+          val cleanser = new BCodeCleanser(cnode, isClosureOptRun)
           cleanser.codeFixupDCE()
           // outer-elimination shouldn't be skipped under -o1 , ie it's squashOuter() we're after.
           // under -o0 `squashOuter()` is invoked in the else-branch below
@@ -704,8 +704,6 @@ abstract class GenBCode extends BCodeOptInter {
       var cnode: asm.tree.ClassNode  = null
       var thisName: String           = null // the internal name of the class being emitted
       var lateClosures: List[asm.tree.ClassNode] = Nil
-
-      val isInterBasicOptimizOn = settings.isInterBasicOptimizOn
 
       /**
        *  `closuresForDelegates` serves two purposes:
@@ -3375,7 +3373,7 @@ abstract class GenBCode extends BCodeOptInter {
           initModule()
         }
 
-        if(isInterBasicOptimizOn) {
+        if(isInliningRun) {
 
           /**
            * Gather data for "method inlining".
