@@ -1530,7 +1530,7 @@ abstract class GenBCode extends BCodeOptIntra {
        *          (b.2) Upon early-return initiated in the try-clause or a catch-clause
        *                In this case, the next-program-point is the enclosing cleanup section (if any), otherwise return.
        *          (b.3) Upon abrupt termination (due to unhandled exception) of the try-clause or a catch-clause
-       *                In this case, the unhandled exception must be re-thrown after runnint the finally-block.
+       *                In this case, the unhandled exception must be re-thrown after running the finally-block.
        *
        *    (c) finally-blocks are implicit to `synchronized` (a finally-block is added to just release the lock)
        *        that's why `genSynchronized()` too emits cleanup-sections.
@@ -1684,7 +1684,7 @@ abstract class GenBCode extends BCodeOptIntra {
          *              Given that control arrives to a cleanup section only upon early RETURN,
          *              the value to return (if any) is always available. Therefore, a further RETURN
          *              found in a cleanup section is always ignored (a warning is displayed, @see `genReturn()`).
-         *              In order for `genReturn()` to know whether the return stament is enclosed in a cleanup section,
+         *              In order for `genReturn()` to know whether the return statement is enclosed in a cleanup section,
          *              the variable `insideCleanupBlock` is used.
          * ------
          */
