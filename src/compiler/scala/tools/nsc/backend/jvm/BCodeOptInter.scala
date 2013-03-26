@@ -304,7 +304,7 @@ abstract class BCodeOptInter extends BCodeOptIntra {
      */
     private def inliningRound(leaves: collection.Set[CallGraphNode]) {
 
-      leaves foreach { leaf => inlineCallees(leaf) }
+      leaves.toList.sorted(cgnOrdering).foreach { leaf => inlineCallees(leaf) }
 
     }
 
