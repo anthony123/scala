@@ -101,9 +101,11 @@ abstract class BCodeOptInter extends BCodeOptIntra {
 
   object cgnOrdering extends scala.math.Ordering[CallGraphNode] {
     def compare(x: CallGraphNode, y: CallGraphNode): Int = {
-      var result = x.host.instructions.size().compare(y.host.instructions.size())
+      var result = x.hostOwner.name.compare(y.hostOwner.name)
       if (result == 0) {
-        result = x.hashCode().compare(y.hashCode())
+        val a = (x.host.name + x.host.desc)
+        val b = (y.host.name + y.host.desc)
+        result = a compare b
       }
       result
     }
@@ -298,6 +300,10 @@ abstract class BCodeOptInter extends BCodeOptIntra {
     /*
      *  TODO leaves are independent from each other, use task-parallelism thus making not just -o2 faster but also
      *       -o3 and -o4 (inlining is the bottleneck, -o3 and -o4 are relatively fast).
+     *  In more detail:
+     *    (a) all `leaves` sharing the same `hostOwner` should be inlined in a fixed sequence (for test.stability purposes).
+     *    (b) after partitioning `leaves` by `hostOwner` different partitions can be processed in parallel.
+     *
      *
      *  @param leaves set of inlining requests that are independent from each other.
      *
